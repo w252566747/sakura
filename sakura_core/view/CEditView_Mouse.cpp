@@ -1492,6 +1492,7 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
 				CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
 				Redraw();
+				GetEditWnd().UpdateMarkerToolbar();
 			}
 		}
 
@@ -1621,6 +1622,7 @@ void CEditView::OnLBUTTONDBLCLK( WPARAM fwKeys, int _xPos , int _yPos )
 		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
 			CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
 			Redraw();
+			GetEditWnd().UpdateMarkerToolbar();
 		}
 	}
 	// Ctrl+double-click toggles the selected token before a custom mouse command can change it.
@@ -1629,12 +1631,15 @@ void CEditView::OnLBUTTONDBLCLK( WPARAM fwKeys, int _xPos , int _yPos )
 		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
 			const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 			std::vector<unsigned> markerColors;
-			for (int color = COLORIDX_SEARCH; color <= COLORIDX_SEARCHTAIL; ++color) {
+			for (int color = COLORIDX_SEARCH + 1; color <= COLORIDX_SEARCHTAIL; ++color) {
 				const auto& attr = colors[color].m_sColorAttr;
 				if (attr.m_cTEXT != attr.m_cBACK) markerColors.push_back(static_cast<unsigned>(color - COLORIDX_SEARCH));
 			}
 			const unsigned markerColor = CWordMarker::Instance().NextColor(markerColors);
-			if (CWordMarker::Instance().Toggle(std::wstring(selected.GetStringPtr(), selected.GetStringLength()), markerColor)) Redraw();
+			if (CWordMarker::Instance().Toggle(std::wstring(selected.GetStringPtr(), selected.GetStringLength()), markerColor)) {
+				Redraw();
+				GetEditWnd().UpdateMarkerToolbar();
+			}
 		}
 	}
 	if( nFuncID != 0 ){

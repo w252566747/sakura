@@ -19,6 +19,17 @@
 #include "apiwrap/StdControl.h"
 #include "CSelectLang.h"
 #include "apiwrap/DarkMode.h"
+#include "view/CEditView.h"
+#include "doc/CEditDoc.h"
+#include "view/colors/CWordMarker.h"
+
+namespace {
+constexpr UINT WORDMARKER_BUTTON_BASE = 0x7D00;
+constexpr UINT WORDMARKER_AUTO_BUTTON = WORDMARKER_BUTTON_BASE + 32;
+constexpr UINT WORDMARKER_CLEAR_BUTTON = WORDMARKER_BUTTON_BASE + 33;
+constexpr UINT WORDMARKER_OVERFLOW_BUTTON = WORDMARKER_BUTTON_BASE + 34;
+constexpr UINT WORDMARKER_MENU_REMOVE_BASE = WORDMARKER_BUTTON_BASE + 64;
+}
 
 CMainToolBar::CMainToolBar(CEditWnd* pOwner)
 : m_pOwner(pOwner)
@@ -76,10 +87,41 @@ void CMainToolBar::ProcSearchBox( MSG *msg )
 	@author ryoji
 	@date 2006.09.06 ryoji
 */
-LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, [[maybe_unused]] DWORD_PTR dwRefData )
+LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData )
 {
+	auto* self = reinterpret_cast<CMainToolBar*>(dwRefData);
 	switch( msg )
 	{
+	case WM_COMMAND:
+		if (self && HIWORD(wParam) == BN_CLICKED &&
+			(LOWORD(wParam) >= WORDMARKER_BUTTON_BASE && LOWORD(wParam) <= WORDMARKER_OVERFLOW_BUTTON)) {
+			self->HandleMarkerControl(LOWORD(wParam));
+			return 0;
+		}
+		break;
+	case WM_CTLCOLORBTN:
+		if (self) {
+			const HWND button = reinterpret_cast<HWND>(lParam);
+			for (size_t i = 0; i < self->m_hwndMarkerButtons.size(); ++i) {
+				if (self->m_hwndMarkerButtons[i] == button && i < self->m_markerButtonBrushes.size()) {
+					::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
+					::SetBkColor(reinterpret_cast<HDC>(wParam), self->m_markerButtonBackColors[i]);
+					::SetTextColor(reinterpret_cast<HDC>(wParam), self->m_markerButtonTextColors[i]);
+					return reinterpret_cast<LRESULT>(self->m_markerButtonBrushes[i]);
+				}
+			}
+			if (self->m_hwndMarkerAutoButton == button && self->m_markerButtonBrushes.size() > self->m_hwndMarkerButtons.size()) {
+				const size_t i = self->m_hwndMarkerButtons.size();
+				::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
+				::SetBkColor(reinterpret_cast<HDC>(wParam), self->m_markerButtonBackColors[i]);
+				::SetTextColor(reinterpret_cast<HDC>(wParam), self->m_markerButtonTextColors[i]);
+				return reinterpret_cast<LRESULT>(self->m_markerButtonBrushes[i]);
+			}
+		}
+		break;
+	case WM_SIZE:
+		if (self) self->LayoutMarkerControls();
+		break;
 	// WinXP Visual Style のときにツールバー上でのマウス左右ボタン同時押しで無応答になる
 	//（マウスをキャプチャしたまま放さない） 問題を回避するために右ボタンを無視する
 	case WM_RBUTTONDOWN:
@@ -138,6 +180,7 @@ void CMainToolBar::CreateToolBar( void )
 			TopWarningMessage( m_pOwner->GetHwnd(), LS(STR_ERR_DLGEDITWND04) );
 			return;
 		}
+		::SetWindowSubclass(m_hwndReBar, &ToolBarWndProc, 1, reinterpret_cast<DWORD_PTR>(this));
 
 		if( GetDllShareData().m_Common.m_sToolBar.m_bToolBarIsFlat ){	/* フラットツールバーにする／しない */
 			PreventVisualStyle( m_hwndReBar );	// ビジュアルスタイル非適用のフラットな Rebar にする
@@ -178,7 +221,7 @@ void CMainToolBar::CreateToolBar( void )
 	}
 	else{
 		// 2006.09.06 ryoji ツールバーをサブクラス化する
-		::SetWindowSubclass(m_hwndToolBar, &ToolBarWndProc, 0, 0);
+		::SetWindowSubclass(m_hwndToolBar, &ToolBarWndProc, 0, reinterpret_cast<DWORD_PTR>(this));
 
 		// pixel数をベタ書きするとHighDPI環境でずれるのでシステム値を取得して使う
 		const int cxBorder = DpiScaleX( 1 );
@@ -414,6 +457,12 @@ void CMainToolBar::CreateToolBar( void )
 
 void CMainToolBar::DestroyToolBar( void )
 {
+	for (HWND button : m_hwndMarkerButtons) if (::IsWindow(button)) ::DestroyWindow(button);
+	if (::IsWindow(m_hwndMarkerAutoButton)) ::DestroyWindow(m_hwndMarkerAutoButton);
+	if (::IsWindow(m_hwndMarkerOverflowButton)) ::DestroyWindow(m_hwndMarkerOverflowButton);
+	if (::IsWindow(m_hwndMarkerClearButton)) ::DestroyWindow(m_hwndMarkerClearButton);
+	for (HBRUSH brush : m_markerButtonBrushes) if (brush) ::DeleteObject(brush);
+	m_markerButtonBrushes.clear();
 	if( m_hwndToolBar )
 	{
 		if( m_hwndSearchBox )
@@ -442,6 +491,15 @@ void CMainToolBar::DestroyToolBar( void )
 		::DestroyWindow( m_hwndReBar );
 		m_hwndReBar = nullptr;
 	}
+	m_hwndMarkerButtons.clear();
+	m_hwndMarkerAutoButton = nullptr;
+	m_hwndMarkerOverflowButton = nullptr;
+	m_hwndMarkerClearButton = nullptr;
+	m_markerButtonWords.clear();
+	m_markerButtonBackColors.clear();
+	m_markerButtonTextColors.clear();
+	m_markerAutoWord.clear();
+	m_markerAutoButtonVisible = false;
 
 	if (m_hImageList)
 	{
@@ -493,6 +551,7 @@ void CMainToolBar::UpdateToolbar( void )
 {
 	// 印刷プレビュー中なら、何もしない。
 	if( m_pOwner->IsInPreviewMode() )return;
+	RefreshMarkerControls();
 	
 	// ツールバーの状態更新
 	if( m_hwndToolBar )
@@ -523,6 +582,168 @@ void CMainToolBar::UpdateToolbar( void )
 			}
 		}
 	}
+}
+
+void CMainToolBar::RefreshMarkerControls()
+{
+	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar)) return;
+	const auto& markers = CWordMarker::Instance();
+	const auto& entries = markers.Entries();
+	bool wordsChanged = entries.size() != m_markerButtonWords.size();
+	for (size_t i = 0; !wordsChanged && i < entries.size(); ++i) wordsChanged = entries[i].word != m_markerButtonWords[i];
+	const auto* automatic = markers.AutomaticWord(m_pOwner->GetActiveView().GetDocument());
+	const bool hasAutomatic = automatic && !automatic->empty();
+	static const std::wstring emptyWord;
+	const std::wstring& autoWord = hasAutomatic ? *automatic : emptyWord;
+	const auto& colors = m_pOwner->GetActiveView().GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+	auto resolveColor = [&](unsigned preferred) {
+		if (preferred > 0 && preferred <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
+			const auto& attr = colors[COLORIDX_SEARCH + preferred].m_sColorAttr;
+			if (attr.m_cTEXT != attr.m_cBACK) return std::pair<COLORREF, COLORREF>{ attr.m_cBACK, attr.m_cTEXT };
+		}
+		for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
+			const auto& attr = colors[index].m_sColorAttr;
+			if (attr.m_cTEXT != attr.m_cBACK) return std::pair<COLORREF, COLORREF>{ attr.m_cBACK, attr.m_cTEXT };
+		}
+		const auto& attr = colors[COLORIDX_SELECT].m_sColorAttr;
+		return std::pair<COLORREF, COLORREF>{ attr.m_cBACK, attr.m_cTEXT };
+	};
+	std::vector<COLORREF> backColors, textColors;
+	for (const auto& entry : markers.Entries()) {
+		const auto color = resolveColor(entry.color);
+		backColors.push_back(color.first);
+		textColors.push_back(color.second);
+	}
+	if (hasAutomatic) {
+		const auto color = resolveColor(0);
+		backColors.push_back(color.first);
+		textColors.push_back(color.second);
+	}
+	if (!wordsChanged && hasAutomatic == m_markerAutoButtonVisible && autoWord == m_markerAutoWord &&
+		backColors == m_markerButtonBackColors && textColors == m_markerButtonTextColors && m_hwndMarkerClearButton) {
+		LayoutMarkerControls();
+		return;
+	}
+	for (HWND button : m_hwndMarkerButtons) if (::IsWindow(button)) ::DestroyWindow(button);
+	if (::IsWindow(m_hwndMarkerAutoButton)) ::DestroyWindow(m_hwndMarkerAutoButton);
+	if (::IsWindow(m_hwndMarkerOverflowButton)) ::DestroyWindow(m_hwndMarkerOverflowButton);
+	if (::IsWindow(m_hwndMarkerClearButton)) ::DestroyWindow(m_hwndMarkerClearButton);
+	m_hwndMarkerButtons.clear();
+	m_hwndMarkerAutoButton = nullptr;
+	m_hwndMarkerOverflowButton = nullptr;
+	m_hwndMarkerClearButton = nullptr;
+	for (HBRUSH brush : m_markerButtonBrushes) if (brush) ::DeleteObject(brush);
+	m_markerButtonBrushes.clear();
+	m_markerButtonBackColors = backColors;
+	m_markerButtonTextColors = textColors;
+	m_markerButtonWords.clear();
+	m_markerButtonWords.reserve(entries.size());
+	for (const auto& entry : entries) m_markerButtonWords.push_back(entry.word);
+	m_markerAutoWord = autoWord;
+	m_markerAutoButtonVisible = hasAutomatic;
+	auto createButton = [&](const std::wstring& label, UINT id) {
+		HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
+		return ::CreateWindowExW(0, L"BUTTON", label.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+			0, 0, 1, 1, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), CEditApp::getInstance()->GetAppInstance(), nullptr);
+	};
+	for (size_t i = 0; i < entries.size(); ++i) {
+		std::wstring label = entries[i].word.substr(0, 14) + L" ×";
+		HWND button = createButton(label, WORDMARKER_BUTTON_BASE + static_cast<UINT>(i));
+		m_hwndMarkerButtons.push_back(button);
+		::SetWindowTheme(button, L"", L"");
+		m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors[i]));
+	}
+	if (hasAutomatic) {
+		std::wstring label = L"自動: " + automatic->substr(0, 10) + L" ×";
+		m_hwndMarkerAutoButton = createButton(label, WORDMARKER_AUTO_BUTTON);
+		::SetWindowTheme(m_hwndMarkerAutoButton, L"", L"");
+		m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors.back()));
+	}
+	m_hwndMarkerOverflowButton = createButton(L"+0", WORDMARKER_OVERFLOW_BUTTON);
+	m_hwndMarkerClearButton = createButton(L"全解除", WORDMARKER_CLEAR_BUTTON);
+	LayoutMarkerControls();
+}
+
+void CMainToolBar::LayoutMarkerControls()
+{
+	HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
+	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar) || !parent || !::IsWindow(parent)) return;
+	RECT client{};
+	::GetClientRect(parent, &client);
+	int leftLimit = 0;
+	if (m_hwndReBar) {
+		RECT toolbar{};
+		::GetWindowRect(m_hwndToolBar, &toolbar);
+		::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&toolbar), 2);
+		leftLimit = toolbar.right + DpiScaleX(4);
+	} else {
+		const int count = static_cast<int>(::SendMessage(m_hwndToolBar, TB_BUTTONCOUNT, 0, 0));
+		if (count > 0) {
+			RECT last{};
+			if (::SendMessage(m_hwndToolBar, TB_GETITEMRECT, count - 1, reinterpret_cast<LPARAM>(&last))) leftLimit = last.right + DpiScaleX(4);
+		}
+	}
+	const int height = std::max(DpiScaleY(22), client.bottom - client.top);
+	int right = client.right - DpiScaleX(2);
+	auto place = [&](HWND button, int width) {
+		if (!button) return false;
+		right -= width;
+		const bool fits = right >= leftLimit;
+		::ShowWindow(button, fits ? SW_SHOW : SW_HIDE);
+		if (fits) ::SetWindowPos(button, HWND_TOP, right, (client.bottom - height) / 2, width, height, SWP_NOACTIVATE);
+		right -= DpiScaleX(3);
+		return fits;
+	};
+	place(m_hwndMarkerClearButton, DpiScaleX(64));
+	if (m_hwndMarkerAutoButton) place(m_hwndMarkerAutoButton, DpiScaleX(120));
+	size_t hiddenCount = 0;
+	for (auto it = m_hwndMarkerButtons.rbegin(); it != m_hwndMarkerButtons.rend(); ++it) {
+		if (!place(*it, DpiScaleX(110))) ++hiddenCount;
+	}
+	if (hiddenCount > 0) {
+		const std::wstring label = L"+" + std::to_wstring(hiddenCount);
+		::SetWindowTextW(m_hwndMarkerOverflowButton, label.c_str());
+		place(m_hwndMarkerOverflowButton, DpiScaleX(48));
+	} else {
+		::ShowWindow(m_hwndMarkerOverflowButton, SW_HIDE);
+	}
+}
+
+void CMainToolBar::HandleMarkerControl(UINT controlId)
+{
+	auto& markers = CWordMarker::Instance();
+	if (controlId == WORDMARKER_CLEAR_BUTTON) {
+		markers.ClearFixed();
+		markers.ClearAutomatic(m_pOwner->GetActiveView().GetDocument());
+	} else if (controlId == WORDMARKER_AUTO_BUTTON) {
+		markers.ClearAutomatic(m_pOwner->GetActiveView().GetDocument());
+	} else if (controlId == WORDMARKER_OVERFLOW_BUTTON) {
+		HMENU menu = ::CreatePopupMenu();
+		if (menu) {
+			for (size_t i = 0; i < markers.Entries().size(); ++i) {
+				::AppendMenuW(menu, MF_STRING, WORDMARKER_MENU_REMOVE_BASE + static_cast<UINT>(i), markers.Entries()[i].word.c_str());
+			}
+			RECT rc{};
+			::GetWindowRect(m_hwndMarkerOverflowButton, &rc);
+			const UINT selected = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, m_pOwner->GetHwnd(), nullptr);
+			::DestroyMenu(menu);
+			if (selected >= WORDMARKER_MENU_REMOVE_BASE && selected < WORDMARKER_MENU_REMOVE_BASE + 32) {
+				const size_t index = selected - WORDMARKER_MENU_REMOVE_BASE;
+				if (index < markers.Entries().size()) {
+					const auto entry = markers.Entries()[index];
+					markers.Toggle(entry.word, entry.color);
+				}
+			}
+		}
+	} else if (controlId >= WORDMARKER_BUTTON_BASE && controlId < WORDMARKER_AUTO_BUTTON) {
+		const size_t index = controlId - WORDMARKER_BUTTON_BASE;
+		if (index < markers.Entries().size()) {
+			const auto entry = markers.Entries()[index];
+			markers.Toggle(entry.word, entry.color);
+		}
+	}
+	m_pOwner->GetActiveView().Redraw();
+	RefreshMarkerControls();
 }
 
 //検索ボックスを更新

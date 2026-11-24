@@ -66,7 +66,7 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 			m_pCommanderView->GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
 			const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 			std::vector<unsigned> palette;
-			for (int i = COLORIDX_SEARCH; i <= COLORIDX_SEARCHTAIL; ++i) {
+			for (int i = COLORIDX_SEARCH + 1; i <= COLORIDX_SEARCHTAIL; ++i) {
 				const auto& attr = colors[i].m_sColorAttr;
 				if (attr.m_cTEXT != attr.m_cBACK) palette.push_back(static_cast<unsigned>(i - COLORIDX_SEARCH));
 			}
@@ -98,7 +98,7 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 			if (index < markers.Entries().size()) {
 				const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 				std::vector<unsigned> palette;
-				for (int i = COLORIDX_SEARCH; i <= COLORIDX_SEARCHTAIL; ++i) {
+				for (int i = COLORIDX_SEARCH + 1; i <= COLORIDX_SEARCHTAIL; ++i) {
 					const auto& attr = colors[i].m_sColorAttr;
 					const auto slot = static_cast<unsigned>(i - COLORIDX_SEARCH);
 					if (attr.m_cTEXT != attr.m_cBACK && std::find(palette.begin(), palette.end(), slot) == palette.end()) palette.push_back(slot);
@@ -117,6 +117,7 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 		::PostMessageCmd( GetMainWindow(), WM_COMMAND, MAKELONG( nId, 0 ),  (LPARAM)nullptr );
 		break;
 	}
+	m_pCommanderView->GetEditWnd().UpdateMarkerToolbar();
 	return;
 }
 

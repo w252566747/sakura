@@ -23,6 +23,7 @@ public:
 	void ClearFixed() noexcept;
 	void SetAutomatic(const void* document, std::wstring word);
 	void ClearAutomatic(const void* document) noexcept;
+	const std::wstring* AutomaticWord(const void* document) const noexcept;
 	void SetAutomaticEnabled(bool enabled) noexcept { m_automaticEnabled = enabled; }
 	bool IsAutomaticEnabled() const noexcept { return m_automaticEnabled; }
 	int Match(const void* document, const wchar_t* text, int length, int position, int* end) const noexcept;

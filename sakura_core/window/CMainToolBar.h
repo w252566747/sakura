@@ -10,6 +10,7 @@
 #pragma once
 
 #include "recent/CRecentSearch.h"
+#include <vector>
 
 class CEditWnd;
 class CImageListMgr;
@@ -46,6 +47,9 @@ public:
 
 private:
 	static LRESULT CALLBACK ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData );
+	void RefreshMarkerControls();
+	void LayoutMarkerControls();
+	void HandleMarkerControl(UINT controlId);
 
 	CEditWnd*	m_pOwner;
 	HWND		m_hwndToolBar = nullptr;
@@ -53,6 +57,16 @@ private:
 	//子ウィンドウ
 	HWND		m_hwndReBar = nullptr;		//!< Rebar ウィンドウ	//@@@ 2006.06.17 ryoji
 	HWND		m_hwndSearchBox = nullptr;	//!< 検索コンボボックス
+	std::vector<HWND>		m_hwndMarkerButtons;
+	HWND		m_hwndMarkerClearButton = nullptr;
+	HWND		m_hwndMarkerAutoButton = nullptr;
+	HWND		m_hwndMarkerOverflowButton = nullptr;
+	std::vector<std::wstring>		m_markerButtonWords;
+	std::vector<COLORREF>		m_markerButtonBackColors;
+	std::vector<COLORREF>		m_markerButtonTextColors;
+	std::vector<HBRUSH>		m_markerButtonBrushes;
+	std::wstring		m_markerAutoWord;
+	bool		m_markerAutoButtonVisible = false;
 
 	//フォント
 	HFONT		m_hFontSearchBox = nullptr;	//!< 検索コンボボックスのフォント

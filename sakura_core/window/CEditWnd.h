@@ -245,6 +245,7 @@ public:
 	void Views_RedrawAll();
 	void Views_Redraw();
 	void SetActivePane(int nIndex);	/* アクティブなペインを設定 */
+	void UpdateMarkerToolbar() { m_cToolbar.UpdateToolbar(); }
 	int GetActivePane( void ) const { return m_nActivePaneIndex; }	/* アクティブなペインを取得 */ //2007.08.26 kobake const追加
 	bool SetDrawSwitchOfAllViews( bool bDraw );					/* すべてのペインの描画スイッチを設定する */	// 2008.06.08 ryoji
 	void RedrawAllViews( CEditView* pcViewExclude );				/* すべてのペインをRedrawする */

@@ -140,7 +140,7 @@ bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 	const auto color = CWordMarker::Instance().ColorAt(m_index);
 	const auto& colors = view->GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 	if (m_index == 33) {
-		for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+		for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
 			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
 				m_color = static_cast<EColorIndexType>(index);
 				m_end = end;
@@ -151,14 +151,14 @@ bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 		m_end = end;
 		return true;
 	}
-	if (color <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
+	if (color > 0 && color <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
 		const int preferred = COLORIDX_SEARCH + static_cast<int>(color);
 		if (colors[preferred].m_sColorAttr.m_cTEXT != colors[preferred].m_sColorAttr.m_cBACK) {
 			m_color = static_cast<EColorIndexType>(preferred);
 			m_end = end;
 			return true;
 		}
-		for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+		for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
 			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
 				m_color = static_cast<EColorIndexType>(index);
 				m_end = end;
@@ -169,7 +169,7 @@ bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 		m_end = end;
 		return true;
 	}
-	for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+	for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
 		if (colors[index].m_sColorAttr.m_cBACK == color &&
 			colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
 			m_color = static_cast<EColorIndexType>(index);

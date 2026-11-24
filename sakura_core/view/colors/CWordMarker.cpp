@@ -45,10 +45,13 @@ unsigned CWordMarker::NextColor(const std::vector<unsigned>& palette) const noex
 {
 	for (size_t index = 0; index < palette.size(); ++index) {
 		const auto color = palette[index];
+		// Relative color zero maps to COLORIDX_SEARCH (yellow), reserved for Find.
+		if (color == 0) continue;
 		if (std::find(palette.begin(), palette.begin() + index, color) != palette.begin() + index) continue;
 		if (std::none_of(m_entries.begin(), m_entries.end(), [color](const Entry& entry) { return entry.color == color; })) return color;
 	}
-	return palette.empty() ? 0u : palette[m_entries.size() % palette.size()];
+	for (const auto color : palette) if (color != 0) return color;
+	return 1u;
 }
 
 void CWordMarker::ClearFixed() noexcept
@@ -83,6 +86,12 @@ void CWordMarker::ClearAutomatic(const void* document) noexcept
 	m_automaticByDocument.erase(document);
 	m_cachedAutomaticDocument = nullptr;
 	m_cachedAutomatic = nullptr;
+}
+
+const std::wstring* CWordMarker::AutomaticWord(const void* document) const noexcept
+{
+	const auto found = m_automaticByDocument.find(document);
+	return found == m_automaticByDocument.end() ? nullptr : &found->second;
 }
 
 int CWordMarker::Match(const void* document, const wchar_t* text, int length, int position, int* end) const noexcept

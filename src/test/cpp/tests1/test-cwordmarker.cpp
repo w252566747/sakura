@@ -52,7 +52,9 @@ TEST(CWordMarker, ChoosesUnusedPaletteColorsFirst)
 	const std::vector<unsigned> palette{ 0, 1, 2, 3 };
 	EXPECT_EQ(markers.NextColor(palette), 1u);
 	markers.Load({ { L"one", 0 }, { L"two", 1 }, { L"three", 2 }, { L"four", 3 } });
-	EXPECT_EQ(markers.NextColor(palette), 0u);
+	EXPECT_EQ(markers.NextColor(palette), 1u);
+	markers.Load({});
+	EXPECT_EQ(markers.NextColor(std::vector<unsigned>{ 0 }), 1u);
 	markers.Load({});
 }
 
@@ -75,6 +77,8 @@ TEST(CWordMarker, AutomaticMarkerMatchesCurrentWord)
 	markers.Load({});
 	const int document = 1;
 	markers.SetAutomatic(&document, L"beta");
+	ASSERT_NE(markers.AutomaticWord(&document), nullptr);
+	EXPECT_EQ(*markers.AutomaticWord(&document), L"beta");
 	int end = -1;
 	EXPECT_EQ(markers.Match(&document, L"alpha beta", 10, 6, &end), 33);
 	EXPECT_EQ(end, 10);
@@ -85,6 +89,7 @@ TEST(CWordMarker, AutomaticMarkerMatchesCurrentWord)
 	markers.SetAutomaticEnabled(true);
 	EXPECT_EQ(markers.Match(nullptr, L"alpha beta", 10, 0, &end), 0);
 	markers.ClearAutomatic(&document);
+	EXPECT_EQ(markers.AutomaticWord(&document), nullptr);
 	EXPECT_EQ(markers.Match(&document, L"alpha beta", 10, 6, &end), 0);
 	markers.Load({});
 }
