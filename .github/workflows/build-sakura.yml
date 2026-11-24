@@ -276,6 +276,14 @@ jobs:
     runs-on: *windows_runner
     needs: [build-vcpkg, build-chm]
 
+    # vcpkg binary packages are published by the build-vcpkg job to this
+    # repository's GitHub Packages feed. Fork builds need explicit read access
+    # for the per-platform MSBuild jobs to restore those packages.
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+
     strategy:
       matrix:
         config:
