@@ -290,6 +290,7 @@ void CPropGeneral::SetData( HWND hwndDlg )
 
 	/* フリーカーソルモード */
 	::CheckDlgButton( hwndDlg, IDC_CHECK_FREECARET, m_Common.m_sGeneral.m_bIsFreeCursorMode ? 1 : 0 );
+	::CheckDlgButton( hwndDlg, IDC_CHECK_WORDMARKER_AUTO, m_bWordMarkerAutomaticEnabled ? BST_CHECKED : BST_UNCHECKED );
 
 	/* 単語単位で移動するときに、単語の両端で止まるか */
 	::CheckDlgButton( hwndDlg, IDC_CHECK_STOPS_BOTH_ENDS_WHEN_SEARCH_WORD, m_Common.m_sGeneral.m_bStopsBothEndsWhenSearchWord );
@@ -382,6 +383,7 @@ int CPropGeneral::GetData( HWND hwndDlg )
 
 	/* フリーカーソルモード */
 	m_Common.m_sGeneral.m_bIsFreeCursorMode = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_FREECARET ) != 0;
+	m_bWordMarkerAutomaticEnabled = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_WORDMARKER_AUTO ) != 0;
 
 	/* 単語単位で移動するときに、単語の両端で止まるか */
 	m_Common.m_sGeneral.m_bStopsBothEndsWhenSearchWord = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_STOPS_BOTH_ENDS_WHEN_SEARCH_WORD );

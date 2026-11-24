@@ -417,6 +417,9 @@ CColor3Setting CEditView::GetColorIndex(
 	//color strategy
 	CColorStrategyPool* pool = CColorStrategyPool::getInstance();
 	pInfo->m_pStrategy = pool->GetStrategyByColor(eRet);
+	pInfo->m_pStrategyFound = nullptr;
+	pInfo->m_pStrategyMarker = nullptr;
+	pInfo->m_pStrategySelect = nullptr;
 	if(pInfo->m_pStrategy){
 		pInfo->m_pStrategy->InitStrategyStatus();
 		pInfo->m_pStrategy->SetStrategyColorInfo(colorInfo);

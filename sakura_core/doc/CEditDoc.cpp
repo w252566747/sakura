@@ -59,6 +59,7 @@
 #include "util/window.h"
 #include "sakura_rc.h"
 #include "config/app_constants.h"
+#include "view/colors/CWordMarker.h"
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -220,6 +221,7 @@ CEditDoc::CEditDoc([[maybe_unused]] CEditApp* pcApp)
 
 CEditDoc::~CEditDoc()
 {
+	CWordMarker::Instance().ClearAutomatic(this);
 	CModifyManager::resetInstance();
 	CCodeChecker::resetInstance();
 	CAppMode::resetInstance();

@@ -51,4 +51,17 @@ private:
 	EColorIndexType highlightColors[ COLORIDX_SEARCHTAIL - COLORIDX_SEARCH + 1 ]; ///< チェックが付いている検索文字列色の配列。
 	unsigned validColorNum; ///< highlightColorsの何番目の要素までが有効か。
 };
+
+class CColor_WordMarker final : public CColorStrategy {
+public:
+	EColorIndexType GetStrategyColor() const override { return m_color; }
+	void InitStrategyStatus() override { }
+	bool BeginColor(const CStringRef& cStr, int nPos) override;
+	bool Disp() const override { return true; }
+	bool EndColor(const CStringRef& cStr, int nPos) override;
+private:
+	int m_end = -1;
+	int m_index = 0;
+	EColorIndexType m_color = COLORIDX_SEARCH;
+};
 #endif /* SAKURA_CCOLOR_FOUND_8094BA64_0ACB_4776_A190_D68729D3FABC_H_ */

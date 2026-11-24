@@ -36,6 +36,7 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 	CColorStrategyPool* pool = CColorStrategyPool::getInstance();
 	pool->SetCurrentView(m_pcView);
 	CColor_Found*  pcFound  = pool->GetFoundStrategy();
+	CColor_WordMarker* pcMarker = pool->GetMarkerStrategy();
 	CColor_Select* pcSelect = pool->GetSelectStrategy();
 	bool bChange = false;
 
@@ -68,6 +69,14 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 			m_pStrategyFound = pcFound;
 			bChange = true;
 		}
+	}
+	if(m_pStrategyMarker && m_pStrategyMarker->EndColor(cLineStr, this->GetPosInLogic())){
+		m_pStrategyMarker = nullptr;
+		bChange = true;
+	}
+	if(!m_pStrategyMarker && pcMarker->BeginColor(cLineStr, this->GetPosInLogic())){
+		m_pStrategyMarker = pcMarker;
+		bChange = true;
 	}
 
 	//色終了
@@ -153,12 +162,16 @@ void SColorStrategyInfo::DoChangeColor(CColor3Setting *pcColor)
 		m_cIndex.eColorIndex = m_pStrategySelect->GetStrategyColor();
 	}else if(m_pStrategyFound){
 		m_cIndex.eColorIndex = m_pStrategyFound->GetStrategyColor();
+	}else if(m_pStrategyMarker){
+		m_cIndex.eColorIndex = m_pStrategyMarker->GetStrategyColor();
 	}else{
 		m_cIndex.eColorIndex = CColorStrategy::GetStrategyColorSafe(m_pStrategy);
 	}
 
 	if(m_pStrategyFound){
 		m_cIndex.eColorIndex2 = m_pStrategyFound->GetStrategyColor();
+	}else if(m_pStrategyMarker){
+		m_cIndex.eColorIndex2 = m_pStrategyMarker->GetStrategyColor();
 	}else{
 		m_cIndex.eColorIndex2 = CColorStrategy::GetStrategyColorSafe(m_pStrategy);
 	}
@@ -177,6 +190,7 @@ CColorStrategyPool::CColorStrategyPool()
 	m_pcView = &(CEditWnd::getInstance()->GetView(0));
 	m_pcSelectStrategy = new CColor_Select();
 	m_pcFoundStrategy = new CColor_Found();
+	m_pcMarkerStrategy = new CColor_WordMarker();
 //	m_vStrategies.push_back(new CColor_Found);				// マッチ文字列
 	m_vStrategies.push_back(new CColor_RegexKeyword);		// 正規表現キーワード
 	m_vStrategies.push_back(new CColor_Heredoc);			// ヒアドキュメント
@@ -197,6 +211,7 @@ CColorStrategyPool::~CColorStrategyPool()
 {
 	SAFE_DELETE(m_pcSelectStrategy);
 	SAFE_DELETE(m_pcFoundStrategy);
+	SAFE_DELETE(m_pcMarkerStrategy);
 	m_vStrategiesDisp.clear();
 	int size = (int)m_vStrategies.size();
 	for(int i = 0; i < size; i++ ){

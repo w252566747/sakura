@@ -43,6 +43,7 @@
 #include "charset/CCodeFactory.h"
 #include "apiwrap/StdApi.h"
 #include "CSelectLang.h"
+#include "view/colors/CWordMarker.h"
 #include "mem/CNativeA.h"
 #include "sakura_rc.h"
 #include "config/system_constants.h"
@@ -1486,6 +1487,13 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 		GetCaret().ShowCaret_( GetHwnd() ); // 2002/07/22 novice
 
 		GetSelectionInfo().SelectEnd();
+		if (GetSelectionInfo().IsTextSelected()) {
+			CNativeW selected;
+			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+				CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
+				Redraw();
+			}
+		}
 
 		// 20100715 Moca マウスクリック座標をリセット
 		m_cMouseDownPos.Set(-INT_MAX, -INT_MAX);
@@ -1608,12 +1616,32 @@ void CEditView::OnLBUTTONDBLCLK( WPARAM fwKeys, int _xPos , int _yPos )
 		}
 	}
 
+	if ((nIdx & _CTRL) == 0 && GetSelectionInfo().IsTextSelected()) {
+		CNativeW selected;
+		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
+			Redraw();
+		}
+	}
+	// Ctrl+double-click toggles the selected token before a custom mouse command can change it.
+	if ((nIdx & _CTRL) != 0 && GetSelectionInfo().IsTextSelected()) {
+		CNativeW selected;
+		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+			std::vector<unsigned> markerColors;
+			for (int color = COLORIDX_SEARCH; color <= COLORIDX_SEARCHTAIL; ++color) {
+				const auto& attr = colors[color].m_sColorAttr;
+				if (attr.m_cTEXT != attr.m_cBACK) markerColors.push_back(static_cast<unsigned>(color - COLORIDX_SEARCH));
+			}
+			const unsigned markerColor = CWordMarker::Instance().NextColor(markerColors);
+			if (CWordMarker::Instance().Toggle(std::wstring(selected.GetStringPtr(), selected.GetStringLength()), markerColor)) Redraw();
+		}
+	}
 	if( nFuncID != 0 ){
 		/* コマンドコードによる処理振り分け */
 		//	May 19, 2006 genta マウスからのメッセージはCMD_FROM_MOUSEを上位ビットに入れて送る
 		::SendMessageCmd( ::GetParent( m_hwndParent ), WM_COMMAND, MAKELONG( nFuncID, CMD_FROM_MOUSE ),  (LPARAM)nullptr );
 	}
-
 	// 2007.10.06 nasukoji	クアドラプルクリック時もここで抜ける
 	if(m_dwTripleClickCheck){
 		m_dwTripleClickCheck = 0;	// トリプルクリックチェック OFF（次回は通常クリック）

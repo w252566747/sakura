@@ -48,6 +48,7 @@
 
 #include "CSelectLang.h"
 #include "apiwrap/DarkMode.h"
+#include "view/colors/CWordMarker.h"
 
 LRESULT CALLBACK EditViewWndProc( HWND, UINT, WPARAM, LPARAM );
 VOID CALLBACK EditViewTimerProc( HWND, UINT, UINT_PTR, DWORD );
@@ -1582,6 +1583,25 @@ int	CEditView::CreatePopUpMenuSub( HMENU hMenu, int nMenuIdx, int* pParentMenus,
 
 	if( eRmenuType == KEYHELP_RMENU_BOTTOM ){
 		AddKeyHelpMenu(hMenu, KEYHELP_RMENU_BOTTOM);
+	}
+	if (nMenuIdx == CUSTMENU_INDEX_FOR_RBUTTONUP && pParentMenus == nullptr) {
+		auto markerMenu = ::CreatePopupMenu();
+		::AppendMenuW(markerMenu, MF_STRING, IDM_WORDMARKER_TOGGLE, L"選択語を固定マーカーに追加／解除");
+		const auto& markers = CWordMarker::Instance().Entries();
+		if (!markers.empty()) {
+			::AppendMenuW(markerMenu, MF_SEPARATOR, 0, nullptr);
+			for (size_t index = 0; index < markers.size() && index < 32; ++index) {
+				std::wstring label = L"色変更：" + markers[index].word.substr(0, 32);
+				auto itemMenu = ::CreatePopupMenu();
+				::AppendMenuW(itemMenu, MF_STRING, IDM_WORDMARKER_REMOVE_BASE + static_cast<UINT>(index), L"解除");
+				::AppendMenuW(itemMenu, MF_STRING, IDM_WORDMARKER_COLOR_BASE + static_cast<UINT>(index), L"次の色に変更");
+				::AppendMenuW(markerMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(itemMenu), label.c_str());
+			}
+			::AppendMenuW(markerMenu, MF_SEPARATOR, 0, nullptr);
+			::AppendMenuW(markerMenu, MF_STRING, IDM_WORDMARKER_CLEAR, L"固定マーカーをすべて解除");
+		}
+		::AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+		::AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(markerMenu), L"マーカー");
 	}
 
 	pNextParam[nParamIndex] = 0;

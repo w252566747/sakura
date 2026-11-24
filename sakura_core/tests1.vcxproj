@@ -124,6 +124,7 @@
     <ClCompile Include="..\src\test\cpp\tests1\window\EditorTestSuite.cpp" />
     <ClCompile Include="..\src\test\cpp\tests1\window\UiaTestSuite.cpp" />
     <ClCompile Include="..\src\test\cpp\tests1\test-cdocline.cpp" />
+    <ClCompile Include="..\src\test\cpp\tests1\test-cwordmarker.cpp" />
     <ClCompile Include="..\src\test\cpp\tests1\test-cdoclinemgr.cpp" />
     <ClCompile Include="..\src\test\cpp\tests1\test-codechecker.cpp" />
     <ClCompile Include="..\src\test\cpp\tests1\macro\test-cppa.cpp" />

@@ -18,10 +18,12 @@
 */
 
 #include "StdAfx.h"
+#include <algorithm>
 #include "CViewCommander.h"
 #include "CViewCommander_inline.h"
 
 #include "apiwrap/StdApi.h"
+#include "view/colors/CWordMarker.h"
 
 /* 右クリックメニュー */
 void CViewCommander::Command_MENU_RBUTTON( void )
@@ -56,8 +58,61 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 			);
 		}
 		break;
+	case IDM_WORDMARKER_TOGGLE:
+	{
+		CNativeW selected;
+		auto& markers = CWordMarker::Instance();
+		if (m_pCommanderView->GetSelectionInfo().IsTextSelected() &&
+			m_pCommanderView->GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+			std::vector<unsigned> palette;
+			for (int i = COLORIDX_SEARCH; i <= COLORIDX_SEARCHTAIL; ++i) {
+				const auto& attr = colors[i].m_sColorAttr;
+				if (attr.m_cTEXT != attr.m_cBACK) palette.push_back(static_cast<unsigned>(i - COLORIDX_SEARCH));
+			}
+			const auto color = markers.NextColor(palette);
+			markers.Toggle(std::wstring(selected.GetStringPtr(), selected.GetStringLength()), color);
+			m_pCommanderView->Redraw();
+		}
+		break;
+	}
+	case IDM_WORDMARKER_CLEAR:
+		CWordMarker::Instance().ClearFixed();
+		m_pCommanderView->Redraw();
+		break;
 
 	default:
+		if (nId >= IDM_WORDMARKER_REMOVE_BASE && nId < IDM_WORDMARKER_REMOVE_BASE + 32) {
+			auto& markers = CWordMarker::Instance();
+			const size_t index = nId - IDM_WORDMARKER_REMOVE_BASE;
+			if (index < markers.Entries().size()) {
+				const auto entry = markers.Entries()[index];
+				markers.Toggle(entry.word, entry.color);
+				m_pCommanderView->Redraw();
+			}
+			break;
+		}
+		if (nId >= IDM_WORDMARKER_COLOR_BASE && nId < IDM_WORDMARKER_COLOR_BASE + 32) {
+			auto& markers = CWordMarker::Instance();
+			const size_t index = nId - IDM_WORDMARKER_COLOR_BASE;
+			if (index < markers.Entries().size()) {
+				const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+				std::vector<unsigned> palette;
+				for (int i = COLORIDX_SEARCH; i <= COLORIDX_SEARCHTAIL; ++i) {
+					const auto& attr = colors[i].m_sColorAttr;
+					const auto slot = static_cast<unsigned>(i - COLORIDX_SEARCH);
+					if (attr.m_cTEXT != attr.m_cBACK && std::find(palette.begin(), palette.end(), slot) == palette.end()) palette.push_back(slot);
+				}
+				if (!palette.empty()) {
+					const auto current = markers.Entries()[index].color;
+					const auto found = std::find(palette.begin(), palette.end(), current);
+					const size_t next = found == palette.end() ? 0 : (static_cast<size_t>(found - palette.begin()) + 1) % palette.size();
+					markers.SetColor(index, palette[next]);
+					m_pCommanderView->Redraw();
+				}
+			}
+			break;
+		}
 		/* コマンドコードによる処理振り分け */
 		::PostMessageCmd( GetMainWindow(), WM_COMMAND, MAKELONG( nId, 0 ),  (LPARAM)nullptr );
 		break;

@@ -840,6 +840,7 @@
     <ClCompile Include="..\sakura_core\view\colors\CColorStrategy.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Comment.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Found.cpp" />
+    <ClCompile Include="..\sakura_core\view\colors\CWordMarker.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Heredoc.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_KeywordSet.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Numeric.cpp" />

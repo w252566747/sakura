@@ -7,6 +7,8 @@
 #include "StdAfx.h"
 #include "view/CEditView.h" // SColorStrategyInfo
 #include "CColor_Found.h"
+#include "CWordMarker.h"
+#include "doc/CDocType.h"
 #include "types/CTypeSupport.h"
 #include "view/CViewSelect.h"
 #include <limits.h>
@@ -126,4 +128,61 @@ bool CColor_Found::EndColor([[maybe_unused]] const CStringRef& cStr, int nPos)
 	}
 
 	return false;
+}
+
+bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
+{
+	if (!cStr.IsValid()) return false;
+	int end = -1;
+	const auto* view = CColorStrategyPool::getInstance()->GetCurrentView();
+	m_index = CWordMarker::Instance().Match(view->GetDocument(), cStr.GetPtr(), cStr.GetLength(), nPos, &end);
+	if (m_index == 0) return false;
+	const auto color = CWordMarker::Instance().ColorAt(m_index);
+	const auto& colors = view->GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+	if (m_index == 33) {
+		for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
+				m_color = static_cast<EColorIndexType>(index);
+				m_end = end;
+				return true;
+			}
+		}
+		m_color = COLORIDX_SELECT;
+		m_end = end;
+		return true;
+	}
+	if (color <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
+		const int preferred = COLORIDX_SEARCH + static_cast<int>(color);
+		if (colors[preferred].m_sColorAttr.m_cTEXT != colors[preferred].m_sColorAttr.m_cBACK) {
+			m_color = static_cast<EColorIndexType>(preferred);
+			m_end = end;
+			return true;
+		}
+		for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
+				m_color = static_cast<EColorIndexType>(index);
+				m_end = end;
+				return true;
+			}
+		}
+		m_color = COLORIDX_SELECT;
+		m_end = end;
+		return true;
+	}
+	for (int index = COLORIDX_SEARCH; index <= COLORIDX_SEARCHTAIL; ++index) {
+		if (colors[index].m_sColorAttr.m_cBACK == color &&
+			colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
+			m_color = static_cast<EColorIndexType>(index);
+			m_end = end;
+			return true;
+		}
+	}
+	m_color = COLORIDX_SELECT;
+	m_end = end;
+	return true;
+}
+
+bool CColor_WordMarker::EndColor([[maybe_unused]] const CStringRef& cStr, int nPos)
+{
+	return m_end <= nPos;
 }

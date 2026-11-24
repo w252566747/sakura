@@ -15,6 +15,7 @@
 #include "util/window.h"
 #include "view/CEditView.h" // SColorStrategyInfo
 #include "view/colors/CColorStrategy.h"
+#include "view/colors/CWordMarker.h"
 #include "plugin/CPlugin.h"
 #include "uiparts/CMenuDrawer.h"
 #include "_main/CCommandLine.h"
@@ -111,6 +112,27 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 			}
 			return false;
 		}
+		std::vector<CWordMarker::Entry> markerEntries;
+		CWordMarker::Instance().SetAutomaticEnabled(true);
+		std::wstring automaticEnabled;
+		if (cProfile.GetProfileData(L"WordMarker", L"AutomaticEnabled", automaticEnabled)) {
+			CWordMarker::Instance().SetAutomaticEnabled(automaticEnabled == L"1" || automaticEnabled == L"true");
+		}
+		std::wstring markerCountValue;
+		unsigned markerCount = 0;
+		if (cProfile.GetProfileData(L"WordMarker", L"Count", markerCountValue)) {
+			try { markerCount = static_cast<unsigned>(std::min<unsigned long>(32, std::stoul(markerCountValue))); } catch (...) { markerCount = 0; }
+		}
+		for (unsigned i = 0; i < markerCount; ++i) {
+			std::wstring value;
+			if (!cProfile.GetProfileData(L"WordMarker", std::to_wstring(i), value)) break;
+			const auto separator = value.find(L'|');
+			if (separator == std::wstring::npos || separator == 0 || separator + 1 >= value.size()) continue;
+			try {
+				markerEntries.push_back({value.substr(separator + 1), static_cast<unsigned>(std::stoul(value.substr(0, separator)))});
+			} catch (...) { }
+		}
+		CWordMarker::Instance().Load(markerEntries);
 
 		// バージョンアップ時はバックアップファイルを作成する	// 2011.01.28 ryoji
 		WCHAR iniVer[256];
@@ -166,6 +188,13 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 	pcMenuDrawer = nullptr;
 
 	if( !bRead ){
+		const auto& markers = CWordMarker::Instance().Entries();
+		for (size_t i = 0; i < markers.size() && i < 32; ++i) {
+			cProfile.SetProfileData(L"WordMarker", std::to_wstring(i),
+				std::to_wstring(markers[i].color) + L"|" + markers[i].word);
+		}
+		cProfile.SetProfileData(L"WordMarker", L"Count", std::to_wstring(std::min<size_t>(markers.size(), 32)));
+		cProfile.SetProfileData(L"WordMarker", L"AutomaticEnabled", CWordMarker::Instance().IsAutomaticEnabled() ? L"1" : L"0");
 		// 2014.12.08 sakura.iniの読み取り専用
 		if( !GetDllShareData().m_Common.m_sOthers.m_bIniReadOnly ){
 			cProfile.WriteProfile( szIniFileName, L" sakura.ini テキストエディタ設定ファイル" );

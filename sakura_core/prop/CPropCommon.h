@@ -111,6 +111,7 @@ public:
 	|| ダイアログデータ
 	*/
 	CommonSetting	m_Common;
+	bool				m_bWordMarkerAutomaticEnabled = true;
 
 	// 2005.01.13 MIK セット数増加
 	struct SKeywordSetIndex{

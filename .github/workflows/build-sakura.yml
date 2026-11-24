@@ -439,6 +439,14 @@ jobs:
       run: build-sln.bat ${{ matrix.platform }} ${{ matrix.config }}
       shell: cmd
 
+    - name: Upload standalone Word Marker executable
+      if: ${{ matrix.platform == 'Win32' && matrix.config == 'Release' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: SakuraEditor-WordMarker-Win32-Release-EXE
+        path: Win32/Release/sakura.exe
+        if-no-files-found: error
+
     - name: Restore CHM artifacts
       uses: actions/download-artifact@v8
       with:

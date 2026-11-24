@@ -76,6 +76,11 @@ class CColor_Found;
 #define IDM_JUMPDICT 2001	// 2006.04.10 fon
 #endif
 
+constexpr int IDM_WORDMARKER_TOGGLE = 2060;
+constexpr int IDM_WORDMARKER_CLEAR = 2061;
+constexpr int IDM_WORDMARKER_REMOVE_BASE = 2100;
+constexpr int IDM_WORDMARKER_COLOR_BASE = 2140;
+
 ///	マウスからコマンドが実行された場合の上位ビット
 ///	@date 2006.05.19 genta
 const int CMD_FROM_MOUSE = 2;

@@ -1225,6 +1225,8 @@ void CShareData::InitToolButtons(DLLSHAREDATA* pShareData) const
 		266,	//共通設定			//Sept. 16, 2000 JEPRO 10→37に変更 説明を「設定プロパティシート」から変更	//Oct. 25, 2000 37→266
 		0,		//Oct. 8, 2000 jepro 次行のために追加
 		346,	//コマンド一覧	//Oct. 8, 2000 JEPRO 追加
+		0,
+		289,	// Word Marker management via right-click menu
 	};
 
 	//	ツールバーアイコン数の最大値を超えないためのおまじない
