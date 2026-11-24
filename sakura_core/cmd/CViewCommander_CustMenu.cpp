@@ -117,7 +117,7 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 		::PostMessageCmd( GetMainWindow(), WM_COMMAND, MAKELONG( nId, 0 ),  (LPARAM)nullptr );
 		break;
 	}
-	m_pCommanderView->GetEditWnd().UpdateMarkerToolbar();
+	GetEditWindow()->UpdateMarkerToolbar();
 	return;
 }
 
