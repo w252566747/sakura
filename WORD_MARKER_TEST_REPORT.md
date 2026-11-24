@@ -6,6 +6,13 @@
 - 定位：基于 Sakura Editor 的自定义增强，原项目 Zlib 许可证及版权声明保留。
 - 新设置仅使用 `sakura.ini` 的 `[WordMarker]` 节，不改动共享内存结构或既有搜索状态。
 
+## 追加单词边界功能（2026-11-25）
+
+- 共通設定「全般」增加 `単語として扱う追加文字`，默认 `_-`；「原版に戻す」将配置置空，双击选择回到 Sakura 原有规则。
+- 只在鼠标单词选择路径扩展连续的原有 ASCII 单词字符和追加字符；键盘选择命令、正则搜索、SQL 解析仍走原规则。
+- 自动及固定 Marker 共用相同字符边界判断；配置读写使用 `[WordMarker] ExtraWordChars`，兼容旧 INI 缺少此键的情况。
+- 本轮未执行 Windows 编译或 GUI/回归测试。静态 `git diff --check`、项目 XML 解析、RC/资源头 BOM 与 CRLF 检查通过。
+
 ## 当前验证
 
 | 检查 | 结果 |
@@ -30,8 +37,8 @@
 
 - 已在本地源码加入：自动/固定 Marker 跳过黄色检索槽、旧 INI 中存储的黄色 Marker 显示时回退到非黄色槽、工具栏右侧显示词条并按对应 Marker 前景/底色绘制、单项关闭/全部清除、空间不足时以 `+N` 菜单访问其余词条；右键换色及鼠标创建/移除后即时刷新工具栏。
 - `git diff --check` 通过。独立编译 `CWordMarker.cpp` 的本机 C++ 冒烟测试通过：颜色槽 0 不会作为新 Marker 颜色；固定/自动匹配、文档隔离、最长匹配、清除及 Getter 均通过；1 MiB 单行扫描约 7 ms（本机优化构建，仅供算法级参考）。
-- 当前环境没有 MSVC、Windows SDK 或 MinGW，无法本机编译 Win32 UI。尝试把新提交写入 GitHub 增强分支时被自动审查终止；核对后远端分支仍为 `4e39364e97be1fe6406a446d92ddaaec71498736`，本轮 Windows Actions 尚未运行。
-- 因此，`dist/sakura.exe` 和上表中成功的 Actions 运行均是前一轮代码产物，不含本轮黄色修正和工具栏词条控件。不要用该 exe 验收本轮改动；待本轮源码进入 Windows Actions 并成功构建后再更新 exe 和哈希。
+- 本机没有 MSVC/Windows SDK/MinGW。源码已推送至 GitHub 增强分支，并由 Windows Actions 完成构建（最终结果见下节）。
+- 本地 `dist/sakura.exe`（SHA-256 `1deedf3c…`）和其 ZIP（`f4288b9b…`）是旧构建产物，不包含最终修正；请从下节列出的最新 Actions 运行下载独立 EXE artifact。
 
 Marker 状态没有加入 `DLLSHAREDATA`、`CommonSetting` 或共享内存版本结构；只新增 `CPropCommon` 的进程内对话框暂存字段及 `sakura.ini` 的 `[WordMarker]` 项。
 
@@ -40,3 +47,12 @@ Marker 状态没有加入 `DLLSHAREDATA`、`CommonSetting` 或共享内存版本
 自动/固定 Marker、共通設定开关、日语右键管理菜单以及默认工具栏管理入口已编译。Marker 使用现有可视区域绘制流程；没有独立的跨重绘命中缓存。共享内存结构未加入 Marker 字段，固定项和开关保存在 INI 的 `[WordMarker]` 节。默认工具栏仅对新配置生效，既有自定义工具栏不会自动迁移。
 
 只替换 EXE 在构建依赖层面可行：没有新增 DLL、插件或运行库，新增状态不在共享内存中。但尚未在目标 Windows 安装目录实机替换启动验证。建议先备份原 `sakura.exe`，在 Sakura 已关闭时替换，再启动并确认旧版 INI、宏、编码和搜索功能正常；若需要多进程兼容验证，也需在 Windows 上测试新旧版本同时运行。
+
+## 修复后最终验证（2026-11-25）
+
+- 最终源码提交：`dc7d649296a6c053d4bcd016238798408cb613e7`，基于指定基线并包含工具栏编译修正。
+- Windows Actions [build sakura run #8](https://github.com/w252566747/sakura/actions/runs/45503316560) 全部 11 个作业成功：Win32/x64 Debug 与 Release 四种配置均编译通过；四个配置的 C++/Python 测试均通过。Win32 Release 为 1170 项 C++ 测试、66 项 pytest；Win32 Debug 为 1226 项 C++ 测试、66 项 pytest；x64 Debug 为 1227 项 C++ 测试、66 项 pytest。x64 Release 作业成功。
+- 最新 Win32 Release 独立可执行文件 artifact：`SakuraEditor-WordMarker-Win32-Release-EXE`，ZIP 大小 1,170,998 字节，Actions artifact SHA-256 `22cabd16c18cf72973e70515a4e7066fa6b78637fe770067ec1d171cfe030e61`。从 run #8 的 Artifacts 区下载该 ZIP，解压即可得到 `sakura.exe`；构件由 Win32 Release 步骤直接上传。
+- Doxygen 检查通过：[Doxygen run #8](https://github.com/w252566747/sakura/actions/runs/45503316517)。
+- MinGW Build/Test 与 Cppcheck 的独立 workflow 在 MSYS2 软件包安装步骤失败，未运行到源码编译/静态分析：当前请求的 `mingw-w64-x86_64-diffutils` 和 `mingw-w64-x86_64-cppcheck` 包名不可用。它们不影响 MSVC Win32 Release 构建和主 workflow 的单元测试。
+- 大行性能目前有 Marker 1 MiB 单行扫描单测（Win32 Debug 454 ms）及本机 Matcher 冒烟测试（`-O2` 约 7 ms）；没有在真实 Windows 编辑器 UI 中量测打开超大文件后的滚动/重绘，也没有实机完成仅替换 EXE、右键颜色、INI、宏及新旧版本并行回归。
