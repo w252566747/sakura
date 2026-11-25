@@ -1,4 +1,4 @@
-/*!
+﻿/*!
 	@file CurlSyntaxChecker.cpp
 	@brief Conservative Curl 8.0 lexical checks.
 	SPDX-License-Identifier: Zlib
