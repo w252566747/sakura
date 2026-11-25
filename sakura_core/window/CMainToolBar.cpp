@@ -147,11 +147,13 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 	//（マウスをキャプチャしたまま放さない） 問題を回避するために右ボタンを無視する
 	case WM_RBUTTONDOWN:
 	case WM_RBUTTONUP:
-		return 0L;				// 右ボタンの UP/DOWN は本来のウィンドウプロシージャに渡さない
+		if (!self || hWnd != self->m_pOwner->GetHwnd()) return 0L;
+		break;				// main window の右クリックは本来のウィンドウプロシージャへ渡す
 
 	case WM_DESTROY:
 		// サブクラス化解除
 		::RemoveWindowSubclass(hWnd, &ToolBarWndProc, uIdSubclass);
+		if (self && hWnd == self->m_pOwner->GetHwnd()) break;
 		return 0L;
 	default:
 		break;
@@ -507,12 +509,18 @@ void CMainToolBar::CreateToolBar( void )
 		::ShowWindow( m_hwndToolBar, SW_SHOW );
 		DarkMode::setDarkWndSafe(m_hwndReBar);
 	}
+	// The editor window owns the unused area to the right of the native toolbar.
+	// Keep our controls as its children so a narrow Rebar band cannot clip them.
+	::SetWindowSubclass(m_pOwner->GetHwnd(), &ToolBarWndProc, 2, reinterpret_cast<DWORD_PTR>(this));
 
 	return;
 }
 
 void CMainToolBar::DestroyToolBar( void )
 {
+	if (m_pOwner && ::IsWindow(m_pOwner->GetHwnd())) {
+		::RemoveWindowSubclass(m_pOwner->GetHwnd(), &ToolBarWndProc, 2);
+	}
 	if (::IsWindow(m_hwndCurlSyntaxButton)) ::DestroyWindow(m_hwndCurlSyntaxButton);
 	m_hwndCurlSyntaxButton = nullptr;
 	if (m_hCurlSyntaxButtonBrush) {
@@ -722,9 +730,8 @@ void CMainToolBar::RefreshMarkerControls()
 	m_markerAutoWord = autoWord;
 	m_markerAutoButtonVisible = hasAutomatic;
 	auto createButton = [&](const std::wstring& label, UINT id) {
-		HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
 		return ::CreateWindowExW(0, L"BUTTON", label.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-			0, 0, 1, 1, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), CEditApp::getInstance()->GetAppInstance(), nullptr);
+			0, 0, 1, 1, m_pOwner->GetHwnd(), reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), CEditApp::getInstance()->GetAppInstance(), nullptr);
 	};
 	for (size_t i = 0; i < entries.size(); ++i) {
 		std::wstring label = (entries[i].enabled ? L"● " : L"○ ") + entries[i].word;
@@ -751,11 +758,10 @@ void CMainToolBar::RefreshMarkerControls()
 void CMainToolBar::RefreshCurlSyntaxControl()
 {
 	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar)) return;
-	HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
 	if (!::IsWindow(m_hwndCurlSyntaxButton)) {
 		m_hwndCurlSyntaxButton = ::CreateWindowExW(0, L"BUTTON", L"構文 OFF",
 			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 1, 1,
-			parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CURL_SYNTAX_BUTTON)),
+			m_pOwner->GetHwnd(), reinterpret_cast<HMENU>(static_cast<INT_PTR>(CURL_SYNTAX_BUTTON)),
 			CEditApp::getInstance()->GetAppInstance(), nullptr);
 		if (m_hwndCurlSyntaxButton) ::SetWindowTheme(m_hwndCurlSyntaxButton, L"", L"");
 	}
@@ -779,28 +785,36 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 
 void CMainToolBar::LayoutMarkerControls()
 {
-	HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
+	HWND parent = m_pOwner ? m_pOwner->GetHwnd() : nullptr;
 	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar) || !parent || !::IsWindow(parent)) return;
 	RECT client{};
 	::GetClientRect(parent, &client);
 	int leftLimit = 0;
-	if (m_hwndReBar) {
-		RECT toolbar{};
-		::GetWindowRect(m_hwndToolBar, &toolbar);
-		::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&toolbar), 2);
-		leftLimit = toolbar.right + DpiScaleX(4);
-	} else {
+	RECT toolbar{};
+	HWND toolbarRow = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
+	::GetWindowRect(toolbarRow, &toolbar);
+	::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&toolbar), 2);
+	RECT nativeToolbar{};
+	::GetWindowRect(m_hwndToolBar, &nativeToolbar);
+	::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&nativeToolbar), 2);
+	leftLimit = nativeToolbar.right + DpiScaleX(4);
+	if (leftLimit <= DpiScaleX(4)) {
 		const int count = static_cast<int>(::SendMessage(m_hwndToolBar, TB_BUTTONCOUNT, 0, 0));
 		if (count > 0) {
 			RECT last{};
-			if (::SendMessage(m_hwndToolBar, TB_GETITEMRECT, count - 1, reinterpret_cast<LPARAM>(&last))) leftLimit = last.right + DpiScaleX(4);
+			if (::SendMessage(m_hwndToolBar, TB_GETITEMRECT, count - 1, reinterpret_cast<LPARAM>(&last))) {
+				::MapWindowPoints(m_hwndToolBar, parent, reinterpret_cast<POINT*>(&last), 2);
+				leftLimit = last.right + DpiScaleX(4);
+			}
 		}
 	}
-	const int height = std::max(DpiScaleY(22), client.bottom - client.top);
+	const int height = std::max(DpiScaleY(22), toolbar.bottom - toolbar.top);
+	if (height <= 0) return;
+	const int y = toolbar.top + (toolbar.bottom - toolbar.top - height) / 2;
 	const int syntaxWidth = DpiScaleX(118);
 	const int syntaxX = leftLimit;
 	::ShowWindow(m_hwndCurlSyntaxButton, SW_SHOW);
-	::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, (client.bottom - height) / 2,
+	::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, y,
 		syntaxWidth, height, SWP_NOACTIVATE);
 	const int markerLeftLimit = syntaxX + syntaxWidth + DpiScaleX(4);
 	int right = client.right - DpiScaleX(2);
@@ -809,7 +823,7 @@ void CMainToolBar::LayoutMarkerControls()
 		right -= width;
 		const bool fits = right >= markerLeftLimit;
 		::ShowWindow(button, fits ? SW_SHOW : SW_HIDE);
-		if (fits) ::SetWindowPos(button, HWND_TOP, right, (client.bottom - height) / 2, width, height, SWP_NOACTIVATE);
+		if (fits) ::SetWindowPos(button, HWND_TOP, right, y, width, height, SWP_NOACTIVATE);
 		right -= DpiScaleX(3);
 		return fits;
 	};
