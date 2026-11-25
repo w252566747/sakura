@@ -142,7 +142,6 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 		}
 		break;
 	case WM_SIZE:
-		if (self) self->LayoutMarkerControls();
 		break;
 	// WinXP Visual Style のときにツールバー上でのマウス左右ボタン同時押しで無応答になる
 	//（マウスをキャプチャしたまま放さない） 問題を回避するために右ボタンを無視する
@@ -157,7 +156,14 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 	default:
 		break;
 	}
-	return ::DefSubclassProc( hWnd, msg, wParam, lParam );
+	const LRESULT result = ::DefSubclassProc(hWnd, msg, wParam, lParam);
+	// Rebar updates its child-band geometry in the default procedure. Layout our
+	// overlay controls only after that geometry has settled, or they can all be
+	// hidden using the previous (often zero-width) client rectangle.
+	if (self && (msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW)) {
+		self->LayoutMarkerControls();
+	}
+	return result;
 }
 
 LRESULT CALLBACK CMainToolBar::MarkerButtonWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData)
