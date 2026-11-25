@@ -667,7 +667,8 @@ void CMainToolBar::RefreshMarkerControls()
 	std::vector<COLORREF> markerColors;
 	std::vector<bool> markerEnabled;
 	for (const auto& entry : entries) {
-		markerColors.push_back(resolveColor(entry.color));
+		// Disabled markers keep their chosen color, but show a neutral swatch while inactive.
+		markerColors.push_back(entry.enabled ? resolveColor(entry.color) : RGB(210, 210, 210));
 		markerEnabled.push_back(entry.enabled);
 	}
 	COLORREF autoColor = RGB(255, 233, 172);
@@ -861,34 +862,42 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 
 		std::wstring labels = L"構文チェック";
 		labels.push_back(L'\0');
-		labels.append(L"‹");
+		labels.append(L"← 前へ");
 		labels.push_back(L'\0');
-		labels.append(L"›");
+		labels.append(L"次へ →");
 		labels.push_back(L'\0');
 		labels.push_back(L'\0');
 		const int stringBase = static_cast<int>(::SendMessageW(m_hwndEnhancementToolBar,
 			TB_ADDSTRINGW, 0, reinterpret_cast<LPARAM>(labels.c_str())));
-		TBBUTTON buttons[4]{};
-		buttons[0].iBitmap = I_IMAGENONE;
-		buttons[0].idCommand = CURL_SYNTAX_BUTTON;
-		buttons[0].fsState = TBSTATE_ENABLED;
-		buttons[0].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[0].iString = stringBase;
+		TBBUTTON buttons[8]{};
+		buttons[0].iBitmap = DpiScaleX(3);
+		buttons[0].fsStyle = BTNS_SEP;
 		buttons[1].iBitmap = I_IMAGENONE;
-		buttons[1].idCommand = WORDMARKER_PREVIOUS_BUTTON;
-		buttons[1].fsState = 0;
-		buttons[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[1].iString = stringBase + 1;
-		buttons[2].iBitmap = I_IMAGENONE;
-		buttons[2].idCommand = WORDMARKER_NEXT_BUTTON;
-		buttons[2].fsState = 0;
-		buttons[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[2].iString = stringBase + 2;
-		buttons[3].iBitmap = DpiScaleX(4);
-		buttons[3].idCommand = WORDMARKER_SPACER_BUTTON;
-		buttons[3].fsStyle = BTNS_SEP;
-		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 4, reinterpret_cast<LPARAM>(buttons));
-		m_nEnhancementMarkerStart = 4;
+		buttons[1].idCommand = CURL_SYNTAX_BUTTON;
+		buttons[1].fsState = TBSTATE_ENABLED;
+		buttons[1].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[1].iString = stringBase;
+		buttons[2].iBitmap = DpiScaleX(3);
+		buttons[2].fsStyle = BTNS_SEP;
+		buttons[3].iBitmap = I_IMAGENONE;
+		buttons[3].idCommand = WORDMARKER_PREVIOUS_BUTTON;
+		buttons[3].fsState = 0;
+		buttons[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[3].iString = stringBase + 1;
+		buttons[4].iBitmap = DpiScaleX(3);
+		buttons[4].fsStyle = BTNS_SEP;
+		buttons[5].iBitmap = I_IMAGENONE;
+		buttons[5].idCommand = WORDMARKER_NEXT_BUTTON;
+		buttons[5].fsState = 0;
+		buttons[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[5].iString = stringBase + 2;
+		buttons[6].iBitmap = DpiScaleX(3);
+		buttons[6].fsStyle = BTNS_SEP;
+		buttons[7].iBitmap = DpiScaleX(4);
+		buttons[7].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[7].fsStyle = BTNS_SEP;
+		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 8, reinterpret_cast<LPARAM>(buttons));
+		m_nEnhancementMarkerStart = 8;
 		::SendMessage(m_hwndEnhancementToolBar, TB_AUTOSIZE, 0, 0);
 	}
 	if (!m_hwndEnhancementToolBar) return;
