@@ -37,6 +37,48 @@
 #include "sakura_rc.h"
 #include "config/app_constants.h"
 
+namespace {
+	struct SearchMatchPosition {
+		int current = 0;
+		int total = 0;
+	};
+
+	// 現在の検索条件で文書全体を走査し、対象ヒットの文書内順序と総数を求める。
+	SearchMatchPosition CountSearchMatches(CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutPoint& currentPosition)
+	{
+		SearchMatchPosition result;
+		CLayoutInt line(0);
+		CLogicInt index(0);
+		CLayoutRange match;
+		while (layoutMgr.SearchWord(line, index, SEARCH_FORWARD, &match, pattern)) {
+			++result.total;
+			if (match.GetFrom() == currentPosition) {
+				result.current = result.total;
+			}
+
+			const CLayoutPoint from = match.GetFrom();
+			const CLayoutPoint to = match.GetTo();
+			line = to.GetY2();
+			index = to.GetX2();
+			if (from == to) {
+				// 幅0の正規表現一致でも走査を進め、無限ループを防ぐ。
+				++index;
+			}
+		}
+		return result;
+	}
+
+	void ShowSearchMatchPosition(CEditView* view, CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutRange& match)
+	{
+		const SearchMatchPosition position = CountSearchMatches(layoutMgr, pattern, match.GetFrom());
+		if (position.current > 0 && position.total > 0) {
+			wchar_t message[96];
+			_sntprintf_s(message, _countof(message), _TRUNCATE, L"%d 番目 / 合計 %d 件", position.current, position.total);
+			view->SendStatusMessage(message);
+		}
+	}
+}
+
 /*!
 検索(ボックス)コマンド実行.
 ツールバーの検索ボックスにフォーカスを移動する.
@@ -299,6 +341,9 @@ end_of_func:;
 	if(bFound){
 		if(nullptr == pcSelectLogic && ((nLineNumOld > nLineNum)||(nLineNumOld == nLineNum && nIdxOld > nIdx)))
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRNEXT1));
+		if (!bReplaceAll && nullptr == pcSelectLogic) {
+			ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA);
+		}
 	}
 	else{
 		GetCaret().ShowEditCaret();	// 2002/04/18 YAZAKI
@@ -462,6 +507,7 @@ end_of_func:;
 	if(bFound){
 		if((nLineNumOld < nLineNum)||(nLineNumOld == nLineNum && nIdxOld < nIdx))
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV1));
+		ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA);
 	}else{
 		m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV2));
 // To Here 2002.01.26 hor
