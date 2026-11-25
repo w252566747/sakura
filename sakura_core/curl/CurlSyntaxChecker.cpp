@@ -20,6 +20,22 @@ constexpr std::wstring_view kKnownCurlSymbols[] = {
 #include "curl/CurlSyntaxKeywords.inc"
 };
 
+// These language/control words are meaningful throughout a Curl code block,
+// unlike API names and user-defined identifiers. Check only longer words here
+// to avoid confusing common names such as "width" with the short keyword "with".
+constexpr std::wstring_view kLikelyLanguageKeywords[] = {
+	L"define-class", L"define-value-class", L"define-proc", L"define-method", L"define-macro",
+	L"define-syntax", L"define-interface", L"define-constant", L"define-enum", L"define-package",
+	L"define-library", L"define-module", L"define-record", L"define-struct", L"define-type",
+	L"define-alias", L"define-variable", L"define-parameter", L"define-api", L"define-class-proc",
+	L"class-proc", L"class-function", L"class-method", L"class-variable", L"class-constant",
+	L"class-constant-proc", L"class-getter", L"class-setter", L"class-accessor", L"class-constructor",
+	L"class-destructor", L"class-finalize", L"class-init", L"class-new", L"continue", L"return",
+	L"break", L"catch", L"throw", L"switch", L"while", L"finally", L"elseif", L"else-if",
+	L"unless", L"with-open", L"with-transaction", L"with-lock",
+	L"with-gui-lock", L"with-busy-cursor", L"unquote-splicing"
+};
+
 struct OpenDelimiter {
 	wchar_t value;
 	size_t offset;
@@ -83,7 +99,7 @@ bool IsAsciiIdentifier(std::wstring_view token)
 
 bool IsOneEditAway(std::wstring_view actual, std::wstring_view known)
 {
-	if (actual == known || !IsAsciiIdentifier(actual) || actual.size() < 5 || known.size() < 5 ||
+	if (actual == known || !IsAsciiIdentifier(actual) || actual.size() < 4 || known.size() < 5 ||
 		actual.size() + 1 < known.size() || known.size() + 1 < actual.size()) return false;
 	size_t a = 0, b = 0;
 	int edits = 0;
@@ -102,7 +118,7 @@ bool IsOneEditAway(std::wstring_view actual, std::wstring_view known)
 
 std::wstring_view FindLikelyTypo(std::wstring_view token)
 {
-	if (!IsAsciiIdentifier(token) || token.size() < 5 || token.size() >= 128) return {};
+	if (!IsAsciiIdentifier(token) || token.size() < 4 || token.size() >= 128) return {};
 	static const std::unordered_set<std::wstring> knownSymbols = [] {
 		std::unordered_set<std::wstring> symbols;
 		for (const auto candidate : kKnownCurlSymbols) {
@@ -134,11 +150,31 @@ std::wstring_view FindLikelyTypo(std::wstring_view token)
 	return {};
 }
 
-void AddLikelyTypoWarning(std::vector<Diagnostic>& diagnostics, std::wstring_view token,
-	size_t offset, int line, int column)
+std::wstring_view FindLikelyLanguageKeywordTypo(std::wstring_view token)
 {
-	const std::wstring_view suggestion = FindLikelyTypo(token);
-	if (suggestion.empty()) return;
+	if (!IsAsciiIdentifier(token) || token.size() < 4 || token.size() >= 128) return {};
+	static const auto keywordsByLength = [] {
+		std::array<std::vector<std::wstring_view>, 128> groups;
+		for (const auto candidate : kLikelyLanguageKeywords) {
+			if (candidate.size() >= 5 && candidate.size() < groups.size()) groups[candidate.size()].push_back(candidate);
+		}
+		return groups;
+	}();
+	const size_t minimumLength = std::max<size_t>(5, token.size() - 1);
+	const size_t maximumLength = std::min(token.size() + 1, keywordsByLength.size() - 1);
+	for (size_t length = minimumLength; length <= maximumLength; ++length) {
+		for (const auto candidate : keywordsByLength[length]) {
+			if (IsOneEditAway(token, candidate)) return candidate;
+		}
+	}
+	return {};
+}
+
+void AddTypoWarning(std::vector<Diagnostic>& diagnostics, std::wstring_view token,
+	std::wstring_view suggestion, size_t offset, int line, int column)
+{
+	if (suggestion.empty() || (!diagnostics.empty() && diagnostics.back().code == "CURL012" &&
+		diagnostics.back().offset == offset)) return;
 	Diagnostic diagnostic;
 	diagnostic.severity = Severity::Warning;
 	diagnostic.code = "CURL012";
@@ -151,6 +187,12 @@ void AddLikelyTypoWarning(std::vector<Diagnostic>& diagnostics, std::wstring_vie
 	diagnostic.line = line;
 	diagnostic.column = column;
 	diagnostics.push_back(std::move(diagnostic));
+}
+
+void AddLikelyTypoWarning(std::vector<Diagnostic>& diagnostics, std::wstring_view token,
+	size_t offset, int line, int column)
+{
+	AddTypoWarning(diagnostics, token, FindLikelyTypo(token), offset, line, column);
 }
 
 size_t FindSequence(std::wstring_view source, std::wstring_view sequence, size_t from,
@@ -319,6 +361,9 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 	int column = 1;
 	wchar_t previousSignificant = L'\0';
 	bool commaPending = false;
+	bool repeatedCommaReported = false;
+	bool expectingTypeName = false;
+	size_t lastIdentifierStart = std::wstring_view::npos;
 	auto advance = [&](wchar_t ch) {
 		if (ch == L'\n') { ++line; column = 1; }
 		else if (ch != L'\r') { ++column; }
@@ -375,26 +420,61 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 		}
 
 		const bool insideCurlCode = curlBraceDepth > 0;
-		if (insideCurlCode && ((ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') || ch == L'_')) {
+		const bool identifierStart = (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') || ch == L'_';
+		if (insideCurlCode && ch == L':') {
+			expectingTypeName = true;
+		} else if (insideCurlCode && !std::iswspace(ch) && !identifierStart) {
+			expectingTypeName = false;
+		}
+		if (insideCurlCode && identifierStart) {
 			// Identifiers may be user-defined variables, arguments, properties,
 			// or class names. Never guess their validity from the built-in list.
+			const size_t tokenStart = i;
+			const int tokenLine = line;
+			const int tokenColumn = column;
 			while (i < source.size() && ((source[i] >= L'a' && source[i] <= L'z') ||
 				(source[i] >= L'A' && source[i] <= L'Z') || (source[i] >= L'0' && source[i] <= L'9') ||
 				source[i] == L'_' || source[i] == L'-' || source[i] == L'?')) {
 				advance(source[i++]);
 			}
+			const auto token = source.substr(tokenStart, i - tokenStart);
+			const auto keywordSuggestion = FindLikelyLanguageKeywordTypo(token);
+			if (!keywordSuggestion.empty()) {
+				AddTypoWarning(diagnostics, token, keywordSuggestion, tokenStart, tokenLine, tokenColumn);
+			}
+			if (expectingTypeName) {
+				AddLikelyTypoWarning(diagnostics, token, tokenStart, tokenLine, tokenColumn);
+			}
+			lastIdentifierStart = tokenStart;
+			previousSignificant = token.empty() ? previousSignificant : token.back();
+			expectingTypeName = false;
+			commaPending = false;
+			repeatedCommaReported = false;
 			continue;
 		}
 		if (insideCurlCode && ch == L',') {
-			if (commaPending) {
+			if (commaPending && !repeatedCommaReported) {
 				AddDiagnostic(diagnostics, "CURL003", L"カンマが重複しています。", i, line, column);
+				repeatedCommaReported = true;
+			} else if (!delimiters.empty() && delimiters.back().value == L'{' &&
+				lastIdentifierStart == CurlHeadStart(source, delimiters.back().offset)) {
+				AddDiagnostic(diagnostics, "CURL014", L"カンマの前に引数がありません。", i, line, column);
 			}
 			commaPending = true;
 			previousSignificant = L',';
+			lastIdentifierStart = std::wstring_view::npos;
 			advance(source[i++]);
 			continue;
 		}
-		if (insideCurlCode && !std::iswspace(ch)) commaPending = false;
+		const bool closingDelimiter = ch == L'}' || (insideCurlCode && (ch == L')' || ch == L']'));
+		if (insideCurlCode && closingDelimiter && commaPending && !repeatedCommaReported) {
+			AddDiagnostic(diagnostics, "CURL013", L"カンマの後に式がありません。", i, line, column);
+		}
+		if (insideCurlCode && !std::iswspace(ch)) {
+			commaPending = false;
+			repeatedCommaReported = false;
+			lastIdentifierStart = std::wstring_view::npos;
+		}
 		if (insideCurlCode && (ch == L'"' || ch == L'\'')) {
 			const wchar_t quote = ch;
 			const size_t start = i;
@@ -434,6 +514,7 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 				suppressDelimiterCascade = true;
 			}
 			previousSignificant = quote;
+			lastIdentifierStart = std::wstring_view::npos;
 			continue;
 		}
 
@@ -463,6 +544,7 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 			delimiters.push_back({ ch, i, line, column, ch == L'{' && IsCommaSeparatedContainer(source, i), inheritedMacro || macroDefinition });
 			if (ch == L'{') ++curlBraceDepth;
 			previousSignificant = ch;
+			lastIdentifierStart = std::wstring_view::npos;
 			advance(source[i++]);
 			continue;
 		}
@@ -484,10 +566,14 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 				delimiters.pop_back();
 			}
 			previousSignificant = ch;
+			lastIdentifierStart = std::wstring_view::npos;
 			advance(source[i++]);
 			continue;
 		}
-		if (insideCurlCode && !std::iswspace(ch)) previousSignificant = ch;
+		if (insideCurlCode && !std::iswspace(ch)) {
+			previousSignificant = ch;
+			lastIdentifierStart = std::wstring_view::npos;
+		}
 		advance(source[i++]);
 	}
 
