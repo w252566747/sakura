@@ -59,7 +59,11 @@ namespace {
 			const CLayoutPoint from = match.GetFrom();
 			const CLayoutPoint to = match.GetTo();
 			line = to.GetY2();
+			#ifdef USE_STRICT_INT
 			index.SetValue(to.GetX2().GetValue());
+			#else
+			index = to.GetX2();
+			#endif
 			if (from == to) {
 				// 幅0の正規表現一致でも走査を進め、無限ループを防ぐ。
 				++index;
