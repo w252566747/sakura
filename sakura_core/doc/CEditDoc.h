@@ -32,6 +32,7 @@
 #include "CDocType.h"
 #include "CDocOutline.h"
 #include "CDocLocker.h"
+#include "curl/CurlSyntaxChecker.h"
 #include "layout/CLayoutMgr.h"
 #include "logic/CDocLineMgr.h"
 #include "agent/CBackupAgent.h"
@@ -41,6 +42,9 @@
 #include "basis/CEol.h"
 #include "macro/CCookieManager.h"
 #include "util/design_template.h"
+
+#include <cstdint>
+#include <vector>
 
 class CSMacroMgr; // 2002/2/10 aroka
 class CEditWnd; // Sep. 10, 2002 genta
@@ -127,6 +131,10 @@ public:
 
 	//動的状態
 	int				m_nCommandExecNum = 0;			//!< コマンド実行回数
+	uint64_t		m_uCurlSyntaxDocumentId = 0;	//!< Curl syntax result identity; process-local, not shared memory
+	uint64_t		m_uCurlSyntaxVersion = 0;	//!< Incremented after every content change
+	bool			m_bCurlSyntaxResultStale = true;
+	std::vector<curlsyntax::Diagnostic> m_vCurlSyntaxDiagnostics;
 
 	//環境情報
 	CFuncLookup		m_cFuncLookup;				//!< 機能名，機能番号などのresolve

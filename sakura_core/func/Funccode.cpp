@@ -373,6 +373,11 @@ const EFunctionCode pnFuncList_Set[] = {	//Oct. 16, 2000 JEPRO 変数名変更(L
 	F_SHOWTAB			,	/* タブの表示 */	//@@@ 2003.06.10 MIK
 	F_SHOWSTATUSBAR		,	/* ステータスバーの表示 */
 	F_SHOWMINIMAP		,	// ミニマップの表示
+	F_CURL_SYNTAX_TOGGLE,	/* Curl real-time syntax check */
+	F_CURL_SYNTAX_RUN,	/* Curl one-shot syntax check */
+	F_CURL_SYNTAX_ERRORS,	/* Curl syntax error list */
+	F_CURL_SYNTAX_NEXT,	/* Curl next syntax error */
+	F_CURL_SYNTAX_PREV,	/* Curl previous syntax error */
 	F_TYPE_LIST			,	/* タイプ別設定一覧 */			//Sept. 17, 2000 JEPRO 設定系に入ってなかったので追加
 	F_OPTION_TYPE		,	/* タイプ別設定 */
 	F_OPTION			,	/* 共通設定 */
@@ -965,6 +970,10 @@ int FuncID_To_HelpContextID( EFunctionCode nFuncID )
 /* 機能が利用可能か調べる */
 bool IsFuncEnable( const CEditDoc* pcEditDoc, const DLLSHAREDATA* pShareData, EFunctionCode nId )
 {
+	if (nId == F_CURL_SYNTAX_TOGGLE || nId == F_CURL_SYNTAX_RUN || nId == F_CURL_SYNTAX_ERRORS) return CEditWnd::getInstance()->IsCurlSyntaxDocument();
+	if (nId == F_CURL_SYNTAX_NEXT || nId == F_CURL_SYNTAX_PREV) {
+		return CEditWnd::getInstance()->IsCurlSyntaxDocument() && !pcEditDoc->m_bCurlSyntaxResultStale && !pcEditDoc->m_vCurlSyntaxDiagnostics.empty();
+	}
 	/* 書き換え禁止のときを一括チェック */
 	if( pcEditDoc->IsModificationForbidden( nId ) )
 		return false;
@@ -1280,6 +1289,7 @@ bool IsFuncChecked( const CEditDoc* pcEditDoc, const DLLSHAREDATA* pShareData, E
 		}else{
 			return false;
 		}
+	case F_CURL_SYNTAX_TOGGLE:	return curlsyntax::IsRealtimeEnabled();
 	case F_SHOWTOOLBAR:			return pCEditWnd->m_cToolbar.GetToolbarHwnd() != nullptr;
 	case F_SHOWFUNCKEY:			return pCEditWnd->m_cFuncKeyWnd.GetHwnd() != nullptr;
 	case F_SHOWTAB:				return pCEditWnd->m_cTabWnd.GetHwnd() != nullptr;	//@@@ 2003.06.10 MIK

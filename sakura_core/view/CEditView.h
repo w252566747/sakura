@@ -759,6 +759,7 @@ public:
 	CMigemo*		m_pcmigemo;
 	bool			m_bMiniMap;
 	bool			m_bMiniMapMouseDown;
+	bool			m_bExpandAddedWordCharactersForMouse = false;
 	CLayoutInt		m_nPageViewTop;
 	CLayoutInt		m_nPageViewBottom;
 

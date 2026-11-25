@@ -292,6 +292,7 @@ void CPropCommon::InitData( const int* tempTypeKeywordSet, const WCHAR* name, co
 {
 	m_Common = m_pShareData->m_Common;
 	m_bWordMarkerAutomaticEnabled = CWordMarker::Instance().IsAutomaticEnabled();
+	m_addedWordCharacters = CWordMarker::Instance().AddedWordCharacters();
 	m_tempTypeName[0] = L'\0';
 	m_tempTypeExts[0] = L'\0';
 
@@ -329,6 +330,7 @@ void CPropCommon::ApplyData( int* tempTypeKeywordSet )
 {
 	m_pShareData->m_Common = m_Common;
 	CWordMarker::Instance().SetAutomaticEnabled(m_bWordMarkerAutomaticEnabled);
+	CWordMarker::Instance().SetAddedWordCharacters(m_addedWordCharacters);
 
 	int i;
 	const int nSize = (int)m_Types_nKeyWordSetIdx.size();

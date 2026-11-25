@@ -5,6 +5,7 @@
 */
 #include "StdAfx.h"
 #include "CWordMarker.h"
+#include "charset/charcode.h"
 #include <algorithm>
 #include <climits>
 #include <cwchar>
@@ -88,6 +89,30 @@ void CWordMarker::ClearAutomatic(const void* document) noexcept
 	m_cachedAutomatic = nullptr;
 }
 
+void CWordMarker::SetAddedWordCharacters(std::wstring characters)
+{
+	characters.erase(std::remove_if(characters.begin(), characters.end(), [](wchar_t character) {
+		return character == L'\0' || character == L'\r' || character == L'\n';
+	}), characters.end());
+	if (characters.size() > 64) characters.resize(64);
+	m_addedWordCharacters = std::move(characters);
+}
+
+bool CWordMarker::IsWordCharacter(wchar_t character) const noexcept
+{
+	return IS_KEYWORD_CHAR(character) || m_addedWordCharacters.find(character) != std::wstring::npos;
+}
+
+bool CWordMarker::ExpandWordRange(const wchar_t* text, int length, int* from, int* to) const noexcept
+{
+	if (!text || !from || !to || m_addedWordCharacters.empty() || *from < 0 || *to < *from || *to > length) return false;
+	const int originalFrom = *from;
+	const int originalTo = *to;
+	while (*from > 0 && IsWordCharacter(text[*from - 1])) --*from;
+	while (*to < length && IsWordCharacter(text[*to])) ++*to;
+	return *from != originalFrom || *to != originalTo;
+}
+
 const std::wstring* CWordMarker::AutomaticWord(const void* document) const noexcept
 {
 	const auto found = m_automaticByDocument.find(document);
@@ -104,6 +129,8 @@ int CWordMarker::Match(const void* document, const wchar_t* text, int length, in
 		for (const size_t index : *candidates) {
 			const auto& word = m_entries[index].word;
 			if (word.size() > bestLength && word.size() <= static_cast<size_t>(length - position) &&
+				(position == 0 || !IsWordCharacter(text[position - 1])) &&
+				(position + static_cast<int>(word.size()) >= length || !IsWordCharacter(text[position + word.size()])) &&
 				wmemcmp(text + position, word.data(), word.size()) == 0) {
 				bestLength = word.size();
 				bestIndex = static_cast<int>(index + 1);
@@ -119,6 +146,8 @@ int CWordMarker::Match(const void* document, const wchar_t* text, int length, in
 	}
 	if (m_automaticEnabled && m_cachedAutomatic && !m_cachedAutomatic->empty() &&
 		m_cachedAutomatic->size() > bestLength && m_cachedAutomatic->size() <= static_cast<size_t>(length - position) &&
+		(position == 0 || !IsWordCharacter(text[position - 1])) &&
+		(position + static_cast<int>(m_cachedAutomatic->size()) >= length || !IsWordCharacter(text[position + m_cachedAutomatic->size()])) &&
 		text[position] == m_cachedAutomatic->front() &&
 		wmemcmp(text + position, m_cachedAutomatic->data(), m_cachedAutomatic->size()) == 0) {
 		bestLength = m_cachedAutomatic->size();

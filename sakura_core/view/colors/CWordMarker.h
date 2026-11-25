@@ -26,6 +26,10 @@ public:
 	const std::wstring* AutomaticWord(const void* document) const noexcept;
 	void SetAutomaticEnabled(bool enabled) noexcept { m_automaticEnabled = enabled; }
 	bool IsAutomaticEnabled() const noexcept { return m_automaticEnabled; }
+	const std::wstring& AddedWordCharacters() const noexcept { return m_addedWordCharacters; }
+	void SetAddedWordCharacters(std::wstring characters);
+	bool IsWordCharacter(wchar_t character) const noexcept;
+	bool ExpandWordRange(const wchar_t* text, int length, int* from, int* to) const noexcept;
 	int Match(const void* document, const wchar_t* text, int length, int position, int* end) const noexcept;
 	unsigned ColorAt(int index) const noexcept;
 	void Load(const std::vector<Entry>& entries);
@@ -33,6 +37,7 @@ private:
 	std::vector<Entry> m_entries;
 	std::unordered_map<wchar_t, std::vector<size_t>> m_singleCharacterIndex;
 	std::unordered_map<const void*, std::wstring> m_automaticByDocument;
+	std::wstring m_addedWordCharacters = L"_-";
 	mutable const void* m_cachedAutomaticDocument = nullptr;
 	mutable const std::wstring* m_cachedAutomatic = nullptr;
 	bool m_automaticEnabled = true;

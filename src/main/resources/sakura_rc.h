@@ -72,6 +72,8 @@
 #define IDC_CHECK_RTRIM_PREVLINE        1009
 #define IDC_CHECK_FREECARET             1010
 #define IDC_CHECK_WORDMARKER_AUTO        1741
+#define IDC_EDIT_ADDED_WORD_CHARS        1742
+#define IDC_BUTTON_WORD_CHARS_RESET      1743
 #define IDC_BUTTON_CLEAR_MRU_FOLDER     1011
 #define IDC_BUTTON_RELEASE              1012
 #define IDC_COMBO_TEXT                  1013
@@ -889,6 +891,7 @@
 #define F_SEARCH_TOPMENU                34055
 #define F_TOOL_TOPMENU                  34056
 #define F_OPTION_TOPMENU                34057
+#define F_CURL_SYNTAX_SUBMENU           34061
 #define F_WINDOW_TOPMENU                34058
 #define F_HELP_TOPMENU                  34059
 #define F_WINDOW_LIST_SUBMENU           34060

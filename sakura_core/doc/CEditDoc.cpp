@@ -61,9 +61,15 @@
 #include "config/app_constants.h"
 #include "view/colors/CWordMarker.h"
 
+#include <atomic>
+
 #pragma comment(lib, "windowscodecs.lib")
 
 #define IDT_ROLLMOUSE	1
+
+namespace {
+std::atomic<uint64_t> g_nextCurlSyntaxDocumentId{1};
+}
 
 //! 編集禁止コマンド
 static const EFunctionCode EIsModificationForbidden[] = {
@@ -174,6 +180,7 @@ CEditDoc::CEditDoc([[maybe_unused]] CEditApp* pcApp)
 , m_cDocType(this)					// warning C4355: 'this' : ベース メンバー初期化子リストで使用されました。
 , m_cDocOutline(this)				// warning C4355: 'this' : ベース メンバー初期化子リストで使用されました。
 {
+	m_uCurlSyntaxDocumentId = g_nextCurlSyntaxDocumentId.fetch_add(1, std::memory_order_relaxed);
 	MY_RUNNINGTIMER( cRunningTimer, L"CEditDoc::CEditDoc" );
 
 	// レイアウト管理情報の初期化
@@ -641,6 +648,7 @@ void CEditDoc::OnChangeType()
 
 	// 2006.09.01 ryoji タイプ変更後自動実行マクロを実行する
 	RunAutoMacro( GetDllShareData().m_Common.m_sMacro.m_nMacroOnTypeChanged );
+	GetEditWnd().OnCurlSyntaxDocumentTypeChanged();
 }
 
 /*! ビューに設定変更を反映させる

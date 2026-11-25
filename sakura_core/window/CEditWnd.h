@@ -52,6 +52,10 @@
 #include "cxx/ResourceHolder.hpp"
 
 #include "print/CPrintPreview.h"
+#include "curl/CurlSyntaxCheckService.h"
+
+#include <mutex>
+#include <optional>
 
 static const int MENUBAR_MESSAGE_MAX_LEN = 30;
 
@@ -64,6 +68,7 @@ struct DLLSHAREDATA;
 #define IDT_TOOLBAR		456
 #define IDT_CAPTION		457
 #define IDT_FIRST_IDLE	458
+#define IDT_CURL_SYNTAX	459
 #define IDT_SYSMENU		1357
 #define ID_TOOLBAR		100
 
@@ -155,6 +160,16 @@ public:
 	void OnEditTimer( void );	/* タイマーの処理 */
 	void	OnCaptionTimer() const;
 	void OnSysMenuTimer( void );
+	void RunCurlSyntaxCheck(bool manual = false);
+	void AcceptCurlSyntaxResult();
+	void NavigateCurlSyntaxError(bool forward);
+	void ToggleCurlSyntaxErrorList();
+	void GoToCurlSyntaxDiagnostic(size_t index);
+	void UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition);
+	void HideCurlSyntaxTooltip();
+	void CreateCurlSyntaxErrorList();
+	void RefreshCurlSyntaxErrorList();
+	static LRESULT CALLBACK CurlSyntaxErrorListProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
 	void OnCommand(WORD wNotifyCode, WORD wID, HWND hwndCtl);
 	LRESULT OnNcLButtonDown(WPARAM wp, LPARAM lp);
 	LRESULT OnNcLButtonUp(WPARAM wp, LPARAM lp);
@@ -268,6 +283,12 @@ public:
 	CMenuDrawer&	GetMenuDrawer()			{ return m_cMenuDrawer; }
 	CEditDoc*		GetDocument()           { return m_pcEditDoc; }
 	const CEditDoc*	GetDocument() const     { return m_pcEditDoc; }
+	bool IsCurlSyntaxDocument() const;
+	void NotifyCurlSyntaxContentChanged(CEditDoc* document);
+	void NotifyCurlSyntaxDocumentLoaded();
+	void OnCurlSyntaxDocumentTypeChanged();
+	void SetCurlSyntaxRealtime(bool enabled);
+	void RunCurlSyntaxCheckNow();
 
 	//ビュー
 	const CEditView&	GetActiveView() const { return *m_pcEditView; }
@@ -423,6 +444,17 @@ private:
 
 public:
 	ESelectCountMode	m_nSelectCountMode = SELECT_COUNT_TOGGLE; // 選択文字カウント方法
+
+private:
+	std::mutex m_curlSyntaxMailboxMutex;
+	std::optional<curlsyntax::CheckResult> m_curlSyntaxMailbox;
+	std::unique_ptr<curlsyntax::CheckService> m_pCurlSyntaxCheckService;
+	HWND m_hwndCurlSyntaxErrorList = nullptr;
+	bool m_bCurlSyntaxErrorListVisible = false;
+	int m_nCurlSyntaxErrorListHeight = 150;
+	bool m_bCurlSyntaxErrorListDragging = false;
+	HWND m_hwndCurlSyntaxTooltip = nullptr;
+	std::wstring m_strCurlSyntaxTooltip;
 };
 
 CEditWnd* GetEditWndPtr() noexcept;

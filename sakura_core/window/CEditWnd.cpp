@@ -25,6 +25,8 @@
 
 #include "StdAfx.h"
 #include <ShlObj.h>
+#include <algorithm>
+#include <cwctype>
 
 #include "window/CEditWnd.h"
 #include "_main/CControlTray.h"
@@ -49,11 +51,13 @@
 #include "agent/CGrepAgent.h"
 #include "env/CMarkMgr.h"
 #include "doc/layout/CLayout.h"
+#include "doc/CEditDoc.h"
+#include "doc/logic/CDocLine.h"
+#include "config/system_constants.h"
 #include "debug/CRunningTimer.h"
 #include "apiwrap/StdApi.h"
 #include "apiwrap/CommonControl.h"
 #include "sakura_rc.h"
-#include "config/system_constants.h"
 #include "config/app_constants.h"
 #include "recent/CRecentEditNode.h"
 #include "recent/CRecentFile.h"
@@ -212,6 +216,7 @@ LRESULT CALLBACK CEditWndProc(
 
 CEditWnd::CEditWnd()
 {
+	m_nCurlSyntaxErrorListHeight = curlsyntax::GetErrorListHeight();
 	const auto& cTypeConfig = GetEditDoc().m_cDocType.GetDocumentAttribute();
 	auto& cLayoutMgr = GetEditDoc().m_cLayoutMgr;
 	cLayoutMgr.SetLayoutInfo( true, false, cTypeConfig,
@@ -225,6 +230,13 @@ CEditWnd::CEditWnd()
 
 CEditWnd::~CEditWnd()
 {
+	if (m_hwndCurlSyntaxTooltip) ::DestroyWindow(m_hwndCurlSyntaxTooltip);
+	::KillTimer(m_hWnd, IDT_CURL_SYNTAX);
+	if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
+	{
+		std::lock_guard<std::mutex> lock(m_curlSyntaxMailboxMutex);
+		m_curlSyntaxMailbox.reset();
+	}
 	CMacroFactory::resetInstance();
 	CColorStrategyPool::resetInstance();
 	CFigureManager::resetInstance();
@@ -232,6 +244,331 @@ CEditWnd::~CEditWnd()
 	delete[] m_pszLastCaption;
 
 	m_hWnd = nullptr;
+}
+
+bool CEditWnd::IsCurlSyntaxDocument() const
+{
+	const CEditDoc* document = GetDocument();
+	if (!document) return false;
+	std::wstring typeName = document->m_cDocType.GetDocumentAttribute().m_szTypeName;
+	std::transform(typeName.begin(), typeName.end(), typeName.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+	if (typeName.find(L"curl") != std::wstring::npos) return true;
+	const LPCWSTR extension = document->m_cDocFile.GetFilePathClass().GetExt(true);
+	return extension && (_wcsicmp(extension, L"scurl") == 0
+		|| _wcsicmp(extension, L"dcurl") == 0
+		|| _wcsicmp(extension, L"curl") == 0);
+}
+
+void CEditWnd::NotifyCurlSyntaxContentChanged(CEditDoc* document)
+{
+	if (!document) return;
+	++document->m_uCurlSyntaxVersion;
+	document->m_bCurlSyntaxResultStale = true;
+	document->m_vCurlSyntaxDiagnostics.clear();
+	RefreshCurlSyntaxErrorList();
+	if (document != GetDocument()) return;
+	HideCurlSyntaxTooltip();
+	::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+	if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
+	if (curlsyntax::IsRealtimeEnabled() && IsCurlSyntaxDocument() && GetHwnd()) {
+		::SetTimer(GetHwnd(), IDT_CURL_SYNTAX, 500, nullptr);
+	}
+}
+
+void CEditWnd::NotifyCurlSyntaxDocumentLoaded()
+{
+	NotifyCurlSyntaxContentChanged(GetDocument());
+}
+
+void CEditWnd::OnCurlSyntaxDocumentTypeChanged()
+{
+	NotifyCurlSyntaxContentChanged(GetDocument());
+	if (!IsCurlSyntaxDocument()) {
+		m_bCurlSyntaxErrorListVisible = false;
+		if (m_hwndCurlSyntaxErrorList) ::ShowWindow(m_hwndCurlSyntaxErrorList, SW_HIDE);
+		RECT client{};
+		::GetClientRect(GetHwnd(), &client);
+		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+	}
+	RefreshCurlSyntaxErrorList();
+	m_cToolbar.UpdateToolbar();
+}
+
+void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
+{
+	curlsyntax::SetRealtimeEnabled(enabled);
+	if (!enabled) {
+		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+		if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
+		if (auto* document = GetDocument()) {
+			++document->m_uCurlSyntaxVersion;
+			document->m_bCurlSyntaxResultStale = true;
+			document->m_vCurlSyntaxDiagnostics.clear();
+		}
+		RefreshCurlSyntaxErrorList();
+		m_bCurlSyntaxErrorListVisible = false;
+		if (m_hwndCurlSyntaxErrorList) ::ShowWindow(m_hwndCurlSyntaxErrorList, SW_HIDE);
+		HideCurlSyntaxTooltip();
+		RECT client{};
+		::GetClientRect(GetHwnd(), &client);
+		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+		Views_RedrawAll();
+		m_cToolbar.UpdateToolbar();
+		return;
+	}
+	NotifyCurlSyntaxDocumentLoaded();
+	if (IsCurlSyntaxDocument()) {
+		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+		RunCurlSyntaxCheck(false);
+	}
+	m_cToolbar.UpdateToolbar();
+}
+
+void CEditWnd::RunCurlSyntaxCheck(bool manual)
+{
+	CEditDoc* document = GetDocument();
+	if (!document || (!manual && !curlsyntax::IsRealtimeEnabled()) || !IsCurlSyntaxDocument()) return;
+	std::wstring snapshot;
+	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+		const CLogicInt length = line->GetLengthWithEOL();
+		if (length > CLogicInt(0)) snapshot.append(line->GetPtr(), static_cast<size_t>(static_cast<int>(length)));
+	}
+	if (!m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService = std::make_unique<curlsyntax::CheckService>();
+	const HWND resultWindow = GetHwnd();
+	m_pCurlSyntaxCheckService->Schedule(document->m_uCurlSyntaxDocumentId,
+		document->m_uCurlSyntaxVersion, std::move(snapshot),
+		[this, resultWindow](curlsyntax::CheckResult result) {
+			{
+				std::lock_guard<std::mutex> lock(m_curlSyntaxMailboxMutex);
+				m_curlSyntaxMailbox = std::move(result);
+			}
+			if (!::PostMessage(resultWindow, MYWM_CURL_SYNTAX_RESULT, 0, 0)) {
+				std::lock_guard<std::mutex> lock(m_curlSyntaxMailboxMutex);
+				m_curlSyntaxMailbox.reset();
+			}
+		}, true, manual);
+}
+
+void CEditWnd::RunCurlSyntaxCheckNow()
+{
+	RunCurlSyntaxCheck(true);
+}
+
+void CEditWnd::AcceptCurlSyntaxResult()
+{
+	std::optional<curlsyntax::CheckResult> result;
+	{
+		std::lock_guard<std::mutex> lock(m_curlSyntaxMailboxMutex);
+		result.swap(m_curlSyntaxMailbox);
+	}
+	CEditDoc* document = GetDocument();
+	if (!result || !document || (!curlsyntax::IsRealtimeEnabled() && !result->manual) || !IsCurlSyntaxDocument()) return;
+	if (result->documentId != document->m_uCurlSyntaxDocumentId
+		|| result->version != document->m_uCurlSyntaxVersion) return;
+	document->m_vCurlSyntaxDiagnostics = std::move(result->diagnostics);
+	document->m_bCurlSyntaxResultStale = false;
+	RefreshCurlSyntaxErrorList();
+	Views_RedrawAll();
+}
+
+void CEditWnd::CreateCurlSyntaxErrorList()
+{
+	if (m_hwndCurlSyntaxErrorList) return;
+	INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
+	::InitCommonControlsEx(&controls);
+	m_hwndCurlSyntaxErrorList = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+		WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+		0, 0, 0, 0, GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
+	if (!m_hwndCurlSyntaxErrorList) return;
+	::SetWindowSubclass(m_hwndCurlSyntaxErrorList, &CEditWnd::CurlSyntaxErrorListProc, 1, reinterpret_cast<DWORD_PTR>(this));
+	ListView_SetExtendedListViewStyle(m_hwndCurlSyntaxErrorList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
+	const wchar_t* titles[] = { L"種別", L"ファイル名", L"行", L"列", L"コード", L"メッセージ" };
+	const int widths[] = { 78, 180, 58, 58, 92, 360 };
+	for (int i = 0; i < 6; ++i) {
+		LVCOLUMNW column{};
+		column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+		column.pszText = const_cast<LPWSTR>(titles[i]);
+		column.cx = DpiScaleX(widths[i]);
+		column.iSubItem = i;
+		ListView_InsertColumn(m_hwndCurlSyntaxErrorList, i, &column);
+	}
+	RefreshCurlSyntaxErrorList();
+}
+
+LRESULT CALLBACK CEditWnd::CurlSyntaxErrorListProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
+	UINT_PTR subclassId, DWORD_PTR refData)
+{
+	auto* owner = reinterpret_cast<CEditWnd*>(refData);
+	if (!owner) return ::DefSubclassProc(hwnd, message, wParam, lParam);
+	const int resizeGrip = DpiScaleY(6);
+	if (message == WM_LBUTTONDOWN && GET_Y_LPARAM(lParam) <= resizeGrip) {
+		owner->m_bCurlSyntaxErrorListDragging = true;
+		::SetCapture(hwnd);
+		::SetCursor(::LoadCursor(nullptr, IDC_SIZENS));
+		return 0;
+	}
+	if (message == WM_MOUSEMOVE && GET_Y_LPARAM(lParam) <= resizeGrip) {
+		::SetCursor(::LoadCursor(nullptr, IDC_SIZENS));
+	}
+	if (message == WM_MOUSEMOVE && owner->m_bCurlSyntaxErrorListDragging) {
+		POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+		::MapWindowPoints(hwnd, owner->GetHwnd(), &point, 1);
+		RECT client{};
+		::GetClientRect(owner->GetHwnd(), &client);
+		int contentBottom = client.bottom;
+		if (HWND status = owner->m_cStatusBar.GetStatusHwnd()) {
+			RECT statusRect{};
+			::GetWindowRect(status, &statusRect);
+			::MapWindowPoints(nullptr, owner->GetHwnd(), reinterpret_cast<POINT*>(&statusRect), 2);
+			contentBottom = statusRect.top;
+		}
+		const int minHeight = DpiScaleY(80);
+		const int maxHeight = std::max(minHeight, (contentBottom - DpiScaleY(100)) / 2);
+		owner->m_nCurlSyntaxErrorListHeight = DpiUnscaleY(std::clamp(contentBottom - point.y, minHeight, maxHeight));
+		owner->OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+		::SetCursor(::LoadCursor(nullptr, IDC_SIZENS));
+		return 0;
+	}
+	if (message == WM_LBUTTONUP && owner->m_bCurlSyntaxErrorListDragging) {
+		owner->m_bCurlSyntaxErrorListDragging = false;
+		if (::GetCapture() == hwnd) ::ReleaseCapture();
+		curlsyntax::SetErrorListHeight(owner->m_nCurlSyntaxErrorListHeight);
+		return 0;
+	}
+	if (message == WM_CAPTURECHANGED) owner->m_bCurlSyntaxErrorListDragging = false;
+	if (message == WM_NCDESTROY) ::RemoveWindowSubclass(hwnd, &CEditWnd::CurlSyntaxErrorListProc, subclassId);
+	return ::DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+void CEditWnd::RefreshCurlSyntaxErrorList()
+{
+	if (!m_hwndCurlSyntaxErrorList) return;
+	ListView_DeleteAllItems(m_hwndCurlSyntaxErrorList);
+	const CEditDoc* document = GetDocument();
+	if (!document || document->m_vCurlSyntaxDiagnostics.empty()) {
+		LVITEMW item{};
+		item.mask = LVIF_TEXT;
+		item.iItem = 0;
+		item.pszText = const_cast<LPWSTR>(L"構文エラーはありません");
+		ListView_InsertItem(m_hwndCurlSyntaxErrorList, &item);
+		return;
+	}
+	const std::wstring fileName = document->m_cDocFile.GetFileName();
+	for (size_t i = 0; i < document->m_vCurlSyntaxDiagnostics.size(); ++i) {
+		const auto& diagnostic = document->m_vCurlSyntaxDiagnostics[i];
+		const std::wstring severity = diagnostic.severity == curlsyntax::Severity::Error ? L"Error" : L"Warning";
+		const std::wstring row = std::to_wstring(diagnostic.line);
+		const std::wstring column = std::to_wstring(diagnostic.column);
+		LVITEMW item{};
+		item.mask = LVIF_TEXT | LVIF_PARAM;
+		item.iItem = static_cast<int>(i);
+		item.lParam = static_cast<LPARAM>(i);
+		item.pszText = const_cast<LPWSTR>(severity.c_str());
+		const int index = ListView_InsertItem(m_hwndCurlSyntaxErrorList, &item);
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 1, const_cast<LPWSTR>(fileName.c_str()));
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 2, const_cast<LPWSTR>(row.c_str()));
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 3, const_cast<LPWSTR>(column.c_str()));
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 4, const_cast<LPWSTR>(diagnostic.code.c_str()));
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 5, const_cast<LPWSTR>(diagnostic.message.c_str()));
+	}
+}
+
+void CEditWnd::ToggleCurlSyntaxErrorList()
+{
+	CreateCurlSyntaxErrorList();
+	if (!m_hwndCurlSyntaxErrorList) return;
+	m_bCurlSyntaxErrorListVisible = !m_bCurlSyntaxErrorListVisible;
+	::ShowWindow(m_hwndCurlSyntaxErrorList, m_bCurlSyntaxErrorListVisible ? SW_SHOW : SW_HIDE);
+	RECT client{};
+	::GetClientRect(GetHwnd(), &client);
+	OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+}
+
+void CEditWnd::GoToCurlSyntaxDiagnostic(size_t index)
+{
+	CEditDoc* document = GetDocument();
+	if (!document || document->m_bCurlSyntaxResultStale || index >= document->m_vCurlSyntaxDiagnostics.size()) return;
+	const auto& diagnostic = document->m_vCurlSyntaxDiagnostics[index];
+	CLayoutPoint layoutPosition;
+	document->m_cLayoutMgr.LogicToLayout(CLogicPoint(diagnostic.column - 1, diagnostic.line - 1), &layoutPosition);
+	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
+	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
+	GetActiveView().Redraw();
+}
+
+void CEditWnd::NavigateCurlSyntaxError(bool forward)
+{
+	const CEditDoc* document = GetDocument();
+	if (!document || document->m_bCurlSyntaxResultStale || document->m_vCurlSyntaxDiagnostics.empty()) return;
+	const CLogicPoint current = GetActiveView().GetCaret().GetCaretLogicPos();
+	size_t target = forward ? 0 : document->m_vCurlSyntaxDiagnostics.size() - 1;
+	if (forward) {
+		for (size_t i = 0; i < document->m_vCurlSyntaxDiagnostics.size(); ++i) {
+			const auto& d = document->m_vCurlSyntaxDiagnostics[i];
+			if (d.line - 1 > static_cast<int>(current.y) || (d.line - 1 == static_cast<int>(current.y) && d.column - 1 > static_cast<int>(current.x))) { target = i; break; }
+		}
+	} else {
+		for (size_t i = document->m_vCurlSyntaxDiagnostics.size(); i-- > 0;) {
+			const auto& d = document->m_vCurlSyntaxDiagnostics[i];
+			if (d.line - 1 < static_cast<int>(current.y) || (d.line - 1 == static_cast<int>(current.y) && d.column - 1 < static_cast<int>(current.x))) { target = i; break; }
+		}
+	}
+	GoToCurlSyntaxDiagnostic(target);
+}
+
+void CEditWnd::UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition)
+{
+	const CEditDoc* document = GetDocument();
+	const curlsyntax::Diagnostic* found = nullptr;
+	if (document && !document->m_bCurlSyntaxResultStale && IsCurlSyntaxDocument()) {
+		CLogicPoint logicPosition;
+		document->m_cLayoutMgr.LayoutToLogic(layoutPosition, &logicPosition);
+		const int line = static_cast<int>(logicPosition.y) + 1;
+		const int column = static_cast<int>(logicPosition.x) + 1;
+		for (const auto& diagnostic : document->m_vCurlSyntaxDiagnostics) {
+			if (diagnostic.line == line && (diagnostic.column == column || static_cast<int>(layoutPosition.x) <= 0)) { found = &diagnostic; break; }
+		}
+	}
+	if (!found) {
+		HideCurlSyntaxTooltip();
+		return;
+	}
+	if (!m_hwndCurlSyntaxTooltip) {
+		m_hwndCurlSyntaxTooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+			WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+			GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
+		if (!m_hwndCurlSyntaxTooltip) return;
+		TOOLINFOW tool{};
+		tool.cbSize = sizeof(tool);
+		tool.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+		tool.hwnd = GetHwnd();
+		tool.uId = 1;
+		tool.lpszText = const_cast<LPWSTR>(L"");
+		::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+	}
+	m_strCurlSyntaxTooltip = found->message + L"\n行：" + std::to_wstring(found->line) +
+		L"\n列：" + std::to_wstring(found->column) + L"\nエラーコード：" +
+		std::wstring(found->code.begin(), found->code.end());
+	TOOLINFOW tool{};
+	tool.cbSize = sizeof(tool);
+	tool.hwnd = GetHwnd();
+	tool.uId = 1;
+	tool.lpszText = m_strCurlSyntaxTooltip.data();
+	::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&tool));
+	::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_TRACKPOSITION, 0,
+		MAKELONG(screenPosition.x + DpiScaleX(12), screenPosition.y + DpiScaleY(18)));
+	::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&tool));
+}
+
+void CEditWnd::HideCurlSyntaxTooltip()
+{
+	if (m_hwndCurlSyntaxTooltip) {
+		TOOLINFOW tool{};
+		tool.cbSize = sizeof(tool);
+		tool.hwnd = GetHwnd();
+		tool.uId = 1;
+		::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&tool));
+	}
 }
 
 //! ドキュメントリスナ：セーブ後
@@ -1120,6 +1457,9 @@ LRESULT CEditWnd::DispatchEvent(
 	CTypeConfig			cTypeNew;
 
 	switch( uMsg ){
+	case MYWM_CURL_SYNTAX_RESULT:
+		AcceptCurlSyntaxResult();
+		return 0L;
 	case WM_PAINTICON:
 		return 0;
 	case WM_ICONERASEBKGND:
@@ -1373,6 +1713,16 @@ LRESULT CEditWnd::DispatchEvent(
 
 	case WM_NOTIFY:
 		pnmh = (LPNMHDR) lParam;
+		if (m_hwndCurlSyntaxErrorList && pnmh->hwndFrom == m_hwndCurlSyntaxErrorList && pnmh->code == NM_DBLCLK) {
+			const int selected = ListView_GetNextItem(m_hwndCurlSyntaxErrorList, -1, LVNI_SELECTED);
+			if (selected >= 0) {
+				LVITEMW item{};
+				item.mask = LVIF_PARAM;
+				item.iItem = selected;
+				if (ListView_GetItem(m_hwndCurlSyntaxErrorList, &item)) GoToCurlSyntaxDiagnostic(static_cast<size_t>(item.lParam));
+			}
+			return 0;
+		}
 		//	From Here Feb. 15, 2004 genta
 		//	ステータスバーのダブルクリックでモード切替ができるようにする
 		if( m_cStatusBar.GetStatusHwnd() && pnmh->hwndFrom == m_cStatusBar.GetStatusHwnd() ){
@@ -1503,6 +1853,8 @@ LRESULT CEditWnd::DispatchEvent(
 		}
 		return 0L;
 	case WM_DESTROY:
+		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+		if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
 		if( m_pShareData->m_sFlags.m_bRecordingKeyMacro ){					/* キーボードマクロの記録中 */
 			if( m_pShareData->m_sFlags.m_hwndRecordingKeyMacro == GetHwnd() ){	/* キーボードマクロを記録中のウィンドウ */
 				m_pShareData->m_sFlags.m_bRecordingKeyMacro = FALSE;			/* キーボードマクロの記録中 */
@@ -2836,6 +3188,10 @@ LRESULT CEditWnd::OnTimer( WPARAM wParam, [[maybe_unused]] LPARAM lParam )
 	// タイマー ID で処理を振り分ける
 	switch( wParam )
 	{
+	case IDT_CURL_SYNTAX:
+		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+		RunCurlSyntaxCheck();
+		break;
 	case IDT_EDIT:
 		OnEditTimer();
 		break;
@@ -3266,6 +3622,11 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 	if( m_pShareData->m_Common.m_sWindow.m_nFUNCKEYWND_Place == 0)
 		nTop += nFuncKeyWndHeight;
 	int nHeight = cy - nToolBarHeight - nFuncKeyWndHeight - nTabWndHeight - nTabHeightBottom - nStatusBarHeight;
+	if (m_hwndCurlSyntaxErrorList && m_bCurlSyntaxErrorListVisible) {
+		const int panelHeight = std::min(DpiScaleY(m_nCurlSyntaxErrorListHeight), std::max(0, nHeight / 2));
+		::MoveWindow(m_hwndCurlSyntaxErrorList, 0, nTop + nHeight - panelHeight, cx, panelHeight, TRUE);
+		nHeight -= panelHeight;
+	}
 	if( m_cDlgFuncList.GetHwnd() && m_cDlgFuncList.IsDocking() )
 	{
 		::MoveWindow(
@@ -4370,6 +4731,8 @@ void  CEditWnd::SetActivePane( int nIndex )
 	GetActiveView().RedrawAll();	/* フォーカス移動時の再描画 */
 
 	m_cSplitterWnd.SetActivePane( nIndex );
+	RefreshCurlSyntaxErrorList();
+	m_cToolbar.UpdateToolbar();
 
 	if( nullptr != m_cDlgFind.GetHwnd() ){		/* 「検索」ダイアログ */
 		/* モードレス時：検索対象となるビューの変更 */

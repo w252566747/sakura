@@ -612,7 +612,14 @@ LRESULT CEditView::DispatchEvent(
 		OnLBUTTONUP( wParam, (short)LOWORD( lParam ), (short)HIWORD( lParam ) );
 		return 0L;
 	case WM_MOUSEMOVE:
+		{
+			TRACKMOUSEEVENT tracking{ sizeof(tracking), TME_LEAVE, hwnd, 0 };
+			::TrackMouseEvent(&tracking);
+		}
 		OnMOUSEMOVE( wParam, (short)LOWORD( lParam ), (short)HIWORD( lParam ) );
+		return 0L;
+	case WM_MOUSELEAVE:
+		GetEditWnd().HideCurlSyntaxTooltip();
 		return 0L;
 
 	case WM_RBUTTONDBLCLK:

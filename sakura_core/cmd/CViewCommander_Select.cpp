@@ -20,7 +20,7 @@
 #include "CViewCommander_inline.h"
 
 /* 現在位置の単語選択 */
-bool CViewCommander::Command_SELECTWORD( CLayoutPoint* pptCaretPos )
+bool CViewCommander::Command_SELECTWORD( CLayoutPoint* pptCaretPos, bool expandAddedWordCharacters )
 {
 	CLayoutRange sRange;
 	CLogicInt	nIdx;
@@ -37,7 +37,7 @@ bool CViewCommander::Command_SELECTWORD( CLayoutPoint* pptCaretPos )
 	nIdx = m_pCommanderView->LineColumnToIndex( pcLayout, ptCaretPos.GetX2() );
 
 	/* 現在位置の単語の範囲を調べる */
-	if( GetDocument()->m_cLayoutMgr.WhereCurrentWord(	ptCaretPos.GetY2(), nIdx, &sRange, nullptr, nullptr ) ){
+	if( GetDocument()->m_cLayoutMgr.WhereCurrentWord(	ptCaretPos.GetY2(), nIdx, &sRange, nullptr, nullptr, expandAddedWordCharacters ) ){
 
 		// 指定された行のデータ内の位置に対応する桁の位置を調べる
 		// 2007.10.15 kobake 既にレイアウト単位なので変換は不要

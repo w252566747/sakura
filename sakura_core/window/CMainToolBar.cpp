@@ -29,6 +29,7 @@ constexpr UINT WORDMARKER_AUTO_BUTTON = WORDMARKER_BUTTON_BASE + 32;
 constexpr UINT WORDMARKER_CLEAR_BUTTON = WORDMARKER_BUTTON_BASE + 33;
 constexpr UINT WORDMARKER_OVERFLOW_BUTTON = WORDMARKER_BUTTON_BASE + 34;
 constexpr UINT WORDMARKER_MENU_REMOVE_BASE = WORDMARKER_BUTTON_BASE + 64;
+constexpr UINT CURL_SYNTAX_BUTTON = 0x7CFF;
 }
 
 CMainToolBar::CMainToolBar(CEditWnd* pOwner)
@@ -93,6 +94,11 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 	switch( msg )
 	{
 	case WM_COMMAND:
+		if (self && LOWORD(wParam) == CURL_SYNTAX_BUTTON && HIWORD(wParam) == BN_CLICKED) {
+			self->m_pOwner->SetCurlSyntaxRealtime(!curlsyntax::IsRealtimeEnabled());
+			self->RefreshCurlSyntaxControl();
+			return 0;
+		}
 		if (self && HIWORD(wParam) == BN_CLICKED &&
 			(LOWORD(wParam) >= WORDMARKER_BUTTON_BASE && LOWORD(wParam) <= WORDMARKER_OVERFLOW_BUTTON)) {
 			self->HandleMarkerControl(LOWORD(wParam));
@@ -102,6 +108,12 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 	case WM_CTLCOLORBTN:
 		if (self) {
 			const HWND button = reinterpret_cast<HWND>(lParam);
+			if (button == self->m_hwndCurlSyntaxButton && self->m_hCurlSyntaxButtonBrush) {
+				::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
+				::SetBkColor(reinterpret_cast<HDC>(wParam), self->m_cCurlSyntaxButtonBack);
+				::SetTextColor(reinterpret_cast<HDC>(wParam), self->m_cCurlSyntaxButtonText);
+				return reinterpret_cast<LRESULT>(self->m_hCurlSyntaxButtonBrush);
+			}
 			for (size_t i = 0; i < self->m_hwndMarkerButtons.size(); ++i) {
 				if (self->m_hwndMarkerButtons[i] == button && i < self->m_markerButtonBrushes.size()) {
 					::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
@@ -457,6 +469,12 @@ void CMainToolBar::CreateToolBar( void )
 
 void CMainToolBar::DestroyToolBar( void )
 {
+	if (::IsWindow(m_hwndCurlSyntaxButton)) ::DestroyWindow(m_hwndCurlSyntaxButton);
+	m_hwndCurlSyntaxButton = nullptr;
+	if (m_hCurlSyntaxButtonBrush) {
+		::DeleteObject(m_hCurlSyntaxButtonBrush);
+		m_hCurlSyntaxButtonBrush = nullptr;
+	}
 	for (HWND button : m_hwndMarkerButtons) if (::IsWindow(button)) ::DestroyWindow(button);
 	if (::IsWindow(m_hwndMarkerAutoButton)) ::DestroyWindow(m_hwndMarkerAutoButton);
 	if (::IsWindow(m_hwndMarkerOverflowButton)) ::DestroyWindow(m_hwndMarkerOverflowButton);
@@ -587,6 +605,7 @@ void CMainToolBar::UpdateToolbar( void )
 void CMainToolBar::RefreshMarkerControls()
 {
 	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar)) return;
+	RefreshCurlSyntaxControl();
 	const auto& markers = CWordMarker::Instance();
 	const auto& entries = markers.Entries();
 	bool wordsChanged = entries.size() != m_markerButtonWords.size();
@@ -664,6 +683,35 @@ void CMainToolBar::RefreshMarkerControls()
 	LayoutMarkerControls();
 }
 
+void CMainToolBar::RefreshCurlSyntaxControl()
+{
+	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar)) return;
+	HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
+	if (!::IsWindow(m_hwndCurlSyntaxButton)) {
+		m_hwndCurlSyntaxButton = ::CreateWindowExW(0, L"BUTTON", L"構文 OFF",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 1, 1,
+			parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(CURL_SYNTAX_BUTTON)),
+			CEditApp::getInstance()->GetAppInstance(), nullptr);
+		if (m_hwndCurlSyntaxButton) ::SetWindowTheme(m_hwndCurlSyntaxButton, L"", L"");
+	}
+	if (!m_hwndCurlSyntaxButton) return;
+	const bool supported = m_pOwner->IsCurlSyntaxDocument();
+	const bool enabled = curlsyntax::IsRealtimeEnabled();
+	if (!m_bCurlSyntaxControlInitialized || supported != m_bCurlSyntaxSupported || enabled != m_bCurlSyntaxEnabled) {
+		m_bCurlSyntaxControlInitialized = true;
+		m_bCurlSyntaxSupported = supported;
+		m_bCurlSyntaxEnabled = enabled;
+		::EnableWindow(m_hwndCurlSyntaxButton, supported);
+		::SetWindowTextW(m_hwndCurlSyntaxButton, enabled ? L"✓ 構文 ON" : L"構文 OFF");
+		m_cCurlSyntaxButtonBack = enabled ? RGB(170, 230, 170) : RGB(225, 225, 225);
+		m_cCurlSyntaxButtonText = RGB(32, 32, 32);
+		if (m_hCurlSyntaxButtonBrush) ::DeleteObject(m_hCurlSyntaxButtonBrush);
+		m_hCurlSyntaxButtonBrush = ::CreateSolidBrush(m_cCurlSyntaxButtonBack);
+		::InvalidateRect(m_hwndCurlSyntaxButton, nullptr, TRUE);
+	}
+	LayoutMarkerControls();
+}
+
 void CMainToolBar::LayoutMarkerControls()
 {
 	HWND parent = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
@@ -684,11 +732,18 @@ void CMainToolBar::LayoutMarkerControls()
 		}
 	}
 	const int height = std::max(DpiScaleY(22), client.bottom - client.top);
+	const int syntaxWidth = DpiScaleX(96);
+	const int syntaxX = leftLimit;
+	const bool syntaxFits = syntaxX + syntaxWidth < client.right;
+	::ShowWindow(m_hwndCurlSyntaxButton, syntaxFits ? SW_SHOW : SW_HIDE);
+	if (syntaxFits) ::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, (client.bottom - height) / 2,
+		syntaxWidth, height, SWP_NOACTIVATE);
+	const int markerLeftLimit = syntaxFits ? syntaxX + syntaxWidth + DpiScaleX(4) : leftLimit;
 	int right = client.right - DpiScaleX(2);
 	auto place = [&](HWND button, int width) {
 		if (!button) return false;
 		right -= width;
-		const bool fits = right >= leftLimit;
+		const bool fits = right >= markerLeftLimit;
 		::ShowWindow(button, fits ? SW_SHOW : SW_HIDE);
 		if (fits) ::SetWindowPos(button, HWND_TOP, right, (client.bottom - height) / 2, width, height, SWP_NOACTIVATE);
 		right -= DpiScaleX(3);

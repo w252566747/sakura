@@ -119,6 +119,7 @@ void CDocEditor::OnAfterLoad(const SLoadInfo& sLoadInfo)
 	::SetCurrentDirectory( pcDoc->m_cDocFile.GetFilePathClass().GetDirPath().c_str() );
 
 	CAppMode::getInstance()->SetViewMode(sLoadInfo.bViewMode);		// ビューモード	##ここも、アリかな
+	GetEditWnd().NotifyCurlSyntaxDocumentLoaded();
 }
 
 void CDocEditor::OnAfterSave([[maybe_unused]] const SSaveInfo& sSaveInfo)
