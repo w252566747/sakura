@@ -60,5 +60,10 @@
 - 拼写提示修复：检查 4 字符以上的表达式头（因此 `whil` 可提示 `while`）；补充代码块任意位置的语言关键字检查，以及冒号后的类型名称检查；覆盖 `break/catch/throw/while` 等词的一字母删除。验证 `class-procc`→`class-proc`、`retun`→`return`、`Strng`→`String`、`cath`→`catch` 均产生 CURL012 Warning。未修改的 GUI 属性 `width` 不产生 `with` 误报。
 - 本机 C++17 独立冒烟：合法参数、布局样例无误报；开头逗号、双逗号和尾逗号分别有 CURL014/CURL003/CURL013 诊断；关键字/类型拼写样例产生预期警告；官方样例 `Curl8_sample.scurl` 仍为 0 条诊断。
 - 性能：优化构建扫描 5,700,000 个字符、100,000 行，0 条诊断，约 116 ms（macOS 本机，不代表 Win32 桌面运行测量）。`git diff --check` 通过。
-- 本轮已添加 GoogleTest 用例，但当前 Mac 未运行仓库完整 GoogleTest；当前 CI 的 MinGW 与 Cppcheck 工作流因 MSYS2 初始化失败没有运行源码测试/静态分析。Win32 Release 编译等待本轮提交后验证。
-- 限制：这是保守静态检查，不是 Curl RTE 编译器；CURL012 是拼写 Warning。只对表达式头、已列语言词和类型标注做拼写提示，不能判定所有上下文相关 API/宏/自定义标识符是否合法。
+- 本轮已添加 GoogleTest 用例；当前 Mac 未运行仓库完整 GoogleTest，专用 Win32 工作流只编译 Release EXE，未执行 GoogleTest。当前 CI 的 MinGW 与 Cppcheck 工作流因 MSYS2 初始化失败没有运行源码测试/静态分析。
+- 限制：这是保守静态检查，不是 Curl RTE 编译器；CURL012 是拼写 Warning。只对表达式头、已列语言词和类型标注做拼写提示，不能判定所有上下文相关 API/宏/自定义标识符是否合法。2～3 字符短词或未列入语言词表的拼写仍不能保证识别；未知 API/自定义名称不能仅凭词表判错。
+- 官方示例 `curl8-sakura-config/Curl8_sample.scurl` 使用本轮最新代码复查：0 条诊断。
+
+- Win32 Release 专用工作流 Run `45637975707` 成功，构建提交 `84f3fa91a4718f48aff9876855a439a94bc80fbd`；GoogleTest 未由该工作流执行。构建 ZIP SHA-256：`d4e739f8d715ec3ddc2003d932d7901e9bb9c089cf675940f905378871e66e80`。
+- 交付 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,341,888 字节，SHA-256 `2d29d4173d8ce553edcb4673abbf68b0e712b48b4a2f19f62168a565a988dfa1`。旧文件备份：`结果文件/历史版本/sakura-before-curl-check-round9-20261125.exe`。
+- 为缩短等待，另一个全量工作流 Run `45638107943` 已取消；这不是源码构建失败。
