@@ -794,18 +794,16 @@ void CMainToolBar::LayoutMarkerControls()
 	HWND toolbarRow = m_hwndReBar ? m_hwndReBar : m_hwndToolBar;
 	::GetWindowRect(toolbarRow, &toolbar);
 	::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&toolbar), 2);
-	RECT nativeToolbar{};
-	::GetWindowRect(m_hwndToolBar, &nativeToolbar);
-	::MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&nativeToolbar), 2);
-	leftLimit = nativeToolbar.right + DpiScaleX(4);
-	if (leftLimit <= DpiScaleX(4)) {
-		const int count = static_cast<int>(::SendMessage(m_hwndToolBar, TB_BUTTONCOUNT, 0, 0));
-		if (count > 0) {
-			RECT last{};
-			if (::SendMessage(m_hwndToolBar, TB_GETITEMRECT, count - 1, reinterpret_cast<LPARAM>(&last))) {
-				::MapWindowPoints(m_hwndToolBar, parent, reinterpret_cast<POINT*>(&last), 2);
-				leftLimit = last.right + DpiScaleX(4);
-			}
+	// The toolbar HWND can be stretched to the full Rebar band width. Anchor
+	// to its last real item instead, otherwise the overlay starts beyond the
+	// editor's right edge and every control becomes invisible.
+	const int count = static_cast<int>(::SendMessage(m_hwndToolBar, TB_BUTTONCOUNT, 0, 0));
+	for (int index = count - 1; index >= 0; --index) {
+		RECT item{};
+		if (::SendMessage(m_hwndToolBar, TB_GETITEMRECT, index, reinterpret_cast<LPARAM>(&item))) {
+			::MapWindowPoints(m_hwndToolBar, parent, reinterpret_cast<POINT*>(&item), 2);
+			leftLimit = item.right + DpiScaleX(4);
+			break;
 		}
 	}
 	const int height = std::max(DpiScaleY(22), toolbar.bottom - toolbar.top);
