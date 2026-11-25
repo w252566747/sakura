@@ -423,8 +423,8 @@ LRESULT CALLBACK CEditWnd::CurlSyntaxErrorListProc(HWND hwnd, UINT message, WPAR
 			contentBottom = statusRect.top;
 		}
 		const int minHeight = DpiScaleY(80);
-		const int maxHeight = std::max(minHeight, (contentBottom - DpiScaleY(100)) / 2);
-		owner->m_nCurlSyntaxErrorListHeight = DpiUnscaleY(std::clamp(contentBottom - point.y, minHeight, maxHeight));
+		const int maxHeight = std::max<int>(minHeight, static_cast<int>((contentBottom - DpiScaleY(100)) / 2));
+		owner->m_nCurlSyntaxErrorListHeight = DpiUnscaleY(std::clamp<int>(contentBottom - point.y, minHeight, maxHeight));
 		owner->OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
 		::SetCursor(::LoadCursor(nullptr, IDC_SIZENS));
 		return 0;
@@ -459,6 +459,7 @@ void CEditWnd::RefreshCurlSyntaxErrorList()
 		const std::wstring severity = diagnostic.severity == curlsyntax::Severity::Error ? L"Error" : L"Warning";
 		const std::wstring row = std::to_wstring(diagnostic.line);
 		const std::wstring column = std::to_wstring(diagnostic.column);
+		const std::wstring code(diagnostic.code.begin(), diagnostic.code.end());
 		LVITEMW item{};
 		item.mask = LVIF_TEXT | LVIF_PARAM;
 		item.iItem = static_cast<int>(i);
@@ -468,7 +469,7 @@ void CEditWnd::RefreshCurlSyntaxErrorList()
 		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 1, const_cast<LPWSTR>(fileName.c_str()));
 		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 2, const_cast<LPWSTR>(row.c_str()));
 		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 3, const_cast<LPWSTR>(column.c_str()));
-		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 4, const_cast<LPWSTR>(diagnostic.code.c_str()));
+		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 4, const_cast<LPWSTR>(code.c_str()));
 		ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 5, const_cast<LPWSTR>(diagnostic.message.c_str()));
 	}
 }
@@ -3623,7 +3624,7 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		nTop += nFuncKeyWndHeight;
 	int nHeight = cy - nToolBarHeight - nFuncKeyWndHeight - nTabWndHeight - nTabHeightBottom - nStatusBarHeight;
 	if (m_hwndCurlSyntaxErrorList && m_bCurlSyntaxErrorListVisible) {
-		const int panelHeight = std::min(DpiScaleY(m_nCurlSyntaxErrorListHeight), std::max(0, nHeight / 2));
+		const int panelHeight = std::min<int>(static_cast<int>(DpiScaleY(m_nCurlSyntaxErrorListHeight)), std::max<int>(0, nHeight / 2));
 		::MoveWindow(m_hwndCurlSyntaxErrorList, 0, nTop + nHeight - panelHeight, cx, panelHeight, TRUE);
 		nHeight -= panelHeight;
 	}
