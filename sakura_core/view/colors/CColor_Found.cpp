@@ -140,14 +140,9 @@ bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 	const auto color = CWordMarker::Instance().ColorAt(m_index);
 	const auto& colors = view->GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 	if (m_index == 33) {
-		for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
-			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
-				m_color = static_cast<EColorIndexType>(index);
-				m_end = end;
-				return true;
-			}
-		}
-		m_color = COLORIDX_SELECT;
+		// Automatic selection highlighting uses Sakura's default pale orange marker color.
+		// This color slot is independent of the Find palette and the toolbar reads the same slot.
+		m_color = COLORIDX_DIFF_DELETE;
 		m_end = end;
 		return true;
 	}

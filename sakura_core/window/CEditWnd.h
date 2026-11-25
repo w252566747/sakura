@@ -163,6 +163,7 @@ public:
 	void RunCurlSyntaxCheck(bool manual = false);
 	void AcceptCurlSyntaxResult();
 	void NavigateCurlSyntaxError(bool forward);
+	void NavigateAutomaticMarker(bool forward);
 	void ToggleCurlSyntaxErrorList();
 	void GoToCurlSyntaxDiagnostic(size_t index);
 	void UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition);

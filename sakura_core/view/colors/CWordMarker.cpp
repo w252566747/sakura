@@ -42,6 +42,13 @@ bool CWordMarker::SetColor(size_t index, unsigned color) noexcept
 	return true;
 }
 
+bool CWordMarker::ToggleEnabled(size_t index) noexcept
+{
+	if (index >= m_entries.size()) return false;
+	m_entries[index].enabled = !m_entries[index].enabled;
+	return true;
+}
+
 unsigned CWordMarker::NextColor(const std::vector<unsigned>& palette) const noexcept
 {
 	for (size_t index = 0; index < palette.size(); ++index) {
@@ -127,6 +134,7 @@ int CWordMarker::Match(const void* document, const wchar_t* text, int length, in
 	auto considerCandidates = [&](const std::vector<size_t>* candidates) {
 		if (!candidates) return;
 		for (const size_t index : *candidates) {
+			if (!m_entries[index].enabled) continue;
 			const auto& word = m_entries[index].word;
 			if (word.size() > bestLength && word.size() <= static_cast<size_t>(length - position) &&
 				(position == 0 || !IsWordCharacter(text[position - 1])) &&
@@ -146,8 +154,6 @@ int CWordMarker::Match(const void* document, const wchar_t* text, int length, in
 	}
 	if (m_automaticEnabled && m_cachedAutomatic && !m_cachedAutomatic->empty() &&
 		m_cachedAutomatic->size() > bestLength && m_cachedAutomatic->size() <= static_cast<size_t>(length - position) &&
-		(position == 0 || !IsWordCharacter(text[position - 1])) &&
-		(position + static_cast<int>(m_cachedAutomatic->size()) >= length || !IsWordCharacter(text[position + m_cachedAutomatic->size()])) &&
 		text[position] == m_cachedAutomatic->front() &&
 		wmemcmp(text + position, m_cachedAutomatic->data(), m_cachedAutomatic->size()) == 0) {
 		bestLength = m_cachedAutomatic->size();

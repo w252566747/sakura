@@ -47,6 +47,7 @@ public:
 
 private:
 	static LRESULT CALLBACK ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData );
+	static LRESULT CALLBACK MarkerButtonWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
 	void RefreshMarkerControls();
 	void RefreshCurlSyntaxControl();
 	void LayoutMarkerControls();
@@ -61,6 +62,8 @@ private:
 	std::vector<HWND>		m_hwndMarkerButtons;
 	HWND		m_hwndMarkerClearButton = nullptr;
 	HWND		m_hwndMarkerAutoButton = nullptr;
+	HWND		m_hwndMarkerPreviousButton = nullptr;
+	HWND		m_hwndMarkerNextButton = nullptr;
 	HWND		m_hwndMarkerOverflowButton = nullptr;
 	HWND		m_hwndCurlSyntaxButton = nullptr;
 	HBRUSH		m_hCurlSyntaxButtonBrush = nullptr;
@@ -72,6 +75,7 @@ private:
 	std::vector<std::wstring>		m_markerButtonWords;
 	std::vector<COLORREF>		m_markerButtonBackColors;
 	std::vector<COLORREF>		m_markerButtonTextColors;
+	std::vector<bool>		m_markerButtonEnabled;
 	std::vector<HBRUSH>		m_markerButtonBrushes;
 	std::wstring		m_markerAutoWord;
 	bool		m_markerAutoButtonVisible = false;

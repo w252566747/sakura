@@ -27,6 +27,7 @@
 #include <ShlObj.h>
 #include <algorithm>
 #include <cwctype>
+#include <string_view>
 
 #include "window/CEditWnd.h"
 #include "_main/CControlTray.h"
@@ -53,6 +54,7 @@
 #include "doc/layout/CLayout.h"
 #include "doc/CEditDoc.h"
 #include "doc/logic/CDocLine.h"
+#include "view/colors/CWordMarker.h"
 #include "config/system_constants.h"
 #include "debug/CRunningTimer.h"
 #include "apiwrap/StdApi.h"
@@ -492,6 +494,51 @@ void CEditWnd::GoToCurlSyntaxDiagnostic(size_t index)
 	const auto& diagnostic = document->m_vCurlSyntaxDiagnostics[index];
 	CLayoutPoint layoutPosition;
 	document->m_cLayoutMgr.LogicToLayout(CLogicPoint(diagnostic.column - 1, diagnostic.line - 1), &layoutPosition);
+	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
+	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
+	GetActiveView().Redraw();
+}
+
+void CEditWnd::NavigateAutomaticMarker(bool forward)
+{
+	CEditDoc* document = GetDocument();
+	const auto* marker = CWordMarker::Instance().AutomaticWord(document);
+	if (!document || !marker || marker->empty()) return;
+
+	const CLogicPoint caret = GetActiveView().GetCaret().GetCaretLogicPos();
+	const int currentLine = static_cast<int>(caret.y);
+	const int currentColumn = static_cast<int>(caret.x);
+	int targetLine = -1;
+	int targetColumn = -1;
+	int firstLine = -1;
+	int firstColumn = -1;
+	int lastLine = -1;
+	int lastColumn = -1;
+	int lineNumber = 0;
+	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine(), ++lineNumber) {
+		const int length = static_cast<int>(line->GetLengthWithoutEOL());
+		const std::wstring_view text = length > 0
+			? std::wstring_view(line->GetPtr(), static_cast<size_t>(length))
+			: std::wstring_view{};
+		size_t position = 0;
+		while ((position = text.find(std::wstring_view(*marker), position)) != std::wstring_view::npos) {
+			const int column = static_cast<int>(position);
+			if (firstLine < 0) { firstLine = lineNumber; firstColumn = column; }
+			lastLine = lineNumber; lastColumn = column;
+			const bool afterCaret = lineNumber > currentLine || (lineNumber == currentLine && column > currentColumn);
+			const bool beforeCaret = lineNumber < currentLine || (lineNumber == currentLine && column < currentColumn);
+			if (forward && afterCaret && targetLine < 0) { targetLine = lineNumber; targetColumn = column; }
+			if (!forward && beforeCaret) { targetLine = lineNumber; targetColumn = column; }
+			++position;
+		}
+	}
+	if (targetLine < 0) {
+		targetLine = forward ? firstLine : lastLine;
+		targetColumn = forward ? firstColumn : lastColumn;
+	}
+	if (targetLine < 0) return;
+	CLayoutPoint layoutPosition;
+	document->m_cLayoutMgr.LogicToLayout(CLogicPoint(targetColumn, targetLine), &layoutPosition);
 	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
 	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
 	GetActiveView().Redraw();

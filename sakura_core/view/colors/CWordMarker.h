@@ -14,11 +14,12 @@
 
 class CWordMarker final {
 public:
-	struct Entry { std::wstring word; unsigned color; };
+	struct Entry { std::wstring word; unsigned color; bool enabled = true; };
 	static CWordMarker& Instance();
 	const std::vector<Entry>& Entries() const noexcept { return m_entries; }
 	bool Toggle(std::wstring word, unsigned color);
 	bool SetColor(size_t index, unsigned color) noexcept;
+	bool ToggleEnabled(size_t index) noexcept;
 	unsigned NextColor(const std::vector<unsigned>& palette) const noexcept;
 	void ClearFixed() noexcept;
 	void SetAutomatic(const void* document, std::wstring word);

@@ -136,7 +136,9 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 			const auto separator = value.find(L'|');
 			if (separator == std::wstring::npos || separator == 0 || separator + 1 >= value.size()) continue;
 			try {
-				markerEntries.push_back({value.substr(separator + 1), static_cast<unsigned>(std::stoul(value.substr(0, separator)))});
+				std::wstring enabledValue;
+				const bool enabled = !cProfile.GetProfileData(L"WordMarker", L"Enabled" + std::to_wstring(i), enabledValue) || enabledValue != L"0";
+				markerEntries.push_back({value.substr(separator + 1), static_cast<unsigned>(std::stoul(value.substr(0, separator))), enabled});
 			} catch (...) { }
 		}
 		CWordMarker::Instance().Load(markerEntries);
@@ -207,6 +209,7 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		for (size_t i = 0; i < markers.size() && i < 32; ++i) {
 			cProfile.SetProfileData(L"WordMarker", std::to_wstring(i),
 				std::to_wstring(markers[i].color) + L"|" + markers[i].word);
+			cProfile.SetProfileData(L"WordMarker", L"Enabled" + std::to_wstring(i), markers[i].enabled ? L"1" : L"0");
 		}
 		cProfile.SetProfileData(L"WordMarker", L"Count", std::to_wstring(std::min<size_t>(markers.size(), 32)));
 		cProfile.SetProfileData(L"WordMarker", L"AutomaticEnabled", CWordMarker::Instance().IsAutomaticEnabled() ? L"1" : L"0");

@@ -21,6 +21,11 @@ TEST(CWordMarker, ToggleAndMatch)
 	EXPECT_EQ(markers.Match(nullptr, L" alpha", 6, 1, &end), 1);
 	EXPECT_EQ(end, 6);
 	EXPECT_EQ(markers.Match(nullptr, L"beta", 4, 0, &end), 0);
+	markers.Load({ { L"off", 1, false }, { L"on", 2, true } });
+	EXPECT_EQ(markers.Match(nullptr, L"off on", 6, 0, &end), 0);
+	EXPECT_EQ(markers.Match(nullptr, L"off on", 6, 4, &end), 2);
+	EXPECT_TRUE(markers.ToggleEnabled(0));
+	EXPECT_EQ(markers.Match(nullptr, L"off on", 6, 0, &end), 1);
 	const int document = 0;
 	markers.SetAutomatic(&document, L"beta");
 	markers.ClearFixed();
@@ -86,6 +91,8 @@ TEST(CWordMarker, AutomaticMarkerMatchesCurrentWord)
 	int end = -1;
 	EXPECT_EQ(markers.Match(&document, L"alpha beta", 10, 6, &end), 33);
 	EXPECT_EQ(end, 10);
+	EXPECT_EQ(markers.Match(&document, L"alphabetabetaz", 14, 5, &end), 33);
+	EXPECT_EQ(end, 9);
 	const int otherDocument = 2;
 	EXPECT_EQ(markers.Match(&otherDocument, L"alpha beta", 10, 6, &end), 0);
 	markers.SetAutomaticEnabled(false);
