@@ -457,7 +457,8 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 				AddDiagnostic(diagnostics, "CURL003", L"カンマが重複しています。", i, line, column);
 				repeatedCommaReported = true;
 			} else if (!delimiters.empty() && delimiters.back().value == L'{' &&
-				lastIdentifierStart == CurlHeadStart(source, delimiters.back().offset)) {
+				(lastIdentifierStart == CurlHeadStart(source, delimiters.back().offset) ||
+				previousSignificant == delimiters.back().value)) {
 				AddDiagnostic(diagnostics, "CURL014", L"カンマの前に引数がありません。", i, line, column);
 			}
 			commaPending = true;
