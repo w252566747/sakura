@@ -36,6 +36,7 @@
 #include "CSelectLang.h"
 #include "sakura_rc.h"
 #include "config/app_constants.h"
+#include <string>
 
 namespace {
 	struct SearchMatchPosition {
@@ -72,13 +73,20 @@ namespace {
 		return result;
 	}
 
-	void ShowSearchMatchPosition(CEditView* view, CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutRange& match)
+	void ShowSearchMatchPosition(CEditView* view, CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutRange& match, const WCHAR* prefix = nullptr)
 	{
 		const SearchMatchPosition position = CountSearchMatches(layoutMgr, pattern, match.GetFrom());
 		if (position.current > 0 && position.total > 0) {
-			wchar_t message[96];
-			_sntprintf_s(message, _countof(message), _TRUNCATE, L"%d 番目 / 合計 %d 件", position.current, position.total);
-			view->SendStatusMessage(message);
+			std::wstring message;
+			if (prefix && *prefix) {
+				message.append(prefix);
+				message.append(L", ");
+			}
+			message.append(std::to_wstring(position.current));
+			message.append(L" 番目 / 合計 ");
+			message.append(std::to_wstring(position.total));
+			message.append(L" 件");
+			view->SendStatusMessage(message.c_str());
 		}
 	}
 }
@@ -343,10 +351,13 @@ end_of_func:;
 	}
 
 	if(bFound){
-		if(nullptr == pcSelectLogic && ((nLineNumOld > nLineNum)||(nLineNumOld == nLineNum && nIdxOld > nIdx)))
+		const WCHAR* statusPrefix = nullptr;
+		if(nullptr == pcSelectLogic && ((nLineNumOld > nLineNum)||(nLineNumOld == nLineNum && nIdxOld > nIdx))) {
+			statusPrefix = LS(STR_ERR_SRNEXT1);
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRNEXT1));
+		}
 		if (!bReplaceAll && nullptr == pcSelectLogic) {
-			ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA);
+			ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA, statusPrefix);
 		}
 	}
 	else{
@@ -509,9 +520,12 @@ end_of_func:;
 		}
 	}
 	if(bFound){
-		if((nLineNumOld < nLineNum)||(nLineNumOld == nLineNum && nIdxOld < nIdx))
+		const WCHAR* statusPrefix = nullptr;
+		if((nLineNumOld < nLineNum)||(nLineNumOld == nLineNum && nIdxOld < nIdx)) {
+			statusPrefix = LS(STR_ERR_SRPREV1);
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV1));
-		ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA);
+		}
+		ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA, statusPrefix);
 	}else{
 		m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV2));
 // To Here 2002.01.26 hor
