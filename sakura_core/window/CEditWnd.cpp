@@ -258,7 +258,9 @@ bool CEditWnd::IsCurlSyntaxDocument() const
 	const LPCWSTR extension = document->m_cDocFile.GetFilePathClass().GetExt(true);
 	return extension && (_wcsicmp(extension, L"scurl") == 0
 		|| _wcsicmp(extension, L"dcurl") == 0
-		|| _wcsicmp(extension, L"curl") == 0);
+		|| _wcsicmp(extension, L"curl") == 0
+		|| _wcsicmp(extension, L"mcurl") == 0
+		|| _wcsicmp(extension, L"xcurl") == 0);
 }
 
 void CEditWnd::NotifyCurlSyntaxContentChanged(CEditDoc* document)
@@ -379,6 +381,8 @@ void CEditWnd::AcceptCurlSyntaxResult()
 			::GetClientRect(GetHwnd(), &client);
 			OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
 		}
+	} else {
+		SendStatusMessage(L"構文チェック完了, エラーはありません。");
 	}
 	Views_RedrawAll();
 }
