@@ -1,4 +1,4 @@
-
+﻿
 ## 2026/11/25 第二轮界面无显示修复
 
 - 根因 1：Marker/Curl 子按钮在 Rebar 默认窗口过程完成布局前读取宽度；初始尺寸或窗口变化时可能按旧客户区尺寸隐藏。现改为默认处理后再对 `WM_SIZE`、`WM_WINDOWPOSCHANGED`、`WM_SHOWWINDOW` 重新布局。
@@ -52,3 +52,13 @@
 - Win32 Release：GitHub Actions Run `45625231422`，Commit `655f29f8245f1b5703b0e1199ba370a3c47a4e8d`，构建和 EXE 上传成功。构建 ZIP SHA-256：`41ebf357eea74ec4a5be87be58e42ce07721b41d40f0cf94cb24a715d1383b64`。
 - 输出 `结果文件/sakura.exe`：PE32 Intel 80386，2,337,792 字节，SHA-256：`32820e767497823036ab506e4aaebc20c585c4796a65ab7e2744fe5ec0582f90`。替换前版本已保存在 `结果文件/历史版本/sakura-before-compact-toolbar-round6-20261125.exe`。
 - Windows GoogleTest 和实际窗口截图/按钮交互验收：当前 Mac 环境无法执行，需在 Windows 用新 EXE 验证。
+
+## 2026/11/25 第九轮：逗号误报与拼写漏报复核
+
+- 复现确认：`{some-proc alpha, beta, gamma}` 原来会误报 CURL003。原因是扫描器消费标识符时没有清除前一个逗号状态，普通参数序列被当成连续逗号。
+- 修复：标识符消费后清除逗号状态；相邻重复逗号报告 CURL003；表达式名后立即出现开头逗号报告 CURL014；逗号后直接遇到闭合括号/大括号时报告 CURL013。合法位置参数序列通过。
+- 拼写提示修复：检查 4 字符以上的表达式头（因此 `whil` 可提示 `while`）；补充代码块任意位置的语言关键字检查，以及冒号后的类型名称检查；覆盖 `break/catch/throw/while` 等词的一字母删除。验证 `class-procc`→`class-proc`、`retun`→`return`、`Strng`→`String`、`cath`→`catch` 均产生 CURL012 Warning。未修改的 GUI 属性 `width` 不产生 `with` 误报。
+- 本机 C++17 独立冒烟：合法参数、布局样例无误报；开头逗号、双逗号和尾逗号分别有 CURL014/CURL003/CURL013 诊断；关键字/类型拼写样例产生预期警告；官方样例 `Curl8_sample.scurl` 仍为 0 条诊断。
+- 性能：优化构建扫描 5,700,000 个字符、100,000 行，0 条诊断，约 116 ms（macOS 本机，不代表 Win32 桌面运行测量）。`git diff --check` 通过。
+- 本轮已添加 GoogleTest 用例，但当前 Mac 未运行仓库完整 GoogleTest；当前 CI 的 MinGW 与 Cppcheck 工作流因 MSYS2 初始化失败没有运行源码测试/静态分析。Win32 Release 编译等待本轮提交后验证。
+- 限制：这是保守静态检查，不是 Curl RTE 编译器；CURL012 是拼写 Warning。只对表达式头、已列语言词和类型标注做拼写提示，不能判定所有上下文相关 API/宏/自定义标识符是否合法。
