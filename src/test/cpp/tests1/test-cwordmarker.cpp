@@ -17,7 +17,8 @@ TEST(CWordMarker, ToggleAndMatch)
 	int end = -1;
 	EXPECT_EQ(markers.Match(nullptr, L"alpha beta", 10, 0, &end), 1);
 	EXPECT_EQ(end, 5);
-	EXPECT_EQ(markers.Match(nullptr, L"xalpha", 6, 1, &end), 1);
+	EXPECT_EQ(markers.Match(nullptr, L"xalpha", 6, 1, &end), 0);
+	EXPECT_EQ(markers.Match(nullptr, L" alpha", 6, 1, &end), 1);
 	EXPECT_EQ(end, 6);
 	EXPECT_EQ(markers.Match(nullptr, L"beta", 4, 0, &end), 0);
 	const int document = 0;
@@ -65,9 +66,12 @@ TEST(CWordMarker, PrefersLongestOverlappingMarker)
 	int end = -1;
 	EXPECT_EQ(markers.Match(nullptr, L"wording", 7, 0, &end), 2);
 	EXPECT_EQ(end, 7);
+	EXPECT_EQ(markers.Match(nullptr, L"word ", 5, 0, &end), 1);
+	EXPECT_EQ(end, 4);
 	markers.Load({ { L"x", 0 } });
-	EXPECT_EQ(markers.Match(nullptr, L"xabc", 4, 0, &end), 1);
-	EXPECT_EQ(end, 1);
+	EXPECT_EQ(markers.Match(nullptr, L"xabc", 4, 0, &end), 0);
+	EXPECT_EQ(markers.Match(nullptr, L" x ", 3, 1, &end), 1);
+	EXPECT_EQ(end, 2);
 	markers.Load({});
 }
 
@@ -104,6 +108,7 @@ TEST(CWordMarker, LargeLineScan)
 	const std::wstring target = L"marker31";
 	const int targetPosition = static_cast<int>(line.size()) - static_cast<int>(target.size());
 	line.replace(targetPosition, target.size(), target);
+	line[targetPosition - 1] = L' ';
 	int matches = 0;
 	int end = -1;
 	const auto start = std::chrono::steady_clock::now();
