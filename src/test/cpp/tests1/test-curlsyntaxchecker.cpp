@@ -109,6 +109,8 @@ TEST(CurlSyntaxChecker, ReportsRepeatedAndTrailingCommas)
 {
 	const auto leading = curlsyntax::Check(L"{some-proc , alpha}");
 	EXPECT_NE(FindCode(leading, "CURL014"), nullptr);
+	const auto leadingAtBlockStart = curlsyntax::Check(L"{, alpha}");
+	EXPECT_NE(FindCode(leadingAtBlockStart, "CURL014"), nullptr);
 	for (const wchar_t* source : {
 		L"{some-proc alpha,, beta}",
 		L"{some-proc alpha, beta,, gamma}"
