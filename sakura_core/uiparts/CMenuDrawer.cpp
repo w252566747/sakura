@@ -613,7 +613,7 @@ CMenuDrawer::CMenuDrawer()
 /* 477 */		F_DISABLE			/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */,	//ダミー
 /* 478 */		F_DISABLE			/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */,	//ダミー
 /* 479 */		F_DISABLE			/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */,	//ダミー
-/* 480 */		F_DISABLE			/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */,	//ダミー
+/* 480 */		F_CURL_SYNTAX_TOGGLE	/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */,	//ダミー
 
 /* 481 */		F_DISABLE			/*, TBSTATE_ENABLED, TBSTYLE_BUTTON, 0, 0 */	//最終行用ダミー(Jepro note: 最終行末にはカンマを付けないこと)
 	};
@@ -992,7 +992,17 @@ TBBUTTON CMenuDrawer::getButton( int nToolbarNo ) const
 	if (const auto index = ToolbarNoToIndex(nToolbarNo);
 		0 <= index &&
 		index < m_nMyButtonNum) {
-		return m_tbMyButton[index];
+		TBBUTTON button = m_tbMyButton[index];
+		// Expose Curl syntax checking through Sakura's native toolbar customizer.
+		// Reuse the bookmark icon while retaining the Curl command's own state.
+		if (nToolbarNo == 480) {
+			const int bookmarkToolbarNo = FindToolbarNoFromCommandId(F_BOOKMARK_SET);
+			const int bookmarkIndex = ToolbarNoToIndex(bookmarkToolbarNo);
+			if (0 <= bookmarkIndex && bookmarkIndex < m_nMyButtonNum) {
+				button.iBitmap = m_tbMyButton[bookmarkIndex].iBitmap;
+			}
+		}
+		return button;
 	}
 
 	// 範囲外なら未定義のボタン情報を作成して返す

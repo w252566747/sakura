@@ -24,8 +24,8 @@ struct Diagnostic {
 	int column = 1;
 };
 
-// Checks only lexical conditions that can be reported without understanding
-// user-defined Curl macros. It deliberately does not infer comma placement.
+// Checks conservative lexical conditions and comma errors for known built-in
+// box containers; comma inference is suppressed inside user-defined macros.
 std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* canceled = nullptr);
 
 } // namespace curlsyntax

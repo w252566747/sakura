@@ -94,6 +94,28 @@ TEST(CurlSyntaxChecker, DoesNotInventCommaErrorsForMacroBodies)
 	EXPECT_TRUE(diagnostics.empty());
 }
 
+TEST(CurlSyntaxChecker, ReportsRepeatedCommasOutsideStringsAndComments)
+{
+	const auto diagnostics = curlsyntax::Check(
+		L"{VBox spacing=10pt, {TextField value=\"A,,B\"}, || , ignored\n"
+		L"  {CommandButton label=\"検索\"},, {CommandButton label=\"終了\"}} ");
+	const auto* error = FindCode(diagnostics, "CURL003");
+	ASSERT_NE(error, nullptr);
+	EXPECT_EQ(error->line, 2);
+}
+
+TEST(CurlSyntaxChecker, ReportsMissingCommaBetweenKnownBoxChildren)
+{
+	const auto diagnostics = curlsyntax::Check(
+		L"{VBox spacing=10pt,\n"
+		L"  {TextField value=\"ABC\"}\n"
+		L"  {CommandButton label=\"検索\"},\n"
+		L"  {CommandButton label=\"終了\"}} ");
+	const auto* error = FindCode(diagnostics, "CURL001");
+	ASSERT_NE(error, nullptr);
+	EXPECT_EQ(error->line, 3);
+}
+
 TEST(CurlSyntaxChecker, HandlesLargeInputLinearly)
 {
 	std::wstring source;

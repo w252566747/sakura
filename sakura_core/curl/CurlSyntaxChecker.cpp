@@ -18,7 +18,34 @@ struct OpenDelimiter {
 	size_t offset;
 	int line;
 	int column;
+	bool commaSeparatedChildren = false;
+	bool insideMacro = false;
 };
+
+std::wstring_view ReadCurlHead(std::wstring_view source, size_t openOffset)
+{
+	size_t p = openOffset + 1;
+	while (p < source.size() && std::iswspace(source[p])) ++p;
+	if (source.substr(p, 4) == L"new " || source.substr(p, 4) == L"new\t") {
+		p += 3;
+		while (p < source.size() && std::iswspace(source[p])) ++p;
+	}
+	const size_t start = p;
+	while (p < source.size() && (std::iswalnum(source[p]) || source[p] == L'_' || source[p] == L'-' || source[p] == L'?')) ++p;
+	return source.substr(start, p - start);
+}
+
+bool IsCommaSeparatedContainer(std::wstring_view source, size_t openOffset)
+{
+	const auto head = ReadCurlHead(source, openOffset);
+	return head == L"VBox" || head == L"HBox";
+}
+
+bool IsMacroDefinition(std::wstring_view source, size_t openOffset)
+{
+	const auto head = ReadCurlHead(source, openOffset);
+	return head == L"define-syntax" || head == L"define-macro";
+}
 
 bool IsHex(wchar_t ch)
 {
@@ -194,6 +221,8 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 	bool suppressDelimiterCascade = false;
 	int line = 1;
 	int column = 1;
+	wchar_t previousSignificant = L'\0';
+	bool commaPending = false;
 	auto advance = [&](wchar_t ch) {
 		if (ch == L'\n') { ++line; column = 1; }
 		else if (ch != L'\r') { ++column; }
@@ -242,6 +271,16 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 		}
 
 		const bool insideCurlCode = curlBraceDepth > 0;
+		if (insideCurlCode && ch == L',') {
+			if (commaPending) {
+				AddDiagnostic(diagnostics, "CURL003", L"カンマが重複しています。", i, line, column);
+			}
+			commaPending = true;
+			previousSignificant = L',';
+			advance(source[i++]);
+			continue;
+		}
+		if (insideCurlCode && !std::iswspace(ch)) commaPending = false;
 		if (insideCurlCode && (ch == L'"' || ch == L'\'')) {
 			const wchar_t quote = ch;
 			const size_t start = i;
@@ -280,12 +319,20 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 				diagnostics.push_back(std::move(d));
 				suppressDelimiterCascade = true;
 			}
+			previousSignificant = quote;
 			continue;
 		}
 
 		if (ch == L'{' || ch == L'(' || ch == L'[') {
-			delimiters.push_back({ ch, i, line, column });
+			const bool inheritedMacro = std::any_of(delimiters.begin(), delimiters.end(), [](const OpenDelimiter& open) { return open.insideMacro; });
+			if (ch == L'{' && !inheritedMacro && !delimiters.empty() && delimiters.back().value == L'{' &&
+				delimiters.back().commaSeparatedChildren && previousSignificant == L'}') {
+				AddDiagnostic(diagnostics, "CURL001", L"カンマが不足しています。", i, line, column);
+			}
+			const bool macroDefinition = ch == L'{' && IsMacroDefinition(source, i);
+			delimiters.push_back({ ch, i, line, column, ch == L'{' && IsCommaSeparatedContainer(source, i), inheritedMacro || macroDefinition });
 			if (ch == L'{') ++curlBraceDepth;
+			previousSignificant = ch;
 			advance(source[i++]);
 			continue;
 		}
@@ -306,9 +353,11 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 				if (expected == L'{') --curlBraceDepth;
 				delimiters.pop_back();
 			}
+			previousSignificant = ch;
 			advance(source[i++]);
 			continue;
 		}
+		if (insideCurlCode && !std::iswspace(ch)) previousSignificant = ch;
 		advance(source[i++]);
 	}
 
