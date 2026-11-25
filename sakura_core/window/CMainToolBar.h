@@ -47,11 +47,11 @@ public:
 
 private:
 	static LRESULT CALLBACK ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData );
-	static LRESULT CALLBACK MarkerButtonWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
 	void RefreshMarkerControls();
 	void RefreshCurlSyntaxControl();
 	void LayoutMarkerControls();
 	void HandleMarkerControl(UINT controlId);
+	void HandleMarkerColorChange(UINT controlId);
 
 	CEditWnd*	m_pOwner;
 	HWND		m_hwndToolBar = nullptr;
@@ -59,24 +59,16 @@ private:
 	//子ウィンドウ
 	HWND		m_hwndReBar = nullptr;		//!< Rebar ウィンドウ	//@@@ 2006.06.17 ryoji
 	HWND		m_hwndSearchBox = nullptr;	//!< 検索コンボボックス
-	std::vector<HWND>		m_hwndMarkerButtons;
-	HWND		m_hwndMarkerClearButton = nullptr;
-	HWND		m_hwndMarkerAutoButton = nullptr;
-	HWND		m_hwndMarkerPreviousButton = nullptr;
-	HWND		m_hwndMarkerNextButton = nullptr;
-	HWND		m_hwndMarkerOverflowButton = nullptr;
-	HWND		m_hwndCurlSyntaxButton = nullptr;
-	HBRUSH		m_hCurlSyntaxButtonBrush = nullptr;
-	COLORREF	m_cCurlSyntaxButtonBack = 0;
-	COLORREF	m_cCurlSyntaxButtonText = 0;
+	HWND		m_hwndEnhancementToolBar = nullptr;
+	HIMAGELIST	m_hEnhancementImageList = nullptr;
+	int		m_nEnhancementMarkerStart = -1;
+	COLORREF	m_markerAutoColor = 0;
 	bool		m_bCurlSyntaxControlInitialized = false;
 	bool		m_bCurlSyntaxSupported = false;
 	bool		m_bCurlSyntaxEnabled = false;
 	std::vector<std::wstring>		m_markerButtonWords;
 	std::vector<COLORREF>		m_markerButtonBackColors;
-	std::vector<COLORREF>		m_markerButtonTextColors;
 	std::vector<bool>		m_markerButtonEnabled;
-	std::vector<HBRUSH>		m_markerButtonBrushes;
 	std::wstring		m_markerAutoWord;
 	bool		m_markerAutoButtonVisible = false;
 
