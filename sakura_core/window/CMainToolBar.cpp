@@ -682,16 +682,48 @@ void CMainToolBar::RefreshMarkerControls()
 	if (!layoutChanged) {
 		if (colorsChanged && m_hEnhancementImageList) {
 			const size_t visible = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
-			auto replaceSwatch = [&](int index, COLORREF color) {
+			HIMAGELIST replacement = ::ImageList_Create(DpiScaleX(16), DpiScaleY(16), ILC_COLOR32 | ILC_MASK,
+				std::max(1, static_cast<int>(visible + (hasAutomatic ? 1 : 0))), 1);
+			std::vector<int> imageIndices;
+			auto appendSwatch = [&](COLORREF color) {
 				HBITMAP bitmap = CreateMarkerSwatchBitmap(color, DpiScaleX(16), DpiScaleY(16));
-				if (bitmap) {
-					::ImageList_ReplaceMasked(m_hEnhancementImageList, index, bitmap, RGB(255, 0, 255));
-					::DeleteObject(bitmap);
-				}
+				if (!bitmap) return I_IMAGENONE;
+				const int index = replacement
+					? ::ImageList_AddMasked(replacement, bitmap, RGB(255, 0, 255)) : I_IMAGENONE;
+				::DeleteObject(bitmap);
+				return index < 0 ? I_IMAGENONE : index;
 			};
-			for (size_t i = 0; i < visible; ++i) replaceSwatch(static_cast<int>(i), markerColors[i]);
-			if (hasAutomatic) replaceSwatch(static_cast<int>(visible), autoColor);
-			::InvalidateRect(m_hwndEnhancementToolBar, nullptr, TRUE);
+			for (size_t i = 0; i < visible; ++i) imageIndices.push_back(appendSwatch(markerColors[i]));
+			const int autoImageIndex = hasAutomatic ? appendSwatch(autoColor) : I_IMAGENONE;
+			const size_t expectedImages = visible + (hasAutomatic ? 1 : 0);
+			if (replacement && imageIndices.size() == visible &&
+				std::all_of(imageIndices.begin(), imageIndices.end(), [](int index) { return index != I_IMAGENONE; }) &&
+				(!hasAutomatic || autoImageIndex != I_IMAGENONE) &&
+				static_cast<size_t>(::ImageList_GetImageCount(replacement)) == expectedImages) {
+				HIMAGELIST oldImageList = m_hEnhancementImageList;
+				::SendMessage(m_hwndEnhancementToolBar, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(replacement));
+				m_hEnhancementImageList = replacement;
+				for (size_t i = 0; i < visible; ++i) {
+					TBBUTTONINFO info{};
+					info.cbSize = sizeof(info);
+					info.dwMask = TBIF_IMAGE;
+					info.iImage = imageIndices[i];
+					::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO,
+						WORDMARKER_BUTTON_BASE + static_cast<UINT>(i), reinterpret_cast<LPARAM>(&info));
+				}
+				if (hasAutomatic) {
+					TBBUTTONINFO info{};
+					info.cbSize = sizeof(info);
+					info.dwMask = TBIF_IMAGE;
+					info.iImage = autoImageIndex;
+					::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO,
+						WORDMARKER_AUTO_BUTTON, reinterpret_cast<LPARAM>(&info));
+				}
+				if (oldImageList) ::ImageList_Destroy(oldImageList);
+				::InvalidateRect(m_hwndEnhancementToolBar, nullptr, TRUE);
+			} else if (replacement) {
+				::ImageList_Destroy(replacement);
+			}
 		}
 		if (enabledChanged) {
 			const size_t visible = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
@@ -724,7 +756,7 @@ void CMainToolBar::RefreshMarkerControls()
 	const int iconHeight = DpiScaleY(16);
 	const size_t visibleMarkerCount = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
 	m_hEnhancementImageList = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32 | ILC_MASK,
-		static_cast<int>(visibleMarkerCount + (hasAutomatic ? 1 : 0)), 0);
+		std::max(1, static_cast<int>(visibleMarkerCount + (hasAutomatic ? 1 : 0))), 1);
 	std::vector<int> imageIndices;
 	auto appendSwatch = [&](COLORREF color) {
 		HBITMAP bitmap = CreateMarkerSwatchBitmap(color, iconWidth, iconHeight);
@@ -917,7 +949,7 @@ void CMainToolBar::LayoutMarkerControls()
 		if (::SendMessage(m_hwndEnhancementToolBar, TB_GETITEMRECT, count - 1, reinterpret_cast<LPARAM>(&last)) &&
 			::SendMessage(m_hwndEnhancementToolBar, TB_GETITEMRECT, m_nEnhancementMarkerStart - 1, reinterpret_cast<LPARAM>(&sep))) {
 			const int sepWidth = sep.right - sep.left;
-			spacer.cx = static_cast<WORD>(std::clamp(width - last.right + sepWidth - DpiScaleX(2), DpiScaleX(1), 60000));
+			spacer.cx = static_cast<WORD>(std::clamp<LONG>(width - last.right + sepWidth - DpiScaleX(2), DpiScaleX(1), 60000));
 			::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO, WORDMARKER_SPACER_BUTTON, reinterpret_cast<LPARAM>(&spacer));
 		}
 	}
