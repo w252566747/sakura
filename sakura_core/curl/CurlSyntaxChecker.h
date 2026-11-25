@@ -1,6 +1,6 @@
 ﻿/*!
 	@file CurlSyntaxChecker.h
-	@brief Conservative lexical checks and expression-head typo warnings.
+	@brief Conservative lexical checks and Curl keyword/type typo warnings.
 	SPDX-License-Identifier: Zlib
 */
 #pragma once
@@ -24,9 +24,9 @@ struct Diagnostic {
 	int column = 1;
 };
 
-// Checks conservative lexical conditions, likely spelling mistakes in Curl
-// expression heads, and comma errors in known layout containers. User-defined
-// identifiers remain allowed; spelling diagnostics are warnings, not errors.
+// Checks conservative lexical conditions, comma errors, and likely spelling
+// mistakes in expression heads, language words, and type annotations. Unknown
+// user-defined identifiers remain allowed; spelling diagnostics are warnings.
 std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* canceled = nullptr);
 
 } // namespace curlsyntax
