@@ -258,6 +258,7 @@ const std::set<int> popupFuncCodes = {
 	F_TOOL_CUSTOM_SUBMENU,
 	F_CHGMOD_EOL_SUBMENU,
 	F_TAB_MANIP_SUBMENU,
+	F_CURL_SYNTAX_SUBMENU,
 	F_WINDOW_LIST_SUBMENU,
 };
 
@@ -1475,7 +1476,7 @@ MATCHER(IsInitializedCommonSettingMainMenu, "Checks if CommonSetting_MainMenu is
 		168,
 		199,
 		239,
-		258,
+		265,
 		293,
 		333,
 	};
