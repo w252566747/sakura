@@ -67,3 +67,6 @@
 - Win32 Release 专用工作流 Run `45637975707` 成功，构建提交 `84f3fa91a4718f48aff9876855a439a94bc80fbd`；GoogleTest 未由该工作流执行。构建 ZIP SHA-256：`d4e739f8d715ec3ddc2003d932d7901e9bb9c089cf675940f905378871e66e80`。
 - 交付 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,341,888 字节，SHA-256 `2d29d4173d8ce553edcb4673abbf68b0e712b48b4a2f19f62168a565a988dfa1`。旧文件备份：`结果文件/历史版本/sakura-before-curl-check-round9-20261125.exe`。
 - 为缩短等待，另一个全量工作流 Run `45638107943` 已取消；这不是源码构建失败。
+
+- 最终块首逗号修正已推送并构建：Actions Run `45639899022` 成功，提交 `28f9d1059284e85ecd9545eeccbe06bd08ba3b0a`；修正源码和 GoogleTest 回归用例均包含在该提交。ZIP SHA-256：`a0f3ebb16cc38f3ff2e09d0d4786dd59f3a5bd6e44fa8f42678334b483517cc8`。
+- 最新交付 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,341,888 字节，SHA-256 `81e4c1bb7f80d269185482abf755ca3166ea5ab38f642ace73e11c457d564df8`；上一轮 EXE 已备份为 `结果文件/历史版本/sakura-before-curl-check-round9-final-20261126.exe`。
