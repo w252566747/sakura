@@ -1,6 +1,6 @@
 ﻿/*!
 	@file CurlSyntaxChecker.cpp
-	@brief Conservative Curl 8.0 lexical checks and likely built-in name typo warnings.
+	@brief Conservative Curl 8.0 lexical checks and expression-head typo warnings.
 	SPDX-License-Identifier: Zlib
 */
 #include "StdAfx.h"
@@ -29,14 +29,20 @@ struct OpenDelimiter {
 	bool insideMacro = false;
 };
 
-std::wstring_view ReadCurlHead(std::wstring_view source, size_t openOffset)
+size_t CurlHeadStart(std::wstring_view source, size_t openOffset)
 {
 	size_t p = openOffset + 1;
 	while (p < source.size() && std::iswspace(source[p])) ++p;
-	if (source.substr(p, 4) == L"new " || source.substr(p, 4) == L"new\t") {
+	if (source.substr(p, 3) == L"new" && (p + 3 == source.size() || std::iswspace(source[p + 3]))) {
 		p += 3;
 		while (p < source.size() && std::iswspace(source[p])) ++p;
 	}
+	return p;
+}
+
+std::wstring_view ReadCurlHead(std::wstring_view source, size_t openOffset)
+{
+	size_t p = CurlHeadStart(source, openOffset);
 	const size_t start = p;
 	while (p < source.size() && (std::iswalnum(source[p]) || source[p] == L'_' || source[p] == L'-' || source[p] == L'?')) ++p;
 	return source.substr(start, p - start);
@@ -45,7 +51,10 @@ std::wstring_view ReadCurlHead(std::wstring_view source, size_t openOffset)
 bool IsCommaSeparatedContainer(std::wstring_view source, size_t openOffset)
 {
 	const auto head = ReadCurlHead(source, openOffset);
-	return head == L"VBox" || head == L"HBox";
+	// Restrict this heuristic to documented/common layout containers. Curl has
+	// many block forms whose child-separator rules differ by context.
+	return head == L"VBox" || head == L"HBox" || head == L"VBox2" || head == L"HBox2" ||
+		head == L"Table" || head == L"TableLayout" || head == L"TextFlowBox";
 }
 
 bool IsMacroDefinition(std::wstring_view source, size_t openOffset)
@@ -123,6 +132,25 @@ std::wstring_view FindLikelyTypo(std::wstring_view token)
 		}
 	}
 	return {};
+}
+
+void AddLikelyTypoWarning(std::vector<Diagnostic>& diagnostics, std::wstring_view token,
+	size_t offset, int line, int column)
+{
+	const std::wstring_view suggestion = FindLikelyTypo(token);
+	if (suggestion.empty()) return;
+	Diagnostic diagnostic;
+	diagnostic.severity = Severity::Warning;
+	diagnostic.code = "CURL012";
+	diagnostic.message = L"「";
+	diagnostic.message.append(token);
+	diagnostic.message += L"」は Curl 8.0 の「";
+	diagnostic.message.append(suggestion);
+	diagnostic.message += L"」と綴りが似ています。確認してください。";
+	diagnostic.offset = offset;
+	diagnostic.line = line;
+	diagnostic.column = column;
+	diagnostics.push_back(std::move(diagnostic));
 }
 
 size_t FindSequence(std::wstring_view source, std::wstring_view sequence, size_t from,
@@ -300,6 +328,14 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 		if ((i & 0x3ff) == 0 && IsCanceled(canceled)) return {};
 		const wchar_t ch = source[i];
 
+		// A backslash escapes Curl's reserved punctuation in ordinary text too.
+		if (ch == L'\\' && i + 1 < source.size() &&
+			(source[i + 1] == L'{' || source[i + 1] == L'}' || source[i + 1] == L'\\' || source[i + 1] == L'|')) {
+			advance(source[i++]);
+			advance(source[i++]);
+			continue;
+		}
+
 		// Curl comments begin with || and continue to the line ending.
 		if (ch == L'|' && i + 1 < source.size() && source[i + 1] == L'|') {
 			while (i < source.size() && source[i] != L'\r' && source[i] != L'\n') advance(source[i++]);
@@ -340,29 +376,12 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 
 		const bool insideCurlCode = curlBraceDepth > 0;
 		if (insideCurlCode && ((ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') || ch == L'_')) {
-			const size_t start = i;
-			const int startLine = line;
-			const int startColumn = column;
+			// Identifiers may be user-defined variables, arguments, properties,
+			// or class names. Never guess their validity from the built-in list.
 			while (i < source.size() && ((source[i] >= L'a' && source[i] <= L'z') ||
 				(source[i] >= L'A' && source[i] <= L'Z') || (source[i] >= L'0' && source[i] <= L'9') ||
 				source[i] == L'_' || source[i] == L'-' || source[i] == L'?')) {
 				advance(source[i++]);
-			}
-			const std::wstring_view token = source.substr(start, i - start);
-			const std::wstring_view suggestion = FindLikelyTypo(token);
-			if (!suggestion.empty()) {
-				Diagnostic diagnostic;
-				diagnostic.severity = Severity::Warning;
-				diagnostic.code = "CURL012";
-				diagnostic.message = L"「";
-				diagnostic.message.append(token);
-				diagnostic.message += L"」は Curl 8.0 の「";
-				diagnostic.message.append(suggestion);
-				diagnostic.message += L"」と綴りが似ています。確認してください。";
-				diagnostic.offset = start;
-				diagnostic.line = startLine;
-				diagnostic.column = startColumn;
-				diagnostics.push_back(std::move(diagnostic));
 			}
 			continue;
 		}
@@ -418,20 +437,36 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 			continue;
 		}
 
-		if (ch == L'{' || ch == L'(' || ch == L'[') {
+		if (ch == L'{' || (insideCurlCode && (ch == L'(' || ch == L'['))) {
 			const bool inheritedMacro = std::any_of(delimiters.begin(), delimiters.end(), [](const OpenDelimiter& open) { return open.insideMacro; });
 			if (ch == L'{' && !inheritedMacro && !delimiters.empty() && delimiters.back().value == L'{' &&
 				delimiters.back().commaSeparatedChildren && previousSignificant == L'}') {
 				AddDiagnostic(diagnostics, "CURL001", L"カンマが不足しています。", i, line, column);
 			}
 			const bool macroDefinition = ch == L'{' && IsMacroDefinition(source, i);
+			if (ch == L'{') {
+				const size_t headStart = CurlHeadStart(source, i);
+				size_t headEnd = headStart;
+				while (headEnd < source.size() && (std::iswalnum(source[headEnd]) || source[headEnd] == L'_' ||
+					source[headEnd] == L'-' || source[headEnd] == L'?')) ++headEnd;
+				if (headEnd > headStart) {
+					int headLine = line;
+					int headColumn = column;
+					for (size_t pos = i; pos < headStart; ++pos) {
+						if (source[pos] == L'\n') { ++headLine; headColumn = 1; }
+						else if (source[pos] != L'\r') ++headColumn;
+					}
+					AddLikelyTypoWarning(diagnostics, source.substr(headStart, headEnd - headStart),
+						headStart, headLine, headColumn);
+				}
+			}
 			delimiters.push_back({ ch, i, line, column, ch == L'{' && IsCommaSeparatedContainer(source, i), inheritedMacro || macroDefinition });
 			if (ch == L'{') ++curlBraceDepth;
 			previousSignificant = ch;
 			advance(source[i++]);
 			continue;
 		}
-		if (ch == L'}' || ch == L')' || ch == L']') {
+		if (ch == L'}' || (insideCurlCode && (ch == L')' || ch == L']'))) {
 			const wchar_t expected = ch == L'}' ? L'{' : ch == L')' ? L'(' : L'[';
 			const char* code = ch == L'}' ? "CURL005" : ch == L')' ? "CURL006" : "CURL007";
 			const wchar_t* message = ch == L'}' ? L"余分な波括弧があります。" : ch == L')' ? L"丸括弧が対応していません。" : L"角括弧が対応していません。";

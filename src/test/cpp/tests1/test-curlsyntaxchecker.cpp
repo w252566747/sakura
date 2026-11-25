@@ -63,13 +63,13 @@ TEST(CurlSyntaxChecker, ReportsUnmatchedRoundAndSquareBrackets)
 {
 	const auto diagnostics = curlsyntax::Check(L"{call (value]} ");
 	EXPECT_NE(FindCode(diagnostics, "CURL006"), nullptr);
-	const auto square = curlsyntax::Check(L"[value");
+	const auto square = curlsyntax::Check(L"{call [value}");
 	EXPECT_NE(FindCode(square, "CURL007"), nullptr);
 }
 
 TEST(CurlSyntaxChecker, DiagnosticsAreSortedBySourcePosition)
 {
-	const auto diagnostics = curlsyntax::Check(L"]\n{(");
+	const auto diagnostics = curlsyntax::Check(L"{]\n{");
 	ASSERT_GE(diagnostics.size(), 2u);
 	EXPECT_TRUE(std::is_sorted(diagnostics.begin(), diagnostics.end(), [](const auto& left, const auto& right) {
 		return left.offset < right.offset;
@@ -92,10 +92,25 @@ TEST(CurlSyntaxChecker, WarnsForLikelyMisspelledBuiltInNames)
 	EXPECT_NE(FindCode(diagnostics, "CURL012"), nullptr);
 }
 
-TEST(CurlSyntaxChecker, DoesNotWarnForUnrelatedCustomNames)
+TEST(CurlSyntaxChecker, DoesNotWarnForCustomIdentifiersAndProperties)
 {
-	const auto diagnostics = curlsyntax::Check(L"{MyCustomPanel value = 1}");
+	const auto diagnostics = curlsyntax::Check(L"{TextField value = StringBuf2, custom-property = MyCustomPanel}");
 	EXPECT_EQ(FindCode(diagnostics, "CURL012"), nullptr);
+}
+
+TEST(CurlSyntaxChecker, IgnoresOrdinaryParenthesesAndBracketsInTopLevelText)
+{
+	const auto diagnostics = curlsyntax::Check(L"Text (normal) [display] outside Curl code.");
+	EXPECT_TRUE(diagnostics.empty());
+}
+
+TEST(CurlSyntaxChecker, RecognizesNewHeadAcrossLineBreak)
+{
+	const auto diagnostics = curlsyntax::Check(L"{new\nTextFeld value = 1}");
+	const auto* warning = FindCode(diagnostics, "CURL012");
+	ASSERT_NE(warning, nullptr);
+	EXPECT_EQ(warning->line, 2);
+	EXPECT_EQ(warning->column, 1);
 }
 
 TEST(CurlSyntaxChecker, DoesNotInventCommaErrorsForMacroBodies)
@@ -119,16 +134,15 @@ TEST(CurlSyntaxChecker, ReportsRepeatedCommasOutsideStringsAndComments)
 	EXPECT_EQ(error->line, 2);
 }
 
-TEST(CurlSyntaxChecker, ReportsMissingCommaBetweenKnownBoxChildren)
+TEST(CurlSyntaxChecker, ReportsMissingCommaBetweenKnownLayoutChildren)
 {
-	const auto diagnostics = curlsyntax::Check(
-		L"{VBox spacing=10pt,\n"
-		L"  {TextField value=\"ABC\"}\n"
-		L"  {CommandButton label=\"検索\"},\n"
-		L"  {CommandButton label=\"終了\"}} ");
-	const auto* error = FindCode(diagnostics, "CURL001");
-	ASSERT_NE(error, nullptr);
-	EXPECT_EQ(error->line, 3);
+	for (const wchar_t* container : { L"VBox", L"TextFlowBox", L"Table" }) {
+		std::wstring source = L"{";
+		source += container;
+		source += L"\n {TextField value=\"ABC\"}\n {CommandButton label=\"検索\"}}";
+		const auto diagnostics = curlsyntax::Check(source);
+		EXPECT_NE(FindCode(diagnostics, "CURL001"), nullptr) << container;
+	}
 }
 
 TEST(CurlSyntaxChecker, HandlesLargeInputLinearly)

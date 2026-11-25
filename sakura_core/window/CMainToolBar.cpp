@@ -730,28 +730,32 @@ void CMainToolBar::RefreshMarkerControls()
 	m_markerAutoWord = autoWord;
 	m_markerAutoButtonVisible = hasAutomatic;
 	auto createButton = [&](const std::wstring& label, UINT id) {
-		return ::CreateWindowExW(0, L"BUTTON", label.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+		return ::CreateWindowExW(0, L"BUTTON", label.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_FLAT,
 			0, 0, 1, 1, m_pOwner->GetHwnd(), reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), CEditApp::getInstance()->GetAppInstance(), nullptr);
 	};
 	for (size_t i = 0; i < entries.size(); ++i) {
-		std::wstring label = (entries[i].enabled ? L"● " : L"○ ") + entries[i].word;
+		const std::wstring shortWord = entries[i].word.size() > 2
+			? entries[i].word.substr(0, 2) + L"…" : entries[i].word;
+		std::wstring label = (entries[i].enabled ? L"●" : L"○") + shortWord;
 		HWND button = createButton(label, WORDMARKER_BUTTON_BASE + static_cast<UINT>(i));
 		::SetWindowSubclass(button, &MarkerButtonWndProc, WORDMARKER_BUTTON_BASE + static_cast<UINT>(i), reinterpret_cast<DWORD_PTR>(this));
 		m_hwndMarkerButtons.push_back(button);
 		::SetWindowTheme(button, L"", L"");
 		m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors[i]));
 	}
-	const std::wstring autoLabel = hasAutomatic ? L"自動: " + *automatic : L"自動: なし";
+	const std::wstring autoLabel = hasAutomatic
+		? L"自:" + (automatic->size() > 2 ? automatic->substr(0, 2) + L"…" : *automatic)
+		: L"自動";
 	m_hwndMarkerAutoButton = createButton(autoLabel, WORDMARKER_AUTO_BUTTON);
 	::SetWindowTheme(m_hwndMarkerAutoButton, L"", L"");
 	::EnableWindow(m_hwndMarkerAutoButton, hasAutomatic);
 	m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors.back()));
-	m_hwndMarkerPreviousButton = createButton(L"前へ", WORDMARKER_PREVIOUS_BUTTON);
-	m_hwndMarkerNextButton = createButton(L"次へ", WORDMARKER_NEXT_BUTTON);
+	m_hwndMarkerPreviousButton = createButton(L"‹", WORDMARKER_PREVIOUS_BUTTON);
+	m_hwndMarkerNextButton = createButton(L"›", WORDMARKER_NEXT_BUTTON);
 	::EnableWindow(m_hwndMarkerPreviousButton, hasAutomatic);
 	::EnableWindow(m_hwndMarkerNextButton, hasAutomatic);
-	m_hwndMarkerOverflowButton = createButton(L"Marker", WORDMARKER_OVERFLOW_BUTTON);
-	m_hwndMarkerClearButton = createButton(L"全解除", WORDMARKER_CLEAR_BUTTON);
+	m_hwndMarkerOverflowButton = createButton(L"Mark", WORDMARKER_OVERFLOW_BUTTON);
+	m_hwndMarkerClearButton = createButton(L"×", WORDMARKER_CLEAR_BUTTON);
 	LayoutMarkerControls();
 }
 
@@ -760,7 +764,7 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 	if (!m_hwndToolBar || !::IsWindow(m_hwndToolBar)) return;
 	if (!::IsWindow(m_hwndCurlSyntaxButton)) {
 		m_hwndCurlSyntaxButton = ::CreateWindowExW(0, L"BUTTON", L"構文 OFF",
-			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 1, 1,
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_FLAT, 0, 0, 1, 1,
 			m_pOwner->GetHwnd(), reinterpret_cast<HMENU>(static_cast<INT_PTR>(CURL_SYNTAX_BUTTON)),
 			CEditApp::getInstance()->GetAppInstance(), nullptr);
 		if (m_hwndCurlSyntaxButton) ::SetWindowTheme(m_hwndCurlSyntaxButton, L"", L"");
@@ -809,12 +813,12 @@ void CMainToolBar::LayoutMarkerControls()
 	const int height = std::max(DpiScaleY(22), toolbar.bottom - toolbar.top);
 	if (height <= 0) return;
 	const int y = toolbar.top + (toolbar.bottom - toolbar.top - height) / 2;
-	const int syntaxWidth = DpiScaleX(96);
+	const int syntaxWidth = DpiScaleX(92);
 	const int syntaxX = leftLimit;
 	::ShowWindow(m_hwndCurlSyntaxButton, SW_SHOW);
 	::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, y,
 		syntaxWidth, height, SWP_NOACTIVATE);
-	const int navigationWidth = DpiScaleX(48);
+	const int navigationWidth = DpiScaleX(26);
 	const int previousX = syntaxX + syntaxWidth + DpiScaleX(3);
 	const int nextX = previousX + navigationWidth + DpiScaleX(2);
 	const bool navigationFits = nextX + navigationWidth <= client.right;
@@ -837,18 +841,16 @@ void CMainToolBar::LayoutMarkerControls()
 	};
 	// Keep a Marker entry point and navigation controls at the right edge. Word
 	// chips use any remaining space and are reachable from the Marker menu.
-	place(m_hwndMarkerOverflowButton, DpiScaleX(54));
-	place(m_hwndMarkerClearButton, DpiScaleX(46));
-	const int autoLabelLength = std::max(0, ::GetWindowTextLengthW(m_hwndMarkerAutoButton));
-	place(m_hwndMarkerAutoButton, std::min(DpiScaleX(132), DpiScaleX(18 + autoLabelLength * 7)));
+	place(m_hwndMarkerOverflowButton, DpiScaleX(42));
+	place(m_hwndMarkerClearButton, DpiScaleX(30));
+	place(m_hwndMarkerAutoButton, DpiScaleX(62));
 	size_t hiddenCount = 0;
 	for (auto it = m_hwndMarkerButtons.rbegin(); it != m_hwndMarkerButtons.rend(); ++it) {
-		const int labelLength = std::max(0, ::GetWindowTextLengthW(*it));
-		const int chipWidth = std::min(DpiScaleX(132), DpiScaleX(18 + labelLength * 7));
+		const int chipWidth = DpiScaleX(58);
 		if (!place(*it, chipWidth)) ++hiddenCount;
 	}
 	const std::wstring label = hiddenCount > 0
-		? L"Marker +" + std::to_wstring(hiddenCount) : L"Marker";
+		? L"M+" + std::to_wstring(hiddenCount) : L"Mark";
 	::SetWindowTextW(m_hwndMarkerOverflowButton, label.c_str());
 }
 
@@ -870,8 +872,10 @@ void CMainToolBar::HandleMarkerControl(UINT controlId)
 				::AppendMenuW(menu, flags, WORDMARKER_MENU_REMOVE_BASE + static_cast<UINT>(i), markers.Entries()[i].word.c_str());
 			}
 			if (!markers.Entries().empty()) ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+			const std::wstring autoMenuLabel = m_markerAutoButtonVisible
+				? L"自動 Marker を解除: " + m_markerAutoWord : L"自動 Marker はありません";
 			::AppendMenuW(menu, MF_STRING | (m_markerAutoButtonVisible ? MF_CHECKED : MF_UNCHECKED), WORDMARKER_MENU_AUTO,
-				m_markerAutoButtonVisible ? L"自動 Marker を解除" : L"自動 Marker はありません");
+				autoMenuLabel.c_str());
 			::EnableMenuItem(menu, WORDMARKER_MENU_AUTO, MF_BYCOMMAND | (m_markerAutoButtonVisible ? MF_ENABLED : MF_GRAYED));
 			::AppendMenuW(menu, MF_STRING, WORDMARKER_MENU_PREVIOUS, L"自動 Marker の前へ");
 			::AppendMenuW(menu, MF_STRING, WORDMARKER_MENU_NEXT, L"自動 Marker の次へ");
