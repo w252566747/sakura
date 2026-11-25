@@ -168,6 +168,21 @@ TEST(CurlSyntaxChecker, WarnsForDeletedCharacterInFlowKeywords)
 	}
 }
 
+TEST(CurlSyntaxChecker, CoversAllConfiguredLongBasicAndFlowKeywords)
+{
+	for (const auto& sample : {
+		std::pair{L"{unti value}", L"until"},
+		std::pair{L"{repat value}", L"repeat"},
+		std::pair{L"{class-extend? value}", L"class-extends?"},
+		std::pair{L"{assrt value}", L"assert"}
+	}) {
+		const auto diagnostics = curlsyntax::Check(sample.first);
+		const auto* warning = FindCode(diagnostics, "CURL012");
+		ASSERT_NE(warning, nullptr);
+		EXPECT_NE(warning->message.find(sample.second), std::wstring::npos);
+	}
+}
+
 TEST(CurlSyntaxChecker, IgnoresOrdinaryParenthesesAndBracketsInTopLevelText)
 {
 	const auto diagnostics = curlsyntax::Check(L"Text (normal) [display] outside Curl code.");
