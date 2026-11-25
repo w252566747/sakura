@@ -57,14 +57,14 @@ HBITMAP CreateMarkerSwatchBitmap(COLORREF color, int width, int height)
 		reinterpret_cast<void**>(&pixels), nullptr, 0);
 	if (screenDc) ::ReleaseDC(nullptr, screenDc);
 	if (!bitmap || !pixels) return bitmap;
-	const DWORD mask = RGB(255, 0, 255);
 	const DWORD edge = RGB(72, 72, 72);
 	for (int y = 0; y < height; ++y) {
 		for (int x = 0; x < width; ++x) {
 			const bool border = x == 1 || y == 1 || x == width - 2 || y == height - 2;
 			const bool inside = x >= 2 && y >= 2 && x < width - 2 && y < height - 2;
-			const COLORREF pixel = border ? edge : inside ? color : mask;
-			pixels[y * width + x] = 0xff000000 | GetRValue(pixel) << 16 | GetGValue(pixel) << 8 | GetBValue(pixel);
+			const COLORREF pixel = border ? edge : inside ? color : RGB(0, 0, 0);
+			const DWORD alpha = border || inside ? 0xff000000 : 0;
+			pixels[y * width + x] = alpha | GetRValue(pixel) << 16 | GetGValue(pixel) << 8 | GetBValue(pixel);
 		}
 	}
 	return bitmap;
@@ -683,14 +683,13 @@ void CMainToolBar::RefreshMarkerControls()
 	if (!layoutChanged) {
 		if (colorsChanged && m_hEnhancementImageList) {
 			const size_t visible = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
-			HIMAGELIST replacement = ::ImageList_Create(DpiScaleX(16), DpiScaleY(16), ILC_COLOR32 | ILC_MASK,
+			HIMAGELIST replacement = ::ImageList_Create(DpiScaleX(16), DpiScaleY(16), ILC_COLOR32,
 				std::max(1, static_cast<int>(visible + (hasAutomatic ? 1 : 0))), 1);
 			std::vector<int> imageIndices;
 			auto appendSwatch = [&](COLORREF color) {
 				HBITMAP bitmap = CreateMarkerSwatchBitmap(color, DpiScaleX(16), DpiScaleY(16));
 				if (!bitmap) return I_IMAGENONE;
-				const int index = replacement
-					? ::ImageList_AddMasked(replacement, bitmap, RGB(255, 0, 255)) : I_IMAGENONE;
+				const int index = replacement ? ::ImageList_Add(replacement, bitmap, nullptr) : I_IMAGENONE;
 				::DeleteObject(bitmap);
 				return index < 0 ? I_IMAGENONE : index;
 			};
@@ -762,8 +761,7 @@ void CMainToolBar::RefreshMarkerControls()
 	auto appendSwatch = [&](COLORREF color) {
 		HBITMAP bitmap = CreateMarkerSwatchBitmap(color, iconWidth, iconHeight);
 		if (!bitmap) return I_IMAGENONE;
-		const int index = m_hEnhancementImageList
-			? ::ImageList_AddMasked(m_hEnhancementImageList, bitmap, RGB(255, 0, 255)) : I_IMAGENONE;
+		const int index = m_hEnhancementImageList ? ::ImageList_Add(m_hEnhancementImageList, bitmap, nullptr) : I_IMAGENONE;
 		::DeleteObject(bitmap);
 		return index < 0 ? I_IMAGENONE : index;
 	};
@@ -869,7 +867,7 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		labels.push_back(L'\0');
 		const int stringBase = static_cast<int>(::SendMessageW(m_hwndEnhancementToolBar,
 			TB_ADDSTRINGW, 0, reinterpret_cast<LPARAM>(labels.c_str())));
-		TBBUTTON buttons[8]{};
+		TBBUTTON buttons[6]{};
 		buttons[0].iBitmap = DpiScaleX(3);
 		buttons[0].fsStyle = BTNS_SEP;
 		buttons[1].iBitmap = I_IMAGENONE;
@@ -884,20 +882,16 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		buttons[3].fsState = 0;
 		buttons[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
 		buttons[3].iString = stringBase + 1;
-		buttons[4].iBitmap = DpiScaleX(3);
-		buttons[4].fsStyle = BTNS_SEP;
-		buttons[5].iBitmap = I_IMAGENONE;
-		buttons[5].idCommand = WORDMARKER_NEXT_BUTTON;
-		buttons[5].fsState = 0;
-		buttons[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[5].iString = stringBase + 2;
-		buttons[6].iBitmap = DpiScaleX(3);
-		buttons[6].fsStyle = BTNS_SEP;
-		buttons[7].iBitmap = DpiScaleX(4);
-		buttons[7].idCommand = WORDMARKER_SPACER_BUTTON;
-		buttons[7].fsStyle = BTNS_SEP;
-		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 8, reinterpret_cast<LPARAM>(buttons));
-		m_nEnhancementMarkerStart = 8;
+		buttons[4].iBitmap = I_IMAGENONE;
+		buttons[4].idCommand = WORDMARKER_NEXT_BUTTON;
+		buttons[4].fsState = 0;
+		buttons[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[4].iString = stringBase + 2;
+		buttons[5].iBitmap = DpiScaleX(4);
+		buttons[5].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[5].fsStyle = BTNS_SEP;
+		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 6, reinterpret_cast<LPARAM>(buttons));
+		m_nEnhancementMarkerStart = 6;
 		::SendMessage(m_hwndEnhancementToolBar, TB_AUTOSIZE, 0, 0);
 	}
 	if (!m_hwndEnhancementToolBar) return;
