@@ -101,6 +101,10 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wPara
 	{
 	case WM_COMMAND:
 		if (self && LOWORD(wParam) == CURL_SYNTAX_BUTTON && HIWORD(wParam) == BN_CLICKED) {
+			if (!self->m_pOwner->IsCurlSyntaxDocument()) {
+				self->m_pOwner->SendStatusMessage(L"Curl ソースでのみ構文チェックを実行できます。");
+				return 0;
+			}
 			self->m_pOwner->SetCurlSyntaxRealtime(!curlsyntax::IsRealtimeEnabled());
 			self->RefreshCurlSyntaxControl();
 			return 0;
@@ -717,14 +721,14 @@ void CMainToolBar::RefreshMarkerControls()
 			0, 0, 1, 1, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), CEditApp::getInstance()->GetAppInstance(), nullptr);
 	};
 	for (size_t i = 0; i < entries.size(); ++i) {
-		std::wstring label = (entries[i].enabled ? L"● " : L"○ ") + entries[i].word.substr(0, 12);
+		std::wstring label = (entries[i].enabled ? L"● " : L"○ ") + entries[i].word;
 		HWND button = createButton(label, WORDMARKER_BUTTON_BASE + static_cast<UINT>(i));
 		::SetWindowSubclass(button, &MarkerButtonWndProc, WORDMARKER_BUTTON_BASE + static_cast<UINT>(i), reinterpret_cast<DWORD_PTR>(this));
 		m_hwndMarkerButtons.push_back(button);
 		::SetWindowTheme(button, L"", L"");
 		m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors[i]));
 	}
-	const std::wstring autoLabel = hasAutomatic ? L"自動: " + automatic->substr(0, 10) : L"自動: なし";
+	const std::wstring autoLabel = hasAutomatic ? L"自動: " + *automatic : L"自動: なし";
 	m_hwndMarkerAutoButton = createButton(autoLabel, WORDMARKER_AUTO_BUTTON);
 	::SetWindowTheme(m_hwndMarkerAutoButton, L"", L"");
 	::EnableWindow(m_hwndMarkerAutoButton, hasAutomatic);
@@ -756,8 +760,8 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		m_bCurlSyntaxControlInitialized = true;
 		m_bCurlSyntaxSupported = supported;
 		m_bCurlSyntaxEnabled = enabled;
-		::EnableWindow(m_hwndCurlSyntaxButton, supported);
-		::SetWindowTextW(m_hwndCurlSyntaxButton, enabled ? L"✓ 構文 ON" : L"構文 OFF");
+		::EnableWindow(m_hwndCurlSyntaxButton, TRUE);
+		::SetWindowTextW(m_hwndCurlSyntaxButton, enabled ? L"✓ 構文チェック" : L"構文チェック");
 		m_cCurlSyntaxButtonBack = enabled ? RGB(170, 230, 170) : RGB(225, 225, 225);
 		m_cCurlSyntaxButtonText = RGB(32, 32, 32);
 		if (m_hCurlSyntaxButtonBrush) ::DeleteObject(m_hCurlSyntaxButtonBrush);
@@ -787,13 +791,12 @@ void CMainToolBar::LayoutMarkerControls()
 		}
 	}
 	const int height = std::max(DpiScaleY(22), client.bottom - client.top);
-	const int syntaxWidth = DpiScaleX(96);
+	const int syntaxWidth = DpiScaleX(118);
 	const int syntaxX = leftLimit;
-	const bool syntaxFits = syntaxX + syntaxWidth < client.right;
-	::ShowWindow(m_hwndCurlSyntaxButton, syntaxFits ? SW_SHOW : SW_HIDE);
-	if (syntaxFits) ::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, (client.bottom - height) / 2,
+	::ShowWindow(m_hwndCurlSyntaxButton, SW_SHOW);
+	::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, (client.bottom - height) / 2,
 		syntaxWidth, height, SWP_NOACTIVATE);
-	const int markerLeftLimit = syntaxFits ? syntaxX + syntaxWidth + DpiScaleX(4) : leftLimit;
+	const int markerLeftLimit = syntaxX + syntaxWidth + DpiScaleX(4);
 	int right = client.right - DpiScaleX(2);
 	auto place = [&](HWND button, int width) {
 		if (!button) return false;
@@ -810,10 +813,13 @@ void CMainToolBar::LayoutMarkerControls()
 	place(m_hwndMarkerClearButton, DpiScaleX(58));
 	place(m_hwndMarkerNextButton, DpiScaleX(52));
 	place(m_hwndMarkerPreviousButton, DpiScaleX(52));
-	place(m_hwndMarkerAutoButton, DpiScaleX(104));
+	const int autoLabelLength = std::max(0, ::GetWindowTextLengthW(m_hwndMarkerAutoButton));
+	place(m_hwndMarkerAutoButton, std::min(DpiScaleX(200), DpiScaleX(22 + autoLabelLength * 8)));
 	size_t hiddenCount = 0;
 	for (auto it = m_hwndMarkerButtons.rbegin(); it != m_hwndMarkerButtons.rend(); ++it) {
-		if (!place(*it, DpiScaleX(110))) ++hiddenCount;
+		const int labelLength = std::max(0, ::GetWindowTextLengthW(*it));
+		const int chipWidth = std::min(DpiScaleX(200), DpiScaleX(22 + labelLength * 8));
+		if (!place(*it, chipWidth)) ++hiddenCount;
 	}
 	const std::wstring label = hiddenCount > 0
 		? L"Marker +" + std::to_wstring(hiddenCount) : L"Marker";
