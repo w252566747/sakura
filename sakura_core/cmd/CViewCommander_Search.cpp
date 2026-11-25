@@ -51,38 +51,46 @@ namespace {
 		CLayoutInt line(0);
 		CLogicInt index(0);
 		CLayoutRange match;
+		int nearestBefore = 0;
+		int nearestAfter = 0;
 		while (layoutMgr.SearchWord(line, index, SEARCH_FORWARD, &match, pattern)) {
 			++result.total;
-			if (match.GetFrom() == currentPosition) {
+			const CLayoutPoint from = match.GetFrom();
+			if (from == currentPosition) {
 				result.current = result.total;
+			} else if (from.GetY2() < currentPosition.GetY2()
+				|| (from.GetY2() == currentPosition.GetY2() && from.GetX2() < currentPosition.GetX2())) {
+				nearestBefore = result.total;
+			} else if (nearestAfter == 0) {
+				nearestAfter = result.total;
 			}
 
-			const CLayoutPoint from = match.GetFrom();
 			const CLayoutPoint to = match.GetTo();
 			line = to.GetY2();
-			#ifdef USE_STRICT_INT
-			index.SetValue(to.GetX2().GetValue());
-			#else
-			index = to.GetX2();
-			#endif
+			CLogicPoint logicEnd;
+			layoutMgr.LayoutToLogic(to, &logicEnd);
+			const CLayout* nextLayout = layoutMgr.SearchLineByLayoutY(line);
+			if (!nextLayout) break;
+			index = logicEnd.x - nextLayout->GetLogicOffset();
 			if (from == to) {
 				// 幅0の正規表現一致でも走査を進め、無限ループを防ぐ。
 				++index;
 			}
 		}
+		if (result.current == 0) result.current = nearestBefore > 0 ? nearestBefore : nearestAfter;
 		return result;
 	}
 
 	void ShowSearchMatchPosition(CEditView* view, CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutRange& match, const WCHAR* prefix = nullptr)
 	{
 		const SearchMatchPosition position = CountSearchMatches(layoutMgr, pattern, match.GetFrom());
-		if (position.current > 0 && position.total > 0) {
+		if (position.total > 0) {
 			std::wstring message;
 			if (prefix && *prefix) {
 				message.append(prefix);
 				message.append(L", ");
 			}
-			message.append(std::to_wstring(position.current));
+			message.append(std::to_wstring(position.current > 0 ? position.current : 1));
 			message.append(L" 番目 / 合計 ");
 			message.append(std::to_wstring(position.total));
 			message.append(L" 件");
