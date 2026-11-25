@@ -746,8 +746,8 @@ void CMainToolBar::RefreshMarkerControls()
 	::SetWindowTheme(m_hwndMarkerAutoButton, L"", L"");
 	::EnableWindow(m_hwndMarkerAutoButton, hasAutomatic);
 	m_markerButtonBrushes.push_back(::CreateSolidBrush(backColors.back()));
-	m_hwndMarkerPreviousButton = createButton(L"◀ 前へ", WORDMARKER_PREVIOUS_BUTTON);
-	m_hwndMarkerNextButton = createButton(L"次へ ▶", WORDMARKER_NEXT_BUTTON);
+	m_hwndMarkerPreviousButton = createButton(L"前へ", WORDMARKER_PREVIOUS_BUTTON);
+	m_hwndMarkerNextButton = createButton(L"次へ", WORDMARKER_NEXT_BUTTON);
 	::EnableWindow(m_hwndMarkerPreviousButton, hasAutomatic);
 	::EnableWindow(m_hwndMarkerNextButton, hasAutomatic);
 	m_hwndMarkerOverflowButton = createButton(L"Marker", WORDMARKER_OVERFLOW_BUTTON);
@@ -809,12 +809,22 @@ void CMainToolBar::LayoutMarkerControls()
 	const int height = std::max(DpiScaleY(22), toolbar.bottom - toolbar.top);
 	if (height <= 0) return;
 	const int y = toolbar.top + (toolbar.bottom - toolbar.top - height) / 2;
-	const int syntaxWidth = DpiScaleX(118);
+	const int syntaxWidth = DpiScaleX(96);
 	const int syntaxX = leftLimit;
 	::ShowWindow(m_hwndCurlSyntaxButton, SW_SHOW);
 	::SetWindowPos(m_hwndCurlSyntaxButton, HWND_TOP, syntaxX, y,
 		syntaxWidth, height, SWP_NOACTIVATE);
-	const int markerLeftLimit = syntaxX + syntaxWidth + DpiScaleX(4);
+	const int navigationWidth = DpiScaleX(48);
+	const int previousX = syntaxX + syntaxWidth + DpiScaleX(3);
+	const int nextX = previousX + navigationWidth + DpiScaleX(2);
+	const bool navigationFits = nextX + navigationWidth <= client.right;
+	::ShowWindow(m_hwndMarkerPreviousButton, navigationFits ? SW_SHOW : SW_HIDE);
+	::ShowWindow(m_hwndMarkerNextButton, navigationFits ? SW_SHOW : SW_HIDE);
+	if (navigationFits) {
+		::SetWindowPos(m_hwndMarkerPreviousButton, HWND_TOP, previousX, y, navigationWidth, height, SWP_NOACTIVATE);
+		::SetWindowPos(m_hwndMarkerNextButton, HWND_TOP, nextX, y, navigationWidth, height, SWP_NOACTIVATE);
+	}
+	const int markerLeftLimit = nextX + navigationWidth + DpiScaleX(4);
 	int right = client.right - DpiScaleX(2);
 	auto place = [&](HWND button, int width) {
 		if (!button) return false;
@@ -827,16 +837,14 @@ void CMainToolBar::LayoutMarkerControls()
 	};
 	// Keep a Marker entry point and navigation controls at the right edge. Word
 	// chips use any remaining space and are reachable from the Marker menu.
-	place(m_hwndMarkerOverflowButton, DpiScaleX(72));
-	place(m_hwndMarkerClearButton, DpiScaleX(58));
-	place(m_hwndMarkerNextButton, DpiScaleX(52));
-	place(m_hwndMarkerPreviousButton, DpiScaleX(52));
+	place(m_hwndMarkerOverflowButton, DpiScaleX(54));
+	place(m_hwndMarkerClearButton, DpiScaleX(46));
 	const int autoLabelLength = std::max(0, ::GetWindowTextLengthW(m_hwndMarkerAutoButton));
-	place(m_hwndMarkerAutoButton, std::min(DpiScaleX(200), DpiScaleX(22 + autoLabelLength * 8)));
+	place(m_hwndMarkerAutoButton, std::min(DpiScaleX(132), DpiScaleX(18 + autoLabelLength * 7)));
 	size_t hiddenCount = 0;
 	for (auto it = m_hwndMarkerButtons.rbegin(); it != m_hwndMarkerButtons.rend(); ++it) {
 		const int labelLength = std::max(0, ::GetWindowTextLengthW(*it));
-		const int chipWidth = std::min(DpiScaleX(200), DpiScaleX(22 + labelLength * 8));
+		const int chipWidth = std::min(DpiScaleX(132), DpiScaleX(18 + labelLength * 7));
 		if (!place(*it, chipWidth)) ++hiddenCount;
 	}
 	const std::wstring label = hiddenCount > 0

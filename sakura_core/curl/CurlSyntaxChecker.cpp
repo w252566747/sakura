@@ -1,17 +1,24 @@
 ﻿/*!
 	@file CurlSyntaxChecker.cpp
-	@brief Conservative Curl 8.0 lexical checks.
+	@brief Conservative Curl 8.0 lexical checks and likely built-in name typo warnings.
 	SPDX-License-Identifier: Zlib
 */
 #include "StdAfx.h"
 #include "curl/CurlSyntaxChecker.h"
 
 #include <algorithm>
+#include <array>
 #include <cwctype>
 #include <limits>
+#include <string>
+#include <unordered_set>
 
 namespace curlsyntax {
 namespace {
+
+constexpr std::wstring_view kKnownCurlSymbols[] = {
+#include "curl/CurlSyntaxKeywords.inc"
+};
 
 struct OpenDelimiter {
 	wchar_t value;
@@ -55,6 +62,67 @@ bool IsHex(wchar_t ch)
 bool IsCanceled(const std::atomic_bool* canceled)
 {
 	return canceled && canceled->load(std::memory_order_relaxed);
+}
+
+bool IsAsciiIdentifier(std::wstring_view token)
+{
+	return !token.empty() && std::all_of(token.begin(), token.end(), [](wchar_t ch) {
+		return (ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') ||
+			(ch >= L'0' && ch <= L'9') || ch == L'_' || ch == L'-' || ch == L'?';
+	});
+}
+
+bool IsOneEditAway(std::wstring_view actual, std::wstring_view known)
+{
+	if (actual == known || !IsAsciiIdentifier(actual) || actual.size() < 5 || known.size() < 5 ||
+		actual.size() + 1 < known.size() || known.size() + 1 < actual.size()) return false;
+	size_t a = 0, b = 0;
+	int edits = 0;
+	while (a < actual.size() && b < known.size()) {
+		const wchar_t ca = static_cast<wchar_t>(std::towlower(actual[a]));
+		const wchar_t cb = static_cast<wchar_t>(std::towlower(known[b]));
+		if (ca == cb) { ++a; ++b; continue; }
+		if (++edits > 1) return false;
+		if (actual.size() > known.size()) ++a;
+		else if (known.size() > actual.size()) ++b;
+		else { ++a; ++b; }
+	}
+	if (a < actual.size() || b < known.size()) ++edits;
+	return edits == 1;
+}
+
+std::wstring_view FindLikelyTypo(std::wstring_view token)
+{
+	if (!IsAsciiIdentifier(token) || token.size() < 5 || token.size() >= 128) return {};
+	static const std::unordered_set<std::wstring> knownSymbols = [] {
+		std::unordered_set<std::wstring> symbols;
+		for (const auto candidate : kKnownCurlSymbols) {
+			std::wstring lower;
+			lower.reserve(candidate.size());
+			for (wchar_t ch : candidate) lower.push_back(static_cast<wchar_t>(std::towlower(ch)));
+			symbols.insert(std::move(lower));
+		}
+		return symbols;
+	}();
+	std::wstring lowered;
+	lowered.reserve(token.size());
+	for (wchar_t ch : token) lowered.push_back(static_cast<wchar_t>(std::towlower(ch)));
+	if (knownSymbols.find(lowered) != knownSymbols.end()) return {};
+	static const auto symbolsByLength = [] {
+		std::array<std::vector<std::wstring_view>, 128> groups;
+		for (const auto candidate : kKnownCurlSymbols) {
+			if (candidate.size() < groups.size()) groups[candidate.size()].push_back(candidate);
+		}
+		return groups;
+	}();
+	const size_t minimumLength = std::max<size_t>(5, token.size() - 1);
+	const size_t maximumLength = std::min(token.size() + 1, symbolsByLength.size() - 1);
+	for (size_t length = minimumLength; length <= maximumLength; ++length) {
+		for (const auto candidate : symbolsByLength[length]) {
+			if (IsOneEditAway(token, candidate)) return candidate;
+		}
+	}
+	return {};
 }
 
 size_t FindSequence(std::wstring_view source, std::wstring_view sequence, size_t from,
@@ -271,6 +339,33 @@ std::vector<Diagnostic> Check(std::wstring_view source, const std::atomic_bool* 
 		}
 
 		const bool insideCurlCode = curlBraceDepth > 0;
+		if (insideCurlCode && ((ch >= L'a' && ch <= L'z') || (ch >= L'A' && ch <= L'Z') || ch == L'_')) {
+			const size_t start = i;
+			const int startLine = line;
+			const int startColumn = column;
+			while (i < source.size() && ((source[i] >= L'a' && source[i] <= L'z') ||
+				(source[i] >= L'A' && source[i] <= L'Z') || (source[i] >= L'0' && source[i] <= L'9') ||
+				source[i] == L'_' || source[i] == L'-' || source[i] == L'?')) {
+				advance(source[i++]);
+			}
+			const std::wstring_view token = source.substr(start, i - start);
+			const std::wstring_view suggestion = FindLikelyTypo(token);
+			if (!suggestion.empty()) {
+				Diagnostic diagnostic;
+				diagnostic.severity = Severity::Warning;
+				diagnostic.code = "CURL012";
+				diagnostic.message = L"「";
+				diagnostic.message.append(token);
+				diagnostic.message += L"」は Curl 8.0 の「";
+				diagnostic.message.append(suggestion);
+				diagnostic.message += L"」と綴りが似ています。確認してください。";
+				diagnostic.offset = start;
+				diagnostic.line = startLine;
+				diagnostic.column = startColumn;
+				diagnostics.push_back(std::move(diagnostic));
+			}
+			continue;
+		}
 		if (insideCurlCode && ch == L',') {
 			if (commaPending) {
 				AddDiagnostic(diagnostics, "CURL003", L"カンマが重複しています。", i, line, column);

@@ -553,9 +553,15 @@ void CEditWnd::NavigateAutomaticMarker(bool forward)
 	if (targetLine < 0) return;
 	CLayoutPoint layoutPosition;
 	document->m_cLayoutMgr.LogicToLayout(CLogicPoint(targetColumn, targetLine), &layoutPosition);
-	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
-	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
-	GetActiveView().Redraw();
+	CLayoutPoint layoutEnd;
+	document->m_cLayoutMgr.LogicToLayout(
+		CLogicPoint(targetColumn + static_cast<int>(marker->size()), targetLine), &layoutEnd);
+	auto& view = GetActiveView();
+	view.GetCaret().MoveCursor(layoutPosition, true);
+	view.GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
+	view.GetSelectionInfo().SetSelectArea(CLayoutRange(layoutPosition, layoutEnd));
+	view.GetSelectionInfo().DrawSelectArea();
+	view.Redraw();
 }
 
 void CEditWnd::NavigateCurlSyntaxError(bool forward)

@@ -83,6 +83,21 @@ TEST(CurlSyntaxChecker, ValidatesCurlEscapesAndUnclosedStrings)
 	EXPECT_NE(FindCode(diagnostics, "CURL008"), nullptr);
 }
 
+TEST(CurlSyntaxChecker, WarnsForLikelyMisspelledBuiltInNames)
+{
+	const auto diagnostics = curlsyntax::Check(L"{TextFeld value = \"x\"}\n{define-procc {example}} ");
+	ASSERT_EQ(std::count_if(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+		return diagnostic.code == "CURL012";
+	}), 2);
+	EXPECT_NE(FindCode(diagnostics, "CURL012"), nullptr);
+}
+
+TEST(CurlSyntaxChecker, DoesNotWarnForUnrelatedCustomNames)
+{
+	const auto diagnostics = curlsyntax::Check(L"{MyCustomPanel value = 1}");
+	EXPECT_EQ(FindCode(diagnostics, "CURL012"), nullptr);
+}
+
 TEST(CurlSyntaxChecker, DoesNotInventCommaErrorsForMacroBodies)
 {
 	const auto diagnostics = curlsyntax::Check(
