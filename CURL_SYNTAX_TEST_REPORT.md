@@ -48,4 +48,7 @@
 - 本机独立 C++17 冒烟用例：9 类场景全部通过，覆盖自定义变量/属性、顶层括号、拼错的 `TextFeld`、跨行 `new`、转义花括号、未闭合大括号、无效字符串转义、VBox/Table 缺逗号。
 - 大文件扫描：2.5 MiB、100,000 行，0 条诊断，优化构建约 24 ms（macOS 本机结果，不代表 Win32 实测）。
 - 语法范围限制：该检查器仍不是 Curl RTE 8.0 编译器；目前能可靠报告部分词法/括号/常见布局逗号问题，内置名相似度仅为警告。函数重载、类型兼容、上下文相关代码块语法和属性合法性需要官方 RTE 才能判定。
-- Win32 Release、Windows 单元测试及实际窗口截图验收：待完成。
+- 仓库真实示例 `curl8-sakura-config/Curl8_sample.scurl` 全文件检查：0 条诊断。
+- Win32 Release：GitHub Actions Run `45625231422`，Commit `655f29f8245f1b5703b0e1199ba370a3c47a4e8d`，构建和 EXE 上传成功。构建 ZIP SHA-256：`41ebf357eea74ec4a5be87be58e42ce07721b41d40f0cf94cb24a715d1383b64`。
+- 输出 `结果文件/sakura.exe`：PE32 Intel 80386，2,337,792 字节，SHA-256：`32820e767497823036ab506e4aaebc20c585c4796a65ab7e2744fe5ec0582f90`。替换前版本已保存在 `结果文件/历史版本/sakura-before-compact-toolbar-round6-20261125.exe`。
+- Windows GoogleTest 和实际窗口截图/按钮交互验收：当前 Mac 环境无法执行，需在 Windows 用新 EXE 验证。
