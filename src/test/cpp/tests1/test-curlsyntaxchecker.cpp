@@ -98,6 +98,74 @@ TEST(CurlSyntaxChecker, DoesNotWarnForCustomIdentifiersAndProperties)
 	EXPECT_EQ(FindCode(diagnostics, "CURL012"), nullptr);
 }
 
+TEST(CurlSyntaxChecker, AcceptsCommaSeparatedIdentifierArguments)
+{
+	const auto diagnostics = curlsyntax::Check(L"{some-proc alpha, beta, gamma}");
+	EXPECT_EQ(FindCode(diagnostics, "CURL003"), nullptr);
+	EXPECT_EQ(FindCode(diagnostics, "CURL013"), nullptr);
+}
+
+TEST(CurlSyntaxChecker, ReportsRepeatedAndTrailingCommas)
+{
+	const auto leading = curlsyntax::Check(L"{some-proc , alpha}");
+	EXPECT_NE(FindCode(leading, "CURL014"), nullptr);
+	for (const wchar_t* source : {
+		L"{some-proc alpha,, beta}",
+		L"{some-proc alpha, beta,, gamma}"
+	}) {
+		const auto diagnostics = curlsyntax::Check(source);
+		EXPECT_NE(FindCode(diagnostics, "CURL003"), nullptr) << source;
+	}
+	const auto trailing = curlsyntax::Check(L"{some-proc alpha, beta,}");
+	EXPECT_NE(FindCode(trailing, "CURL013"), nullptr);
+}
+
+TEST(CurlSyntaxChecker, WarnsForDeletedCharacterInShortKeywordAndTypeName)
+{
+	const auto keyword = curlsyntax::Check(L"{whil condition}");
+	const auto* keywordWarning = FindCode(keyword, "CURL012");
+	ASSERT_NE(keywordWarning, nullptr);
+	EXPECT_NE(keywordWarning->message.find(L"while"), std::wstring::npos);
+
+	const auto type = curlsyntax::Check(L"{define-proc {f value:Strng}:void {return}}");
+	const auto* typeWarning = FindCode(type, "CURL012");
+	ASSERT_NE(typeWarning, nullptr);
+	EXPECT_NE(typeWarning->message.find(L"String"), std::wstring::npos);
+}
+
+TEST(CurlSyntaxChecker, WarnsForMisspelledLanguageWordsOutsideExpressionHeads)
+{
+	const auto diagnostics = curlsyntax::Check(
+		L"{define-class Example\n"
+		L"  class-procc public {example-method}\n"
+		L"  {define-proc {run}:int {retun 1}}\n"
+		L"}");
+	ASSERT_EQ(std::count_if(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+		return diagnostic.code == "CURL012";
+	}), 2);
+	EXPECT_NE(std::find_if(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+		return diagnostic.message.find(L"class-proc") != std::wstring::npos;
+	}), diagnostics.end());
+	EXPECT_NE(std::find_if(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+		return diagnostic.message.find(L"return") != std::wstring::npos;
+	}), diagnostics.end());
+}
+
+TEST(CurlSyntaxChecker, WarnsForDeletedCharacterInFlowKeywords)
+{
+	for (const auto& sample : {
+		std::pair{L"{cath value}", L"catch"},
+		std::pair{L"{brek value}", L"break"},
+		std::pair{L"{thrw value}", L"throw"},
+		std::pair{L"{whil value}", L"while"}
+	}) {
+		const auto diagnostics = curlsyntax::Check(sample.first);
+		const auto* warning = FindCode(diagnostics, "CURL012");
+		ASSERT_NE(warning, nullptr);
+		EXPECT_NE(warning->message.find(sample.second), std::wstring::npos);
+	}
+}
+
 TEST(CurlSyntaxChecker, IgnoresOrdinaryParenthesesAndBracketsInTopLevelText)
 {
 	const auto diagnostics = curlsyntax::Check(L"Text (normal) [display] outside Curl code.");
