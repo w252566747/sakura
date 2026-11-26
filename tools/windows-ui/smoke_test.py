@@ -11,6 +11,9 @@ import time
 from pathlib import Path
 
 import win32api
+import win32clipboard
+import win32con
+from PIL import ImageChops
 from PIL import ImageStat
 from pywinauto import Application
 
@@ -46,6 +49,28 @@ def main() -> int:
 
     def record(name: str, **values: object) -> None:
         steps.append({"step": name, "result": "passed", **values})
+
+    def visible_child_by_class(window, class_name: str) -> bool:
+        return any(
+            child.class_name() == class_name and child.is_visible()
+            for child in window.descendants()
+        )
+
+    def visible_child_texts(window, class_name: str) -> list[str]:
+        return [
+            child.window_text()
+            for child in window.descendants()
+            if child.class_name() == class_name and child.is_visible()
+        ]
+
+    def clipboard_text() -> str:
+        win32clipboard.OpenClipboard()
+        try:
+            if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return ""
+            return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+        finally:
+            win32clipboard.CloseClipboard()
 
     app: Application | None = None
     try:
@@ -87,28 +112,67 @@ def main() -> int:
             raise AssertionError("Sakura window screenshot is blank or uniform")
         record("launch_and_window_capture", width=launch_image.width, height=launch_image.height)
 
-        window.click_input(coords=(30, 8))
+        window.click_input(coords=(30, 38))
         time.sleep(0.2)
-        window.capture_as_image().save(output / "02-file-menu.png")
+        menu_image = window.capture_as_image()
+        menu_image.save(output / "02-file-menu.png")
+        menu_delta = ImageStat.Stat(
+            ImageChops.difference(
+                launch_image.convert("RGB").crop((0, 25, 450, 420)),
+                menu_image.convert("RGB").crop((0, 25, 450, 420)),
+            )
+        ).sum
+        if sum(menu_delta) < 5000:
+            raise AssertionError("File menu click did not visibly open a menu")
         window.type_keys("{ESC}")
-        window.click_input(coords=(780, 32))
+        window.click_input(coords=(780, 63))
         time.sleep(0.5)
-        window.capture_as_image().save(output / "03-filter-toolbar.png")
-        window.click_input(coords=(780, 32))
+        window.capture_as_image().save(output / "03-filter-toolbar-on.png")
+        if not visible_child_by_class(window, "SysListView32"):
+            raise AssertionError("Filter toolbar click did not show the real-time results list")
+        window.type_keys("GUI_SMOKE_SELECTABLE_TOKEN", with_spaces=True)
+        deadline = time.time() + 10
+        stats_texts: list[str] = []
+        while time.time() < deadline:
+            stats_texts = visible_child_texts(window, "Static")
+            if any("一致 1 行" in text and "表示 1 行" in text for text in stats_texts):
+                break
+            time.sleep(0.2)
+        else:
+            raise AssertionError(f"live filter did not report the single matching line: {stats_texts!r}")
+        result_lists = [
+            child for child in window.descendants()
+            if child.class_name() == "SysListView32" and child.is_visible()
+        ]
+        if len(result_lists) != 1 or int(result_lists[0].send_message(0x1004)) != 1:
+            raise AssertionError("live filter did not populate exactly one result row")
+        if sample.read_bytes() != original:
+            raise AssertionError("activating and using the live filter changed the source document")
+        window.capture_as_image().save(output / "04-filter-results.png")
+        window.click_input(coords=(780, 63))
         time.sleep(0.2)
+        filter_off = window.capture_as_image()
+        filter_off.save(output / "05-filter-toolbar-off.png")
+        if visible_child_by_class(window, "SysListView32"):
+            raise AssertionError("Filter toolbar second click did not hide the results list")
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
-        record("menu_and_filter_toolbar_click")
+        record("file_menu_and_filter_toolbar_on_off")
 
         # Exercise actual mouse input against the editor's client area.
-        window.click_input(coords=(500, 260))
-        window.right_click_input(coords=(500, 260))
+        window.click_input(coords=(90, 260))
+        window.right_click_input(coords=(90, 260))
         time.sleep(0.2)
+        window.capture_as_image().save(output / "06-context-menu.png")
         window.type_keys("{ESC}")
-        window.double_click_input(coords=(500, 260))
-        window.drag_mouse_input(src=(480, 260), dst=(620, 260))
-        window.capture_as_image().save(output / "04-mouse-selection.png")
-        record("mouse_left_right_double_click_and_drag")
+        window.double_click_input(coords=(90, 260))
+        window.drag_mouse_input(src=(60, 260), dst=(160, 260))
+        window.type_keys("^c")
+        selected_text = clipboard_text()
+        window.capture_as_image().save(output / "07-mouse-selection.png")
+        if "SMOKE" not in selected_text:
+            raise AssertionError(f"mouse drag did not select the intended document text: {selected_text!r}")
+        record("mouse_left_right_double_click_and_drag", copied_text=selected_text)
 
         window.set_focus()
         window.type_keys("^{END}")
@@ -121,26 +185,40 @@ def main() -> int:
             edited = sample.read_bytes()
         if b"GUI_SMOKE_EDITED" not in edited:
             raise AssertionError("keyboard input and Ctrl+S did not update the opened file")
-        window.capture_as_image().save(output / "05-edited.png")
+        window.capture_as_image().save(output / "08-edited.png")
         record("keyboard_edit_and_save", saved_bytes=len(edited))
 
-        window.type_keys("^z")
-        window.type_keys("^s")
-        time.sleep(0.5)
+        undo_count = 0
         undone = sample.read_bytes()
+        for _ in range(len(b"GUI_SMOKE_EDITED") + 2):
+            if undone == original:
+                break
+            previous = undone
+            window.type_keys("^z")
+            window.type_keys("^s")
+            time.sleep(0.15)
+            undone = sample.read_bytes()
+            undo_count += 1
+            if not undone.startswith(original) or len(undone) >= len(previous):
+                raise AssertionError(f"Ctrl+Z did not progressively undo the appended text: {undone!r}")
         if undone != original:
-            raise AssertionError(f"Ctrl+Z did not restore original bytes: {undone!r}")
-        window.capture_as_image().save(output / "06-undo.png")
-        record("undo_and_save")
+            raise AssertionError(f"bounded Ctrl+Z sequence did not restore original bytes: {undone!r}")
+        window.capture_as_image().save(output / "09-undo.png")
+        record("undo_and_save", undo_steps=undo_count)
 
-        window.type_keys("^y")
-        window.type_keys("^s")
-        time.sleep(0.5)
+        for _ in range(undo_count):
+            previous = sample.read_bytes()
+            window.type_keys("^y")
+            window.type_keys("^s")
+            time.sleep(0.15)
+            redone = sample.read_bytes()
+            if not redone.startswith(previous) or len(redone) <= len(previous):
+                raise AssertionError(f"Ctrl+Y did not progressively redo the text: {redone!r}")
         redone = sample.read_bytes()
-        if b"GUI_SMOKE_EDITED" not in redone:
-            raise AssertionError("Ctrl+Y did not restore the edited text")
-        window.capture_as_image().save(output / "07-redo.png")
-        record("redo_and_save")
+        if redone != original + b"GUI_SMOKE_EDITED":
+            raise AssertionError(f"bounded Ctrl+Y sequence did not restore the edited text: {redone!r}")
+        window.capture_as_image().save(output / "10-redo.png")
+        record("redo_and_save", redo_steps=undo_count)
 
         window.close()
         app.wait_for_process_exit(timeout=20)
@@ -153,7 +231,7 @@ def main() -> int:
         window.wait("visible enabled", timeout=45)
         window.set_focus()
         restarted = window.capture_as_image()
-        restarted.save(output / "08-restart.png")
+        restarted.save(output / "11-restart.png")
         if b"GUI_SMOKE_EDITED" not in sample.read_bytes():
             raise AssertionError("saved document content was not preserved after restart")
         record("restart_and_reopen_saved_document", screenshot_size=list(restarted.size))

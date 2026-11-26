@@ -12,6 +12,7 @@ on:
       - 'vcpkg.json'
       - 'vcpkg-configuration.json'
       - 'tools/vcpkg/**'
+      - 'tools/windows-ui/**'
       - '.github/workflows/build-win32-release.yml'
 
 concurrency:
