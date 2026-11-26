@@ -16,6 +16,9 @@ class CDocLineMgr;
 class CBregexp;
 
 #include "agent/CSearchAgent.h"
+#include <cstdint>
+
+uint64_t GetBookmarkGeneration() noexcept;
 
 //! 行に付加するブックマーク情報
 class CLineBookmarked{

@@ -20,6 +20,7 @@ public:
 	static unsigned EncodeCustomColor(unsigned color) noexcept { return CUSTOM_COLOR_FLAG | (color & 0x00ffffffu); }
 	static unsigned DecodeCustomColor(unsigned color) noexcept { return color & 0x00ffffffu; }
 	static CWordMarker& Instance();
+	uint64_t Generation() const noexcept { return m_generation; }
 	const std::vector<Entry>& Entries() const noexcept { return m_entries; }
 	bool Toggle(std::wstring word, unsigned color);
 	bool SetColor(size_t index, unsigned color) noexcept;
@@ -30,7 +31,7 @@ public:
 	void SetAutomatic(const void* document, std::wstring word);
 	void ClearAutomatic(const void* document) noexcept;
 	const std::wstring* AutomaticWord(const void* document) const noexcept;
-	void SetAutomaticEnabled(bool enabled) noexcept { m_automaticEnabled = enabled; }
+	void SetAutomaticEnabled(bool enabled) noexcept;
 	bool IsAutomaticEnabled() const noexcept { return m_automaticEnabled; }
 	const std::wstring& AddedWordCharacters() const noexcept { return m_addedWordCharacters; }
 	void SetAddedWordCharacters(std::wstring characters);
@@ -47,6 +48,7 @@ private:
 	mutable const void* m_cachedAutomaticDocument = nullptr;
 	mutable const std::wstring* m_cachedAutomatic = nullptr;
 	bool m_automaticEnabled = true;
+	uint64_t m_generation = 1;
 	void RebuildIndex();
 };
 #endif

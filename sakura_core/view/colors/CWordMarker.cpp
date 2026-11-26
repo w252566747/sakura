@@ -27,11 +27,13 @@ bool CWordMarker::Toggle(std::wstring word, unsigned color)
 	if (found != m_entries.end()) {
 		m_entries.erase(found);
 		RebuildIndex();
+		++m_generation;
 		return true;
 	}
 	if (m_entries.size() >= 32) return false;
 	m_entries.push_back({ std::move(word), color });
 	RebuildIndex();
+	++m_generation;
 	return true;
 }
 
@@ -39,6 +41,7 @@ bool CWordMarker::SetColor(size_t index, unsigned color) noexcept
 {
 	if (index >= m_entries.size()) return false;
 	m_entries[index].color = color;
+	++m_generation;
 	return true;
 }
 
@@ -46,6 +49,7 @@ bool CWordMarker::ToggleEnabled(size_t index) noexcept
 {
 	if (index >= m_entries.size()) return false;
 	m_entries[index].enabled = !m_entries[index].enabled;
+	++m_generation;
 	return true;
 }
 
@@ -82,6 +86,7 @@ void CWordMarker::ClearFixed() noexcept
 {
 	m_entries.clear();
 	m_singleCharacterIndex.clear();
+	++m_generation;
 }
 
 void CWordMarker::RebuildIndex()
@@ -103,6 +108,7 @@ void CWordMarker::SetAutomatic(const void* document, std::wstring word)
 	m_automaticByDocument[document] = std::move(word);
 	m_cachedAutomaticDocument = nullptr;
 	m_cachedAutomatic = nullptr;
+	++m_generation;
 }
 
 void CWordMarker::ClearAutomatic(const void* document) noexcept
@@ -110,6 +116,14 @@ void CWordMarker::ClearAutomatic(const void* document) noexcept
 	m_automaticByDocument.erase(document);
 	m_cachedAutomaticDocument = nullptr;
 	m_cachedAutomatic = nullptr;
+	++m_generation;
+}
+
+void CWordMarker::SetAutomaticEnabled(bool enabled) noexcept
+{
+	if (m_automaticEnabled == enabled) return;
+	m_automaticEnabled = enabled;
+	++m_generation;
 }
 
 void CWordMarker::SetAddedWordCharacters(std::wstring characters)
@@ -118,7 +132,9 @@ void CWordMarker::SetAddedWordCharacters(std::wstring characters)
 		return character == L'\0' || character == L'\r' || character == L'\n';
 	}), characters.end());
 	if (characters.size() > 64) characters.resize(64);
+	if (m_addedWordCharacters == characters) return;
 	m_addedWordCharacters = std::move(characters);
+	++m_generation;
 }
 
 bool CWordMarker::IsWordCharacter(wchar_t character) const noexcept
@@ -205,4 +221,5 @@ void CWordMarker::Load(const std::vector<Entry>& entries)
 	m_automaticByDocument.clear();
 	m_cachedAutomaticDocument = nullptr;
 	m_cachedAutomatic = nullptr;
+	++m_generation;
 }

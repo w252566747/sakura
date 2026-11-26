@@ -54,6 +54,7 @@ LRESULT CALLBACK EditViewWndProc( HWND, UINT, WPARAM, LPARAM );
 VOID CALLBACK EditViewTimerProc( HWND, UINT, UINT_PTR, DWORD );
 
 #define IDT_ROLLMOUSE	1
+#define IDT_SCROLLBAR_MARKERS 2
 
 /*
 || ウィンドウプロシージャ
@@ -737,6 +738,11 @@ LRESULT CEditView::DispatchEvent(
 
 		/* タイマー終了 */
 		::KillTimer( GetHwnd(), IDT_ROLLMOUSE );
+		::KillTimer( GetHwnd(), IDT_SCROLLBAR_MARKERS );
+		if (m_hwndScrollBarMarkerTooltip) {
+			::DestroyWindow(m_hwndScrollBarMarkerTooltip);
+			m_hwndScrollBarMarkerTooltip = nullptr;
+		}
 
 //		MYTRACE( L"	WM_DESTROY\n" );
 		/*
@@ -904,6 +910,7 @@ void CEditView::OnSize( int cx, int cy )
 	/* 垂直スクロールバー */
 	if( nullptr != m_hwndVScrollBar ){
 		::MoveWindow( m_hwndVScrollBar, cx - nCxVScroll , 0 + nVSplitHeight, nCxVScroll, cy - nCyVScroll - nVSplitHeight, TRUE );
+		ResetScrollBarMarkerScan();
 	}
 	/* 水平スクロールバー */
 	if( nullptr != m_hwndHScrollBar ){
@@ -1253,6 +1260,10 @@ VOID CEditView::OnTimer(
 	[[maybe_unused]] DWORD dwTime 	// current system time
 	)
 {
+	if (idEvent == IDT_SCROLLBAR_MARKERS) {
+		UpdateScrollBarMarkerScan();
+		return;
+	}
 	POINT		po;
 	RECT		rc;
 

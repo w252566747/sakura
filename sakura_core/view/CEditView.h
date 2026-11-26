@@ -28,12 +28,15 @@
 #include <Windows.h>
 #include <ObjIdl.h>  // LPDATAOBJECT
 #include <shellapi.h>  // HDROP
+#include <array>
+#include <cstddef>
 
 #include "CTextMetrics.h"
 #include "CTextDrawer.h"
 #include "view/CCaret.h"
 #include "view/CRuler.h"
 #include "view/CTextArea.h"
+#include "view/CScrollBarMarkerModel.h"
 #include "view/CViewFont.h"
 #include "CViewCalc.h" // parent
 #include "CEditView_Paint.h"	// parent
@@ -68,6 +71,7 @@ class COutputAdapter;
 // struct DispPos; //	誰かがincludeしてます
 // class CColorStrategy;	// 誰かがincludeしてます
 class CColor_Found;
+class CDocLine;
 
 #ifndef IDM_COPYDICINFO
 #define IDM_COPYDICINFO 2000
@@ -199,6 +203,12 @@ public:
 	void OnPaint2(HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp);			/* 通常の描画処理 */
 	void DrawBackImage(HDC hdc, RECT& rcPaint, HDC hdcBgImg);
 	void OnTimer(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
+	void UpdateScrollBarMarkerScan();
+	void ResetScrollBarMarkerScan();
+	void DrawScrollBarMarkers(HDC hdc);
+	bool NavigateScrollBarMarker(int x, int y);
+	void UpdateScrollBarMarkerTooltip(int x, int y);
+	static LRESULT CALLBACK ScrollBarMarkerSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
 	//ウィンドウ
 	void OnSize(int cx, int cy);							/* ウィンドウサイズの変更処理 */
 	void OnMove(int x, int y, int nWidth, int nHeight);
@@ -651,7 +661,22 @@ public:
 	//ウィンドウ
 	HWND			m_hwndParent = nullptr;		/* 親ウィンドウハンドル */
 	HWND			m_hwndVScrollBar = nullptr;	/* 垂直スクロールバーウィンドウハンドル */
+	HWND			m_hwndScrollBarMarkerTooltip = nullptr;
 	int				m_nVScrollRate;		/* 垂直スクロールバーの縮尺 */
+	CScrollBarMarkerModel m_cScrollBarMarkerModel;
+	const CDocLine* m_pScrollBarMarkerScanLine = nullptr;
+	uint64_t m_uScrollBarMarkerScanVersion = 0;
+	uint64_t m_uScrollBarMarkerScanKey = 0;
+	int m_nScrollBarMarkerScanLine = 0;
+	int m_nScrollBarMarkerScanOffset = 0;
+	std::array<unsigned, 34> m_aScrollBarMarkerSeenColors{};
+	std::size_t m_nScrollBarMarkerSeenColorCount = 0;
+	int m_nScrollBarMarkerScanTrackHeight = 0;
+	UINT m_uScrollBarMarkerVisibility = 0x3fu;
+	bool m_bScrollBarMarkerScanActive = false;
+	bool m_bScrollBarMarkerLinePrepared = false;
+	bool m_bScrollBarMarkerCacheKeyValid = false;
+	std::wstring m_strScrollBarMarkerTooltip;
 	HWND			m_hwndHScrollBar = nullptr;	/* 水平スクロールバーウィンドウハンドル */
 	HWND			m_hwndSizeBox;		/* サイズボックスウィンドウハンドル */
 	HWND			m_hwndSizeBoxPlaceholder;	/* サイズボックス代替スタティックウィンドウハンドル */

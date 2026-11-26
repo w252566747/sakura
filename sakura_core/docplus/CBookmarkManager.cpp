@@ -11,8 +11,19 @@
 #include "agent/CSearchAgent.h"
 #include "extmodule/CBregexp.h"
 
+namespace {
+uint64_t g_bookmarkGeneration = 1;
+}
+
+uint64_t GetBookmarkGeneration() noexcept { return g_bookmarkGeneration; }
+
 bool CBookmarkGetter::IsBookmarked() const{ return m_pcDocLine->m_sMark.m_cBookmarked; }
-void CBookmarkSetter::SetBookmark(bool bFlag){ m_pcDocLine->m_sMark.m_cBookmarked = bFlag; }
+void CBookmarkSetter::SetBookmark(bool bFlag){
+	if (m_pcDocLine->m_sMark.m_cBookmarked != bFlag) {
+		m_pcDocLine->m_sMark.m_cBookmarked = bFlag;
+		++g_bookmarkGeneration;
+	}
+}
 
 //!ブックマークの全解除
 /*
