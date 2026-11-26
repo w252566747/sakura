@@ -1058,7 +1058,7 @@ void CMainToolBar::UpdateMarkerVisibility()
 	if (!::GetClientRect(m_hwndEnhancementToolBar, &client)) return;
 	RECT nextButton{};
 	if (!::SendMessage(m_hwndEnhancementToolBar, TB_GETITEMRECT, 4, reinterpret_cast<LPARAM>(&nextButton))) return;
-	const int availableWidth = std::max(0, client.right - nextButton.right - DpiScaleX(6));
+	const int availableWidth = std::max(0, static_cast<int>(client.right - nextButton.right - DpiScaleX(6)));
 	if (availableWidth == m_nLastMarkerAvailableWidth && m_nVisibleMarkerCount != static_cast<size_t>(-1)) return;
 	m_nLastMarkerAvailableWidth = availableWidth;
 
