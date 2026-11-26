@@ -11,6 +11,7 @@
 #include "window/CEditWnd.h"
 #include "doc/CEditDoc.h"
 #include "types/CTypeSupport.h"
+#include <algorithm>
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 //                           括弧                              //
@@ -29,7 +30,16 @@ void CEditView::SetBracketPairPos( bool flag )
 		return;
 	}
 
-	if( !m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp ){
+	const bool rainbowEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const auto& rainbowOptions = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_sFontAttr;
+	const bool nativePairEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp;
+	const bool rainbowPairEnabled = rainbowEnabled && rainbowOptions.m_bBoldFont;
+	const bool rainbowGuideEnabled = rainbowEnabled && rainbowOptions.m_bUnderLine;
+	if( !nativePairEnabled && !rainbowPairEnabled && !rainbowGuideEnabled ){
+		if( flag ){
+			m_ptBracketPairPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
+			m_ptBracketCaretPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
+		}
 		return;
 	}
 
@@ -65,6 +75,37 @@ void CEditView::SetBracketPairPos( bool flag )
 				// カーソルの前方文字位置
 				m_ptBracketCaretPos_PHY.x = GetCaret().GetCaretLogicPos().x - 1;
 			}
+			if( !nativePairEnabled && (rainbowPairEnabled || rainbowGuideEnabled) ){
+				auto getRainbowBracket = [&](const CLogicPoint& pt, SRainbowBracketMark* mark, wchar_t* bracket) {
+					CLayoutPoint layoutPos;
+					m_pcEditDoc->m_cLayoutMgr.LogicToLayout( pt, &layoutPos );
+					const CLayout* layout = nullptr;
+					CLogicInt lineLength;
+					const wchar_t* line = m_pcEditDoc->m_cLayoutMgr.GetLineStr( layoutPos.GetY2(), &lineLength, &layout );
+					if( !line || !layout ){
+						return false;
+					}
+					const CLogicInt localPos = pt.x - layout->GetLogicOffset();
+					if( localPos < 0 || localPos >= lineLength ||
+						!layout->GetRainbowBracketMark( static_cast<int>(pt.x), mark ) ){
+						return false;
+					}
+					*bracket = line[localPos];
+					return true;
+				};
+				SRainbowBracketMark pairMark;
+				SRainbowBracketMark caretMark;
+				wchar_t pairBracket = 0;
+				wchar_t caretBracket = 0;
+				const bool havePair = getRainbowBracket( m_ptBracketPairPos_PHY, &pairMark, &pairBracket );
+				const bool haveCaret = getRainbowBracket( m_ptBracketCaretPos_PHY, &caretMark, &caretBracket );
+				if( !havePair || !haveCaret ||
+					!IsMatchingRainbowBracketPair(pairMark, pairBracket, caretMark, caretBracket) ){
+					m_ptBracketPairPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
+					m_ptBracketCaretPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
+					return;
+				}
+			}
 			return;
 		}
 	}
@@ -88,7 +129,13 @@ void CEditView::DrawBracketPair( bool bDraw )
 		return;
 	}
 
-	if( !m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp ){
+	const bool rainbowEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const auto& rainbowOptions = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_sFontAttr;
+	const bool nativePairEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp;
+	const bool rainbowPairEnabled = rainbowEnabled && rainbowOptions.m_bBoldFont;
+	const bool rainbowGuideEnabled = rainbowEnabled && rainbowOptions.m_bUnderLine;
+	const bool highlightPair = nativePairEnabled || rainbowPairEnabled;
+	if( !highlightPair && !rainbowGuideEnabled ){
 		return;
 	}
 
@@ -112,7 +159,7 @@ void CEditView::DrawBracketPair( bool bDraw )
 	bool bCaretChange = false;
 	gr.SetTextBackTransparent(true);
 
-	for( int i = 0; i < 2; i++ )
+	for( int i = 0; highlightPair && i < 2; i++ )
 	{
 		// i=0:対括弧,i=1:カーソル位置の括弧
 		// 2011.11.23 ryoji 対括弧 -> カーソル位置の括弧 の順に処理順序を変更
@@ -145,6 +192,15 @@ void CEditView::DrawBracketPair( bool bDraw )
 				CLogicInt	OutputX = LineColumnToIndex( pcLayout, ptColLine.GetX2() );
 				if( bDraw )	{
 					nColorIndex = COLORIDX_BRACKET_PAIR;
+					if( rainbowEnabled ){
+						DispPos _sPos(0,0);
+						SColorStrategyInfo _sInfo;
+						_sInfo.m_pDispPos = &_sPos;
+						_sInfo.m_pcView = this;
+						const CColor3Setting cColor = GetColorIndex( pcLayout, ptColLine.GetY2(), OutputX, &_sInfo );
+						hasRainbowBracketForeColor = cColor.hasDirectTextForeColor;
+						rainbowBracketForeColor = cColor.directTextForeColor;
+					}
 				}
 				else{
 					if( IsBracket( pLine, OutputX, CLogicInt(1) ) ){
@@ -228,6 +284,68 @@ void CEditView::DrawBracketPair( bool bDraw )
 				if( ( GetEditWnd().GetActivePane() == m_nMyIndex )
 					&& ( ( ptColLine.y == GetCaret().GetCaretLayoutPos().GetY() ) || ( ptColLine.y - 1 == GetCaret().GetCaretLayoutPos().GetY() ) ) ){	// 03/02/27 ai 行の間隔が"0"の時にアンダーラインが欠ける事がある為修正
 					GetCaret().m_cUnderLine.CaretUnderLineON( true, false );
+				}
+			}
+		}
+	}
+
+	// Draw a reversible dotted guide between the matching code brackets. The cached
+	// rainbow marks ensure strings and comments cannot become either endpoint.
+	if( rainbowGuideEnabled ){
+		auto getBracketInfo = [&](const CLogicPoint& logicPos, CLayoutPoint* layoutPos,
+			SRainbowBracketMark* mark, wchar_t* bracket) {
+			m_pcEditDoc->m_cLayoutMgr.LogicToLayout( logicPos, layoutPos );
+			const CLayout* layout = nullptr;
+			CLogicInt lineLength;
+			const wchar_t* line = m_pcEditDoc->m_cLayoutMgr.GetLineStr( layoutPos->GetY2(), &lineLength, &layout );
+			if( !line || !layout ) return false;
+			const CLogicInt localPos = logicPos.x - layout->GetLogicOffset();
+			if( localPos < 0 || localPos >= lineLength ||
+				!layout->GetRainbowBracketMark( static_cast<int>(logicPos.x), mark ) ) return false;
+			*bracket = line[localPos];
+			return true;
+		};
+
+		CLayoutPoint caretLayout;
+		CLayoutPoint pairLayout;
+		SRainbowBracketMark caretMark;
+		SRainbowBracketMark pairMark;
+		wchar_t caretBracket = 0;
+		wchar_t pairBracket = 0;
+		if( getBracketInfo( m_ptBracketCaretPos_PHY, &caretLayout, &caretMark, &caretBracket ) &&
+			getBracketInfo( m_ptBracketPairPos_PHY, &pairLayout, &pairMark, &pairBracket ) &&
+			IsMatchingRainbowBracketPair(caretMark, caretBracket, pairMark, pairBracket) ){
+			const bool caretOpens = caretBracket == L'(' || caretBracket == L'[' || caretBracket == L'{';
+			const bool pairOpens = pairBracket == L'(' || pairBracket == L'[' || pairBracket == L'{';
+			if( caretOpens != pairOpens ){
+				const CLayoutPoint& openLayout = caretOpens ? caretLayout : pairLayout;
+				const CLayoutPoint& closeLayout = caretOpens ? pairLayout : caretLayout;
+				if( openLayout.GetY2() < closeLayout.GetY2() ){
+					const int rowHeight = GetTextMetrics().GetHankakuDy();
+					const int viewTop = GetTextArea().GetViewTopLine();
+					const int openY = GetTextArea().GetAreaTop() + (Int)(openLayout.GetY2() - viewTop) * rowHeight;
+					const int closeY = GetTextArea().GetAreaTop() + (Int)(closeLayout.GetY2() - viewTop) * rowHeight;
+					const int top = (std::max)(GetTextArea().GetAreaTop(), openY + rowHeight);
+					const int bottom = (std::min)(GetTextArea().GetAreaBottom(), closeY);
+					const int x = GetTextArea().GetDocumentLeftClientPointX() +
+						GetTextMetrics().GetCharPxWidth(openLayout.GetX2()) + GetTextMetrics().GetHankakuDx() / 2;
+					if( top < bottom ){
+						const COLORREF guideColor = m_pTypeData->m_ColorInfoArr[
+							COLORIDX_RAINBOW_BRACKET1 + caretMark.level % CBracketNestingState::COLOR_COUNT
+						].m_sColorAttr.m_cTEXT;
+						const int saved = ::SaveDC( gr );
+						::IntersectClipRect( gr, GetTextArea().GetAreaLeft(), GetTextArea().GetAreaTop(),
+							GetTextArea().GetAreaRight(), GetTextArea().GetAreaBottom() );
+						HPEN pen = ::CreatePen( PS_DOT, 1, guideColor );
+						HGDIOBJ oldPen = ::SelectObject( gr, pen );
+						const int oldRop = ::SetROP2( gr, R2_NOTXORPEN );
+						::MoveToEx( gr, x, top, nullptr );
+						::LineTo( gr, x, bottom );
+						::SetROP2( gr, oldRop );
+						::SelectObject( gr, oldPen );
+						::DeleteObject( pen );
+						::RestoreDC( gr, saved );
+					}
 				}
 			}
 		}

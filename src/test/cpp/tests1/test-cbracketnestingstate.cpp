@@ -68,3 +68,14 @@ TEST(CBracketNestingState, UnmatchedClosersAreReportedAndNonBracketsIgnored)
 	EXPECT_TRUE(unmatched);
 	EXPECT_EQ(state.Depth(), 0u);
 }
+
+TEST(CBracketNestingState, MatchingPairRequiresSameKindLevelAndMatchedEndpoints)
+{
+	const SRainbowBracketMark open{ 2, 1, false };
+	const SRainbowBracketMark close{ 8, 1, false };
+	EXPECT_TRUE(IsMatchingRainbowBracketPair(open, L'{', close, L'}'));
+	EXPECT_TRUE(IsMatchingRainbowBracketPair(close, L'}', open, L'{'));
+	EXPECT_FALSE(IsMatchingRainbowBracketPair(open, L'{', close, L')'));
+	EXPECT_FALSE(IsMatchingRainbowBracketPair(open, L'{', SRainbowBracketMark{ 8, 2, false }, L'}'));
+	EXPECT_FALSE(IsMatchingRainbowBracketPair(open, L'{', SRainbowBracketMark{ 8, 1, true }, L'}'));
+}

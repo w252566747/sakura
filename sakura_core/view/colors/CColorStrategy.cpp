@@ -467,6 +467,8 @@ const SColorAttributeData g_ColorAttributeArr[] =
 	{L"DFD", 0},	//DIFF削除	//@@@ 2002.06.01 MIK
 	{L"MRK", 0},	//ブックマーク	// 02/10/16 ai Add
 	{L"PGV", COLOR_ATTRIB_NO_TEXT | COLOR_ATTRIB_NO_EFFECTS},
+	// The otherwise non-rendered enable entry hosts two compatible feature options
+	// in the existing font-attribute bits; keep those checkboxes available in settings.
 	{L"RBE", COLOR_ATTRIB_NO_TEXT | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_EFFECTS},
 	{L"RB1", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
 	{L"RB2", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},

@@ -18,6 +18,15 @@ struct SRainbowBracketMark {
 	bool unmatched = false;
 };
 
+inline bool IsMatchingRainbowBracketPair(const SRainbowBracketMark& firstMark, wchar_t firstBracket,
+	const SRainbowBracketMark& secondMark, wchar_t secondBracket) noexcept
+{
+	if (firstMark.unmatched || secondMark.unmatched || firstMark.level != secondMark.level) return false;
+	return (firstBracket == L'(' && secondBracket == L')') || (firstBracket == L')' && secondBracket == L'(') ||
+		(firstBracket == L'[' && secondBracket == L']') || (firstBracket == L']' && secondBracket == L'[') ||
+		(firstBracket == L'{' && secondBracket == L'}') || (firstBracket == L'}' && secondBracket == L'{');
+}
+
 //! Persistent bracket stack carried between logical lines by the layout cache.
 class CBracketNestingState final {
 public:

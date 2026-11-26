@@ -293,6 +293,8 @@ INT_PTR CPropTypesColor::DispatchEvent(
 	int					nIndex;
 	static HWND			hwndListColor;
 	LPDRAWITEMSTRUCT	pDis;
+	static WCHAR		szOriginalBoldLabel[64] = {};
+	static WCHAR		szOriginalUnderlineLabel[64] = {};
 
 	switch( uMsg ){
 	case WM_INITDIALOG:
@@ -300,6 +302,8 @@ INT_PTR CPropTypesColor::DispatchEvent(
 		::SetWindowLongPtr( hwndDlg, DWLP_USER, lParam );
 
 		hwndListColor = ::GetDlgItem( hwndDlg, IDC_LIST_COLORS );
+		::GetDlgItemText( hwndDlg, IDC_CHECK_BOLD, szOriginalBoldLabel, _countof(szOriginalBoldLabel) );
+		::GetDlgItemText( hwndDlg, IDC_CHECK_UNDERLINE, szOriginalUnderlineLabel, _countof(szOriginalUnderlineLabel) );
 
 		/* ダイアログデータの設定 color */
 		SetData( hwndDlg );
@@ -352,6 +356,15 @@ INT_PTR CPropTypesColor::DispatchEvent(
 				::CheckDlgButtonBool( hwndDlg, IDC_CHECK_BOLD, m_Types.m_ColorInfoArr[m_nCurrentColorType].m_sFontAttr.m_bBoldFont );
 				/* 下線を表示 */
 				::CheckDlgButtonBool( hwndDlg, IDC_CHECK_UNDERLINE, m_Types.m_ColorInfoArr[m_nCurrentColorType].m_sFontAttr.m_bUnderLine );
+				if( nIndex == COLORIDX_RAINBOW_BRACKET_ENABLE ){
+					// These two serialized legacy style bits are reserved for options on this
+					// non-rendered row, avoiding changes to the shared ColorInfo array layout.
+					::SetDlgItemText( hwndDlg, IDC_CHECK_BOLD, L"対括弧(&B)" );
+					::SetDlgItemText( hwndDlg, IDC_CHECK_UNDERLINE, L"ガイド(&U)" );
+				}else{
+					::SetDlgItemText( hwndDlg, IDC_CHECK_BOLD, szOriginalBoldLabel );
+					::SetDlgItemText( hwndDlg, IDC_CHECK_UNDERLINE, szOriginalUnderlineLabel );
+				}
 
 				::InvalidateRect( ::GetDlgItem( hwndDlg, IDC_BUTTON_TEXTCOLOR ), nullptr, TRUE );
 				::InvalidateRect( ::GetDlgItem( hwndDlg, IDC_BUTTON_BACKCOLOR ), nullptr, TRUE );

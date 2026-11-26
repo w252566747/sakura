@@ -87,7 +87,9 @@ const std::array ColorInfo_DEFAULT = {
 	ColorInfoIni{ STR_COLOR_DIFF_DEL,					{ true,		{ false,	false },	{ RGB( 213, 106,   0 ),	RGB( 255, 233, 172 ) } } },
 	ColorInfoIni{ STR_COLOR_BOOKMARK,					{ true ,	{ false,	false },	{ RGB( 255, 251, 240 ),	RGB(   0, 128, 192 ) } } },
 	ColorInfoIni{ STR_COLOR_PAGEVIEW,					{ true ,	{ false,	false },	{ RGB( 255, 251, 240 ),	RGB( 190, 230, 255 ) } } },
-	ColorInfoIni{ STR_COLOR_RAINBOW_BRACKET_ENABLE,	{ false,	{ false,	false },	{ RGB(   0,   0,   0 ),	RGB( 255, 251, 240 ) } } },
+	// This non-rendered entry stores feature options in the existing ColorInfo fields:
+	// Bold = emphasize the matching bracket; Underline = show the bracket guide.
+	ColorInfoIni{ STR_COLOR_RAINBOW_BRACKET_ENABLE,	{ false,	{ true,	false },	{ RGB(   0,   0,   0 ),	RGB( 255, 251, 240 ) } } },
 	ColorInfoIni{ STR_COLOR_RAINBOW_BRACKET1,		{ true,	{ false,	false },	{ RGB( 193, 132,   1 ),	RGB( 255, 251, 240 ) } } },
 	ColorInfoIni{ STR_COLOR_RAINBOW_BRACKET2,		{ true,	{ false,	false },	{ RGB(  64, 120, 242 ),	RGB( 255, 251, 240 ) } } },
 	ColorInfoIni{ STR_COLOR_RAINBOW_BRACKET3,		{ true,	{ false,	false },	{ RGB( 166,  38, 164 ),	RGB( 255, 251, 240 ) } } },
