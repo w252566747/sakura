@@ -30,6 +30,7 @@
 #include <shellapi.h>  // HDROP
 #include <array>
 #include <cstddef>
+#include <vector>
 
 #include "CTextMetrics.h"
 #include "CTextDrawer.h"
@@ -649,6 +650,46 @@ public:
 	CTextMetrics	m_cTextMetrics;
 	CViewSelect		m_cViewSelect;
 
+	//! Secondary cursor and selection positions use document logic coordinates.
+	struct SExtraCursor {
+		CLogicPoint caret;
+		bool bHasSelection = false;
+		CLogicPoint anchor;
+	};
+	struct SAltClickSnapshot {
+		bool pending = false;
+		CMyPoint mouseDown;
+		CLayoutPoint clickedLayout;
+		CLayoutPoint caret;
+		bool hadSelection = false;
+		CLayoutRange selection;
+		CLayoutRange selectionAnchor;
+		CLayoutRange oldSelection;
+		bool boxSelection = false;
+		bool mouseSelecting = false;
+		bool selectingLock = false;
+		bool drawSelection = false;
+		bool lineSelection = false;
+		bool wordSelection = false;
+	};
+	SAltClickSnapshot m_sMultiCursorAltClick;
+	bool ResolveExtraCursor(const SExtraCursor& extra, CLayoutPoint* out) const;
+	bool ResolveExtraCursorAnchor(const SExtraCursor& extra, CLayoutPoint* out) const;
+	CLayoutRange ResolveExtraCursorSelectAreaLine(const SExtraCursor& extra, CLayoutInt line) const;
+	bool ToggleExtraCursorAt(const CLayoutPoint& point);
+	void ClearExtraCursors();
+	static constexpr std::size_t MAX_MULTI_CURSORS = 1000;
+	static std::size_t GetMaxMultiCursors() noexcept;
+	static std::size_t GetMaxExtraCursors() noexcept;
+	static void SetMaxMultiCursors(std::size_t count) noexcept;
+	static bool IsRainbowUnmatchedHighlightEnabled() noexcept;
+	static void SetRainbowUnmatchedHighlightEnabled(bool enabled) noexcept;
+	static unsigned GetScrollBarMarkerVisibility() noexcept;
+	static void SetScrollBarMarkerVisibility(unsigned mask) noexcept;
+	static unsigned GetScrollBarMarkerColor(unsigned kind) noexcept;
+	static void SetScrollBarMarkerColor(unsigned kind, unsigned color) noexcept;
+	std::vector<SExtraCursor> m_vExtraCursors;
+
 	//主要オブジェクト
 	CViewFont*		m_pcViewFont = GetViewFont(false);
 
@@ -672,7 +713,6 @@ public:
 	std::array<unsigned, 34> m_aScrollBarMarkerSeenColors{};
 	std::size_t m_nScrollBarMarkerSeenColorCount = 0;
 	int m_nScrollBarMarkerScanTrackHeight = 0;
-	UINT m_uScrollBarMarkerVisibility = 0x3fu;
 	bool m_bScrollBarMarkerScanActive = false;
 	bool m_bScrollBarMarkerLinePrepared = false;
 	bool m_bScrollBarMarkerCacheKeyValid = false;

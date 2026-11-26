@@ -26,17 +26,23 @@
 #include "StdAfx.h"
 #include <ShlObj.h>
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
+#include <limits>
 #include <string_view>
 
 #include "window/CEditWnd.h"
+#include "parse/CSVTableSettings.h"
+#include "parse/CSVStatistics.h"
 #include "_main/CControlTray.h"
 #include "_main/CCommandLine.h"	/// 2003/1/26 aroka
 #include "_main/CAppMode.h"
 #include "basis/CErrorInfo.h"
 #include "dlg/CDlgAbout.h"
+#include "dlg/CDlgInput1.h"
 #include "dlg/CDlgPrintSetting.h"
 #include "env/CShareData.h"
+#include "env/CAppNodeManager.h"
 #include "env/CSakuraEnvironment.h"
 #include "charset/CCodeFactory.h"
 #include "charset/CCodeBase.h"
@@ -75,6 +81,36 @@
 
 #define		YOHAKU_X		4		/* ウィンドウ内の枠と紙の隙間最小値 */
 #define		YOHAKU_Y		4		/* ウィンドウ内の枠と紙の隙間最小値 */
+
+static constexpr std::size_t CSV_BATCH_EDIT_MAX_SOURCE_CHARS = 8u * 1024u * 1024u;
+static constexpr std::size_t CSV_BATCH_EDIT_MAX_RECORDS = 100000u;
+static constexpr int IDC_REALTIME_FILTER_INCLUDE_LABEL = 0x7CE0;
+static constexpr int IDC_REALTIME_FILTER_EXCLUDE_LABEL = 0x7CE1;
+static constexpr int IDC_REALTIME_FILTER_INCLUDE = 0x7CE2;
+static constexpr int IDC_REALTIME_FILTER_EXCLUDE = 0x7CE3;
+static constexpr int IDC_REALTIME_FILTER_LOGIC = 0x7CE4;
+static constexpr int IDC_REALTIME_FILTER_CASE = 0x7CE5;
+static constexpr int IDC_REALTIME_FILTER_REGEX = 0x7CE6;
+static constexpr int IDC_REALTIME_FILTER_CONTEXT = 0x7CE7;
+static constexpr int IDC_REALTIME_FILTER_STATS = 0x7CE8;
+static constexpr int IDC_REALTIME_FILTER_COPY = 0x7CE9;
+static constexpr int IDC_REALTIME_FILTER_NEW = 0x7CEA;
+static constexpr int IDC_REALTIME_FILTER_SAVEAS = 0x7CEB;
+static constexpr int IDC_REALTIME_FILTER_CLEAR = 0x7CEC;
+static constexpr int IDC_REALTIME_FILTER_CLOSE = 0x7CED;
+static constexpr int IDC_REALTIME_FILTER_CONTEXT_LABEL = 0x7CEE;
+static constexpr int IDC_REALTIME_FILTER_AUTOSCROLL = 0x7CEF;
+
+static std::size_t GetRealtimeFilterContextRows(HWND combo)
+{
+	wchar_t text[32]{};
+	::GetWindowTextW(combo, text, static_cast<int>(std::size(text)));
+	if (text[0] == L'-') return 0;
+	wchar_t* end = nullptr;
+	const unsigned long long value = std::wcstoull(text, &end, 10);
+	if (!end || end == text || *end != L'\0') return 0;
+	return static_cast<std::size_t>(std::min<unsigned long long>(value, 1000000ull));
+}
 //@@@ 2002.01.14 YAZAKI 印刷プレビューをCPrintPreviewに独立させたので
 //	定義を削除
 
@@ -218,6 +254,10 @@ LRESULT CALLBACK CEditWndProc(
 
 CEditWnd::CEditWnd()
 {
+	const auto& csvSettings = csvtable::GetUserSettings();
+	m_chCSVDelimiter = csvSettings.delimiter;
+	m_bCSVAutoDetectDelimiter = csvSettings.autoDetectDelimiter;
+	m_bCSVHasHeader = csvSettings.hasHeader;
 	m_nCurlSyntaxErrorListHeight = curlsyntax::GetErrorListHeight();
 	const auto& cTypeConfig = GetEditDoc().m_cDocType.GetDocumentAttribute();
 	auto& cLayoutMgr = GetEditDoc().m_cLayoutMgr;
@@ -232,12 +272,42 @@ CEditWnd::CEditWnd()
 
 CEditWnd::~CEditWnd()
 {
+	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_DEBOUNCE);
+	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_SCAN);
+	if (m_pRealtimeFilterService) {
+		m_pRealtimeFilterService->Cancel();
+		m_pRealtimeFilterService.reset();
+	}
 	if (m_hwndCurlSyntaxTooltip) ::DestroyWindow(m_hwndCurlSyntaxTooltip);
 	::KillTimer(m_hWnd, IDT_CURL_SYNTAX);
 	if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
+	if (m_pCSVTableParseService) {
+		m_pCSVTableParseService->Cancel();
+		m_pCSVTableParseService.reset(); // Join before destroying the result mailbox.
+	}
+	if (m_pCSVTableQueryService) {
+		m_pCSVTableQueryService->Cancel();
+		m_pCSVTableQueryService.reset();
+	}
+	if (m_pCSVValidationService) {
+		m_pCSVValidationService->Cancel();
+		m_pCSVValidationService.reset();
+	}
 	{
 		std::lock_guard<std::mutex> lock(m_curlSyntaxMailboxMutex);
 		m_curlSyntaxMailbox.reset();
+	}
+	{
+		std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+		m_csvTableMailbox.reset();
+	}
+	{
+		std::lock_guard<std::mutex> lock(m_csvTableQueryMailboxMutex);
+		m_csvTableQueryMailbox.reset();
+	}
+	{
+		std::lock_guard<std::mutex> lock(m_csvValidationMailboxMutex);
+		m_csvValidationMailbox.reset();
 	}
 	CMacroFactory::resetInstance();
 	CColorStrategyPool::resetInstance();
@@ -269,14 +339,1757 @@ void CEditWnd::NotifyCurlSyntaxContentChanged(CEditDoc* document)
 	++document->m_uCurlSyntaxVersion;
 	document->m_bCurlSyntaxResultStale = true;
 	document->m_vCurlSyntaxDiagnostics.clear();
+	if (document == GetDocument() && (m_bCSVValidationListActive || m_bCSVValidationHasResult)) {
+		m_bCSVValidationStale = true;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+	}
 	RefreshCurlSyntaxErrorList();
 	if (document != GetDocument()) return;
+	if (m_bCSVTableMode) ScheduleCSVTableParse();
+	if (m_bRealtimeFilterMode && !m_bRealtimeFilterDocumentLoading) ScheduleRealtimeFilter();
 	HideCurlSyntaxTooltip();
 	::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
 	if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
 	if (curlsyntax::IsRealtimeEnabled() && IsCurlSyntaxDocument() && GetHwnd()) {
 		::SetTimer(GetHwnd(), IDT_CURL_SYNTAX, 500, nullptr);
 	}
+}
+
+void CEditWnd::ToggleRealtimeFilter()
+{
+	if (m_bRealtimeFilterMode) {
+		CloseRealtimeFilter();
+		return;
+	}
+	if (m_bCSVTableMode) {
+		SendStatusMessage(L"CSV テーブル表示を終了してからフィルターを開いてください。");
+		return;
+	}
+	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
+	if (!m_hwndRealtimeFilterBar) {
+		auto destroyFilterControls = [this]() {
+			for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+				if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::DestroyWindow(control);
+			}
+			if (m_hwndRealtimeFilterBar) ::DestroyWindow(m_hwndRealtimeFilterBar);
+			m_hwndRealtimeFilterBar = nullptr;
+			m_hwndRealtimeFilterInclude = m_hwndRealtimeFilterExclude = nullptr;
+			m_hwndRealtimeFilterLogic = m_hwndRealtimeFilterCase = m_hwndRealtimeFilterRegex = nullptr;
+			m_hwndRealtimeFilterContext = m_hwndRealtimeFilterStats = m_hwndRealtimeFilterAutoScroll = nullptr;
+		};
+		auto createControl = [this](DWORD exStyle, LPCWSTR className, LPCWSTR title,
+			DWORD style, int id) -> HWND {
+			return ::CreateWindowExW(exStyle, className, title, WS_CHILD | style,
+				0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+				CEditApp::getInstance()->GetAppInstance(), nullptr);
+		};
+		m_hwndRealtimeFilterBar = createControl(WS_EX_CLIENTEDGE, L"STATIC", L"",
+			SS_ETCHEDFRAME, 0x7CDF);
+		::CreateWindowExW(0, L"STATIC", L"含む（1行1条件）", WS_CHILD | SS_LEFT,
+			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_INCLUDE_LABEL),
+			CEditApp::getInstance()->GetAppInstance(), nullptr);
+		::CreateWindowExW(0, L"STATIC", L"除外（1行1条件）", WS_CHILD | SS_LEFT,
+			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_EXCLUDE_LABEL),
+			CEditApp::getInstance()->GetAppInstance(), nullptr);
+		m_hwndRealtimeFilterInclude = createControl(WS_EX_CLIENTEDGE, L"EDIT", L"",
+			ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_INCLUDE);
+		m_hwndRealtimeFilterExclude = createControl(WS_EX_CLIENTEDGE, L"EDIT", L"",
+			ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_EXCLUDE);
+		m_hwndRealtimeFilterLogic = createControl(0, L"COMBOBOX", L"",
+			CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_LOGIC);
+		m_hwndRealtimeFilterCase = createControl(0, L"BUTTON", L"大文字と小文字を区別",
+			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_CASE);
+		m_hwndRealtimeFilterRegex = createControl(0, L"BUTTON", L"正規表現",
+			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_REGEX);
+		::CreateWindowExW(0, L"STATIC", L"前後の行", WS_CHILD | SS_LEFT,
+			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_CONTEXT_LABEL),
+			CEditApp::getInstance()->GetAppInstance(), nullptr);
+		m_hwndRealtimeFilterContext = createControl(WS_EX_CLIENTEDGE, L"COMBOBOX", L"0",
+			CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_CONTEXT);
+		m_hwndRealtimeFilterStats = createControl(0, L"STATIC", L"条件を入力してください",
+			SS_LEFT | SS_CENTERIMAGE, IDC_REALTIME_FILTER_STATS);
+		m_hwndRealtimeFilterAutoScroll = createControl(0, L"BUTTON", L"末尾へ自動スクロール",
+			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_AUTOSCROLL);
+		createControl(0, L"BUTTON", L"表示行をコピー", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_COPY);
+		createControl(0, L"BUTTON", L"新規文書へ出力", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_NEW);
+		createControl(0, L"BUTTON", L"別名保存", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_SAVEAS);
+		createControl(0, L"BUTTON", L"すべて解除", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLEAR);
+		createControl(0, L"BUTTON", L"閉じる", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLOSE);
+		if (!m_hwndRealtimeFilterBar || !m_hwndRealtimeFilterInclude ||
+			!m_hwndRealtimeFilterExclude || !m_hwndRealtimeFilterLogic ||
+			!m_hwndRealtimeFilterContext || !m_hwndRealtimeFilterStats ||
+			!m_hwndRealtimeFilterAutoScroll || !m_hwndRealtimeFilterCase || !m_hwndRealtimeFilterRegex ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_COPY) ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_NEW) ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_SAVEAS) ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_CLEAR) ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_CLOSE)) {
+			destroyFilterControls();
+			SendStatusMessage(L"リアルタイムフィルターの画面を作成できませんでした。");
+			return;
+		}
+		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AND 条件"));
+		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"OR 条件"));
+		::SendMessageW(m_hwndRealtimeFilterLogic, CB_SETCURSEL, 0, 0);
+		for (const wchar_t* value : { L"0", L"3", L"5", L"10" }) {
+			::SendMessageW(m_hwndRealtimeFilterContext, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
+		}
+		for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CONTEXT_LABEL; ++id) {
+			if (HWND control = ::GetDlgItem(GetHwnd(), id)) {
+				::SendMessageW(control, WM_SETFONT,
+					reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+			}
+		}
+		for (const int id : { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
+			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CLOSE,
+			IDC_REALTIME_FILTER_AUTOSCROLL }) {
+			if (HWND control = ::GetDlgItem(GetHwnd(), id)) {
+				::SendMessageW(control, WM_SETFONT,
+					reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+			}
+		}
+		INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
+		::InitCommonControlsEx(&controls);
+		m_hwndRealtimeFilterList = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+			WS_CHILD | WS_CLIPSIBLINGS | LVS_REPORT | LVS_OWNERDATA | LVS_NOCOLUMNHEADER | LVS_SHOWSELALWAYS,
+			0, 0, 0, 0, GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
+		if (!m_hwndRealtimeFilterList) {
+			destroyFilterControls();
+			SendStatusMessage(L"フィルター結果一覧を作成できませんでした。");
+			return;
+		}
+		ListView_SetExtendedListViewStyle(m_hwndRealtimeFilterList,
+			LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_FULLROWSELECT);
+		LVCOLUMNW column{};
+		column.mask = LVCF_TEXT | LVCF_WIDTH;
+		column.pszText = const_cast<LPWSTR>(L"フィルター結果");
+		column.cx = DpiScaleX(1200);
+		ListView_InsertColumn(m_hwndRealtimeFilterList, 0, &column);
+		::SendMessageW(m_hwndRealtimeFilterList, WM_SETFONT,
+			reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+	}
+	m_bRealtimeFilterMode = true;
+	::ShowWindow(m_hwndRealtimeFilterBar, SW_SHOW);
+	::ShowWindow(m_hwndRealtimeFilterList, SW_SHOW);
+	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+		if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::ShowWindow(control, SW_SHOW);
+	}
+	::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_HIDE);
+	RECT client{};
+	::GetClientRect(GetHwnd(), &client);
+	OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+	::SetFocus(m_hwndRealtimeFilterInclude);
+	ScheduleRealtimeFilter();
+	m_cToolbar.UpdateToolbar();
+}
+
+void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
+{
+	if (!m_bRealtimeFilterMode || document != GetDocument()) return;
+	m_bRealtimeFilterDocumentLoading = true;
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+	if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+	++m_uRealtimeFilterToken;
+	m_bRealtimeFilterAppendCachePending = m_bRealtimeFilterScanComplete &&
+		document->m_uCurlSyntaxVersion == m_uRealtimeFilterDocumentVersion &&
+		m_vRealtimeFilterLineFingerprints.size() == m_vRealtimeFilterLineIndex.size();
+	if (m_bRealtimeFilterAppendCachePending) {
+		m_vRealtimeFilterAppendCacheFingerprints = std::move(m_vRealtimeFilterLineFingerprints);
+		m_vRealtimeFilterAppendCacheMatches = std::move(m_vRealtimeFilterMatches);
+	} else {
+		m_vRealtimeFilterAppendCacheFingerprints.clear();
+		m_vRealtimeFilterAppendCacheMatches.clear();
+	}
+	m_bRealtimeFilterBatchInFlight = false;
+	m_bRealtimeFilterHasPendingBatch = false;
+	m_bRealtimeFilterScanComplete = false;
+	m_bRealtimeFilterAppendCacheActive = false;
+	m_pRealtimeFilterScanLine = nullptr;
+	m_vRealtimeFilterPendingBatch.clear();
+	m_vRealtimeFilterLineIndex.clear();
+	m_vRealtimeFilterLineFingerprints.clear();
+	m_vRealtimeFilterMatches.clear();
+	m_vRealtimeFilterVisibleRanges.clear();
+	if (m_hwndRealtimeFilterList) {
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
+	}
+	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中です...");
+}
+
+void CEditWnd::NotifyRealtimeFilterDocumentLoadFinished(CEditDoc* document)
+{
+	if (document != GetDocument()) return;
+	m_bRealtimeFilterDocumentLoading = false;
+	ScheduleRealtimeFilter(m_bRealtimeFilterAppendCachePending);
+}
+
+void CEditWnd::CloseRealtimeFilter(bool refreshLayout)
+{
+	if (!m_bRealtimeFilterMode) return;
+	m_bRealtimeFilterMode = false;
+	m_bRealtimeFilterDocumentLoading = false;
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+	if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+	++m_uRealtimeFilterToken;
+	m_bRealtimeFilterBatchInFlight = false;
+	m_bRealtimeFilterHasPendingBatch = false;
+	m_pRealtimeFilterScanLine = nullptr;
+	m_vRealtimeFilterPendingBatch.clear();
+	m_vRealtimeFilterLineIndex.clear();
+	m_vRealtimeFilterLineFingerprints.clear();
+	m_vRealtimeFilterMatches.clear();
+	m_vRealtimeFilterVisibleRanges.clear();
+	m_vRealtimeFilterAppendCacheFingerprints.clear();
+	m_vRealtimeFilterAppendCacheMatches.clear();
+	m_bRealtimeFilterAppendCachePending = false;
+	m_bRealtimeFilterAppendCacheActive = false;
+	if (m_hwndRealtimeFilterBar) ::ShowWindow(m_hwndRealtimeFilterBar, SW_HIDE);
+	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+		if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::ShowWindow(control, SW_HIDE);
+	}
+	if (m_hwndRealtimeFilterList) {
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		::ShowWindow(m_hwndRealtimeFilterList, SW_HIDE);
+	}
+	if (m_cSplitterWnd.GetHwnd()) ::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_SHOW);
+	if (refreshLayout) {
+		RECT client{};
+		::GetClientRect(GetHwnd(), &client);
+		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+		GetActiveView().SetFocus();
+	}
+	m_cToolbar.UpdateToolbar();
+}
+
+void CEditWnd::ScheduleRealtimeFilter(bool keepAppendCache)
+{
+	if (!m_bRealtimeFilterMode) return;
+	if (!keepAppendCache) {
+		m_vRealtimeFilterAppendCacheFingerprints.clear();
+		m_vRealtimeFilterAppendCacheMatches.clear();
+		m_bRealtimeFilterAppendCachePending = false;
+		m_bRealtimeFilterAppendCacheActive = false;
+	}
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+	if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+	++m_uRealtimeFilterToken;
+	m_bRealtimeFilterBatchInFlight = false;
+	m_bRealtimeFilterHasPendingBatch = false;
+	m_bRealtimeFilterScanComplete = false;
+	m_pRealtimeFilterScanLine = nullptr;
+	m_vRealtimeFilterPendingBatch.clear();
+	m_vRealtimeFilterLineIndex.clear();
+	m_vRealtimeFilterLineFingerprints.clear();
+	m_vRealtimeFilterMatches.clear();
+	m_vRealtimeFilterVisibleRanges.clear();
+	if (m_hwndRealtimeFilterList) {
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
+	}
+	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"条件を解析しています...");
+	// A reload can pump window messages while replacing document lines. Keep
+	// condition changes, but never scan a partially loaded document.
+	if (m_bRealtimeFilterDocumentLoading) {
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中です...");
+		return;
+	}
+	::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE, 300, nullptr);
+}
+
+void CEditWnd::ContinueRealtimeFilterScan()
+{
+	if (!m_bRealtimeFilterMode || !GetDocument() || !m_pRealtimeFilterService) return;
+	if (GetDocument()->m_uCurlSyntaxVersion != m_uRealtimeFilterDocumentVersion) {
+		ScheduleRealtimeFilter();
+		return;
+	}
+	if (m_bRealtimeFilterBatchInFlight) return;
+	if (!m_bRealtimeFilterHasPendingBatch) {
+		std::vector<textfilter::Line> batch;
+		const auto started = std::chrono::steady_clock::now();
+		try {
+			while (m_pRealtimeFilterScanLine && batch.size() < 2048 &&
+				std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
+				const CDocLine* line = m_pRealtimeFilterScanLine;
+				const std::size_t lineNumber = m_vRealtimeFilterLineIndex.size();
+				const CLogicInt lineLength = line->GetLengthWithoutEOL();
+				const std::wstring_view lineText(line->GetPtr(),
+					lineLength > CLogicInt(0) ? static_cast<std::size_t>(lineLength) : 0u);
+				const std::uint64_t fingerprint = textfilter::FingerprintLine(lineText, line->GetEol().IsValid());
+				if (m_bRealtimeFilterAppendCacheActive &&
+					lineNumber < m_vRealtimeFilterAppendCacheFingerprints.size() &&
+					fingerprint != m_vRealtimeFilterAppendCacheFingerprints[lineNumber]) {
+					// The reloaded document was edited or truncated, not merely appended.
+					// No batch was sent while validating the old prefix, so restarting at
+					// line zero is safe and produces a complete result set.
+					m_bRealtimeFilterAppendCacheActive = false;
+					m_bRealtimeFilterAppendCachePending = false;
+					m_vRealtimeFilterAppendCacheFingerprints.clear();
+					m_vRealtimeFilterAppendCacheMatches.clear();
+					m_vRealtimeFilterLineIndex.clear();
+					m_vRealtimeFilterLineFingerprints.clear();
+					m_vRealtimeFilterMatches.clear();
+					m_nRealtimeFilterScannedLines = 0;
+					m_pRealtimeFilterScanLine = GetDocument()->m_cDocLineMgr.GetDocLineTop();
+					::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
+					return;
+				}
+
+				m_vRealtimeFilterLineIndex.push_back(line);
+				m_vRealtimeFilterLineFingerprints.push_back(fingerprint);
+				m_pRealtimeFilterScanLine = line->GetNextLine();
+
+				if (m_bRealtimeFilterAppendCacheActive &&
+					lineNumber < m_vRealtimeFilterAppendCacheFingerprints.size()) {
+					// Prefix line already validated; reuse its previous match result.
+					++m_nRealtimeFilterScannedLines;
+					continue;
+				}
+				if (m_bRealtimeFilterAppendCacheActive) {
+					// The entire old document matched by fingerprint. Keep its matches,
+					// then send only newly appended lines to the worker.
+					m_vRealtimeFilterMatches = std::move(m_vRealtimeFilterAppendCacheMatches);
+					m_vRealtimeFilterAppendCacheFingerprints.clear();
+					m_vRealtimeFilterAppendCacheMatches.clear();
+					m_bRealtimeFilterAppendCacheActive = false;
+					m_bRealtimeFilterAppendCachePending = false;
+				}
+				batch.push_back({ lineNumber, std::wstring(lineText) });
+			}
+		} catch (...) {
+			::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+			m_pRealtimeFilterService->Cancel();
+			if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"メモリ不足でフィルターを中断しました。");
+			SendStatusMessage(L"メモリ不足でフィルターを中断しました。");
+			return;
+		}
+		if (m_bRealtimeFilterAppendCacheActive && !m_pRealtimeFilterScanLine) {
+			if (m_vRealtimeFilterLineIndex.size() < m_vRealtimeFilterAppendCacheFingerprints.size()) {
+				// A shorter reload is not an append. Restart with a full scan.
+				m_bRealtimeFilterAppendCacheActive = false;
+				m_bRealtimeFilterAppendCachePending = false;
+				m_vRealtimeFilterAppendCacheFingerprints.clear();
+				m_vRealtimeFilterAppendCacheMatches.clear();
+				m_vRealtimeFilterLineIndex.clear();
+				m_vRealtimeFilterLineFingerprints.clear();
+				m_vRealtimeFilterMatches.clear();
+				m_nRealtimeFilterScannedLines = 0;
+				m_pRealtimeFilterScanLine = GetDocument()->m_cDocLineMgr.GetDocLineTop();
+				::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
+				return;
+			}
+			// Exact same content after reload: reuse every match and publish an
+			// empty final batch so the UI can finish normally.
+			m_vRealtimeFilterMatches = std::move(m_vRealtimeFilterAppendCacheMatches);
+			m_vRealtimeFilterAppendCacheFingerprints.clear();
+			m_vRealtimeFilterAppendCacheMatches.clear();
+			m_bRealtimeFilterAppendCacheActive = false;
+			m_bRealtimeFilterAppendCachePending = false;
+		}
+		if (batch.empty() && m_pRealtimeFilterScanLine && m_bRealtimeFilterAppendCacheActive) {
+			const std::wstring progress = L"一致 " + std::to_wstring(m_vRealtimeFilterAppendCacheMatches.size()) +
+				L" 行 / 追記確認 " + std::to_wstring(m_nRealtimeFilterScannedLines) + L" / " +
+				std::to_wstring(m_nRealtimeFilterTotalLines) + L" 行";
+			if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, progress.c_str());
+			::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
+			return;
+		}
+		m_vRealtimeFilterPendingBatch = std::move(batch);
+		m_bRealtimeFilterPendingBatchFinal = m_pRealtimeFilterScanLine == nullptr;
+		m_bRealtimeFilterHasPendingBatch = true;
+	}
+	if (m_pRealtimeFilterService->Submit(m_uRealtimeFilterToken,
+		std::move(m_vRealtimeFilterPendingBatch), m_bRealtimeFilterPendingBatchFinal)) {
+		m_vRealtimeFilterPendingBatch.clear();
+		m_bRealtimeFilterHasPendingBatch = false;
+		m_bRealtimeFilterBatchInFlight = true;
+		if (m_bRealtimeFilterPendingBatchFinal) ::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+	} else {
+		::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 10, nullptr);
+	}
+}
+
+void CEditWnd::AcceptRealtimeFilterResult()
+{
+	std::optional<textfilter::BatchResult> result;
+	{
+		std::lock_guard<std::mutex> lock(m_realtimeFilterMailboxMutex);
+		result.swap(m_realtimeFilterMailbox);
+	}
+	if (!result || !m_bRealtimeFilterMode || !GetDocument() ||
+		result->requestToken != m_uRealtimeFilterToken ||
+		result->documentVersion != GetDocument()->m_uCurlSyntaxVersion) return;
+	m_bRealtimeFilterBatchInFlight = false;
+	if (result->failed) {
+		m_bRealtimeFilterScanComplete = false;
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, result->error.c_str());
+		SendStatusMessage(result->error.c_str());
+		return;
+	}
+	m_nRealtimeFilterScannedLines += result->scannedLines;
+	try {
+		m_vRealtimeFilterMatches.insert(m_vRealtimeFilterMatches.end(),
+			result->matchingLines.begin(), result->matchingLines.end());
+	} catch (...) {
+		m_bRealtimeFilterScanComplete = false;
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+		if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"結果を保存できるメモリがありません。");
+		SendStatusMessage(L"結果を保存できるメモリがありません。");
+		return;
+	}
+	m_bRealtimeFilterScanComplete = result->finalBatch;
+	try {
+		const std::size_t contextRows = GetRealtimeFilterContextRows(m_hwndRealtimeFilterContext);
+		m_vRealtimeFilterVisibleRanges = textfilter::BuildVisibleRanges(m_vRealtimeFilterMatches,
+			m_vRealtimeFilterLineIndex.size(), contextRows);
+	} catch (...) {
+		m_vRealtimeFilterVisibleRanges.clear();
+		m_bRealtimeFilterScanComplete = false;
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+		if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"表示範囲を作成できるメモリがありません。");
+		SendStatusMessage(L"表示範囲を作成できるメモリがありません。");
+		return;
+	}
+	const std::size_t visible = textfilter::CountVisibleLines(m_vRealtimeFilterVisibleRanges);
+	ListView_SetItemCountEx(m_hwndRealtimeFilterList,
+		static_cast<int>(std::min<std::size_t>(visible, static_cast<std::size_t>(std::numeric_limits<int>::max()))),
+		LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
+	if (m_bRealtimeFilterAutoScroll && !m_vRealtimeFilterMatches.empty() && visible > 0) {
+		const std::size_t targetLine = m_vRealtimeFilterMatches.back();
+		std::size_t displayRow = 0;
+		for (const auto& range : m_vRealtimeFilterVisibleRanges) {
+			if (targetLine >= range.first && targetLine <= range.last) {
+				displayRow += targetLine - range.first;
+				ListView_EnsureVisible(m_hwndRealtimeFilterList,
+					static_cast<int>(std::min<std::size_t>(displayRow, static_cast<std::size_t>(std::numeric_limits<int>::max()))), FALSE);
+				break;
+			}
+			displayRow += range.last - range.first + 1;
+		}
+	}
+	if (result->finalBatch) {
+		const std::wstring stats = L"一致 " + std::to_wstring(m_vRealtimeFilterMatches.size()) +
+			L" 行 / 表示 " + std::to_wstring(visible) + L" 行 / 全 " +
+			std::to_wstring(m_vRealtimeFilterLineIndex.size()) + L" 行";
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, stats.c_str());
+	} else {
+		const std::wstring progress = L"一致 " + std::to_wstring(m_vRealtimeFilterMatches.size()) +
+			L" 行 / 表示 " + std::to_wstring(visible) + L" 行 / 読込 " +
+			std::to_wstring(m_nRealtimeFilterScannedLines) + L" / " +
+			std::to_wstring(m_nRealtimeFilterTotalLines) + L" 行";
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, progress.c_str());
+		::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
+	}
+}
+
+void CEditWnd::UpdateRealtimeFilterLayout()
+{
+	if (!m_bRealtimeFilterMode || !m_hwndRealtimeFilterList || !m_cSplitterWnd.GetHwnd()) return;
+	RECT rect{};
+	if (!::GetWindowRect(m_cSplitterWnd.GetHwnd(), &rect)) return;
+	::MapWindowPoints(nullptr, GetHwnd(), reinterpret_cast<POINT*>(&rect), 2);
+	::SetWindowPos(m_hwndRealtimeFilterList, HWND_TOP, rect.left, rect.top,
+		std::max<LONG>(0, rect.right - rect.left), std::max<LONG>(0, rect.bottom - rect.top),
+		SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void CEditWnd::ExportRealtimeFilter(bool toNewDocument, bool showSaveAs)
+{
+	if (!m_bRealtimeFilterMode || !m_bRealtimeFilterScanComplete || !GetDocument()) {
+		SendStatusMessage(L"フィルター処理が完了してから出力してください。");
+		return;
+	}
+	std::wstring text;
+	try {
+		for (const auto& range : m_vRealtimeFilterVisibleRanges) {
+			for (std::size_t lineNumber = range.first; lineNumber <= range.last; ++lineNumber) {
+				if (lineNumber >= m_vRealtimeFilterLineIndex.size()) break;
+				const CDocLine* line = m_vRealtimeFilterLineIndex[lineNumber];
+				if (!line) continue;
+				const CLogicInt lineLength = line->GetLengthWithoutEOL();
+				if (lineLength > CLogicInt(0)) text.append(line->GetPtr(), static_cast<std::size_t>(lineLength));
+				if (lineNumber < m_vRealtimeFilterLineIndex.size() - 1 || line->GetEol().IsValid()) {
+					const auto& ending = line->GetEol().GetData().GetVal();
+					if (!ending.empty()) text.append(ending);
+				}
+			}
+		}
+	} catch (...) {
+		SendStatusMessage(L"フィルター結果の出力用メモリを確保できませんでした。");
+		return;
+	}
+	if (text.size() >= std::numeric_limits<SIZE_T>::max() / sizeof(wchar_t)) {
+		SendStatusMessage(L"フィルター結果が大きすぎてクリップボードへ出力できません。");
+		return;
+	}
+	const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+	HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
+	if (!memory) {
+		SendStatusMessage(L"クリップボード用のメモリを確保できませんでした。");
+		return;
+	}
+	void* destination = ::GlobalLock(memory);
+	if (!destination) {
+		::GlobalFree(memory);
+		SendStatusMessage(L"クリップボード用メモリをロックできませんでした。");
+		return;
+	}
+	memcpy(destination, text.c_str(), bytes);
+	::GlobalUnlock(memory);
+	if (!::OpenClipboard(GetHwnd())) {
+		::GlobalFree(memory);
+		SendStatusMessage(L"クリップボードを開けませんでした。");
+		return;
+	}
+	::EmptyClipboard();
+	if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
+		::CloseClipboard();
+		::GlobalFree(memory);
+		SendStatusMessage(L"フィルター結果をクリップボードへ設定できませんでした。");
+		return;
+	}
+	::CloseClipboard();
+	if (!toNewDocument) {
+		SendStatusMessage(L"表示中の行をクリップボードへコピーしました。");
+		return;
+	}
+	std::vector<HWND> before;
+	EditNode* nodes = nullptr;
+	const int count = CAppNodeManager::getInstance()->GetOpenedWindowArr(&nodes, FALSE);
+	for (int i = 0; i < count; ++i) before.push_back(nodes[i].GetHwnd());
+	delete[] nodes;
+	// OpenNewEditor's synchronous mode waits for the new editor's initialization
+	// event while pumping sent messages. This avoids racing the process startup
+	// when the empty document is created in another Sakura process.
+	SLoadInfo loadInfo(L"", CODE_NONE, false);
+	if (!CControlTray::OpenNewEditor(G_AppInstance(), GetHwnd(), loadInfo, nullptr, true, nullptr, false)) {
+		SendStatusMessage(L"新規文書を作成できませんでした。表示行はクリップボードにあります。");
+		return;
+	}
+	nodes = nullptr;
+	const int afterCount = CAppNodeManager::getInstance()->GetOpenedWindowArr(&nodes, FALSE);
+	HWND newWindow = nullptr;
+	for (int i = 0; i < afterCount && !newWindow; ++i) {
+		const HWND candidate = nodes[i].GetHwnd();
+		if (std::find(before.begin(), before.end(), candidate) == before.end()) newWindow = candidate;
+	}
+	delete[] nodes;
+	// Never paste filtered text into an unrelated foreground document.
+	if (!newWindow || newWindow == GetHwnd()) {
+		SendStatusMessage(L"新規文書を特定できませんでした。表示行はクリップボードにあります。");
+		return;
+	}
+	::SendMessageCmd(newWindow, WM_COMMAND, MAKEWPARAM(F_PASTE, 0), 0);
+	if (showSaveAs) {
+		::SendMessageCmd(newWindow, WM_COMMAND, MAKEWPARAM(F_FILESAVEAS_DIALOG, 0), 0);
+		SendStatusMessage(L"フィルター結果を新規文書に出力し、名前を付けて保存を開きました。");
+	} else {
+		SendStatusMessage(L"フィルター結果を新規文書へ出力しました。Ctrl+S で保存できます。");
+	}
+}
+
+void CEditWnd::StartRealtimeFilterScan()
+{
+	if (!m_bRealtimeFilterMode || m_bRealtimeFilterDocumentLoading || !GetDocument()) return;
+	try {
+		if (!m_pRealtimeFilterService) m_pRealtimeFilterService = std::make_unique<textfilter::Service>();
+		textfilter::Options options;
+		auto readTerms = [](HWND edit, std::vector<std::wstring>& terms) {
+			const int length = ::GetWindowTextLengthW(edit);
+			std::wstring value(static_cast<std::size_t>(std::max(0, length)) + 1, L'\0');
+			::GetWindowTextW(edit, value.data(), length + 1);
+			value.resize(static_cast<std::size_t>(std::max(0, length)));
+			std::size_t begin = 0;
+			while (begin <= value.size()) {
+				const std::size_t end = value.find(L'\n', begin);
+				std::wstring term = value.substr(begin, end == std::wstring::npos ? end : end - begin);
+				while (!term.empty() && std::iswspace(term.front())) term.erase(term.begin());
+				while (!term.empty() && std::iswspace(term.back())) term.pop_back();
+				if (!term.empty()) terms.push_back(std::move(term));
+				if (end == std::wstring::npos) break;
+				begin = end + 1;
+			}
+		};
+		readTerms(m_hwndRealtimeFilterInclude, options.includeTerms);
+		readTerms(m_hwndRealtimeFilterExclude, options.excludeTerms);
+		options.logic = ::SendMessageW(m_hwndRealtimeFilterLogic, CB_GETCURSEL, 0, 0) == 1
+			? textfilter::Logic::Or : textfilter::Logic::And;
+		options.caseSensitive = ::SendMessageW(m_hwndRealtimeFilterCase, BM_GETCHECK, 0, 0) == BST_CHECKED;
+		options.regularExpression = ::SendMessageW(m_hwndRealtimeFilterRegex, BM_GETCHECK, 0, 0) == BST_CHECKED;
+		options.regexDllPath = GetDllShareData().m_Common.m_sSearch.m_szRegexpLib;
+		options.contextRows = GetRealtimeFilterContextRows(m_hwndRealtimeFilterContext);
+		m_uRealtimeFilterDocumentVersion = GetDocument()->m_uCurlSyntaxVersion;
+		m_nRealtimeFilterTotalLines = static_cast<std::size_t>(std::max<CLogicInt>(0, GetDocument()->m_cDocLineMgr.GetLineCount()));
+		m_nRealtimeFilterScannedLines = 0;
+		m_pRealtimeFilterScanLine = GetDocument()->m_cDocLineMgr.GetDocLineTop();
+		m_vRealtimeFilterLineIndex.clear();
+		m_vRealtimeFilterLineFingerprints.clear();
+		m_vRealtimeFilterMatches.clear();
+		m_vRealtimeFilterVisibleRanges.clear();
+		m_bRealtimeFilterAppendCacheActive = m_bRealtimeFilterAppendCachePending;
+		m_bRealtimeFilterBatchInFlight = false;
+		m_bRealtimeFilterHasPendingBatch = false;
+		m_bRealtimeFilterScanComplete = false;
+		const std::uint64_t token = m_uRealtimeFilterToken;
+		const HWND resultWindow = GetHwnd();
+		m_pRealtimeFilterService->Begin(token, m_uRealtimeFilterDocumentVersion, std::move(options),
+			[this, resultWindow](textfilter::BatchResult result) {
+				{
+					std::lock_guard<std::mutex> lock(m_realtimeFilterMailboxMutex);
+					m_realtimeFilterMailbox = std::move(result);
+				}
+				if (!::PostMessage(resultWindow, MYWM_REALTIME_FILTER_RESULT, 0, 0)) {
+					std::lock_guard<std::mutex> lock(m_realtimeFilterMailboxMutex);
+					m_realtimeFilterMailbox.reset();
+				}
+			});
+		::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
+	} catch (...) {
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"フィルターを開始できませんでした。");
+		SendStatusMessage(L"フィルターを開始できませんでした。");
+	}
+}
+
+void CEditWnd::ToggleCSVTableMode()
+{
+	if (m_bCSVTableMode) {
+		FinishCSVCellEdit(true);
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		m_nCSVSortPendingSourceRow = -1;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		::KillTimer(GetHwnd(), IDT_CSV_SELECTION_STATS);
+		m_bCSVTableMode = false;
+		++m_uCSVQueryGeneration;
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+		if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+		m_bCSVValidationListActive = false;
+		m_bCSVValidationStale = false;
+		m_bCSVValidationHasResult = false;
+		m_vCSVValidationDiagnostics.clear();
+		RefreshCurlSyntaxErrorList();
+		if (m_hwndCSVTable) ::ShowWindow(m_hwndCSVTable, SW_HIDE);
+		if (m_cSplitterWnd.GetHwnd()) ::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_SHOW);
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		m_vCSVTableViewRows.clear();
+		m_bCSVTableViewOrderIdentity = true;
+		GetActiveView().SetFocus();
+		m_cToolbar.UpdateToolbar();
+		return;
+	}
+	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
+	if (!m_hwndCSVTable) {
+		INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
+		::InitCommonControlsEx(&controls);
+		m_hwndCSVTable = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+			WS_CHILD | WS_CLIPSIBLINGS | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS,
+			0, 0, 0, 0, GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
+		if (!m_hwndCSVTable) {
+			SendStatusMessage(L"CSVテーブルを作成できませんでした。");
+			return;
+		}
+		ListView_SetExtendedListViewStyle(m_hwndCSVTable,
+			LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+		::SendMessage(m_hwndCSVTable, WM_SETFONT,
+			reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+	}
+	m_bCSVTableMode = true;
+	::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_HIDE);
+	::ShowWindow(m_hwndCSVTable, SW_SHOW);
+	UpdateCSVTableLayout();
+	::SetFocus(m_hwndCSVTable);
+	ScheduleCSVTableParse();
+	m_cToolbar.UpdateToolbar();
+}
+
+void CEditWnd::RunCSVCheck()
+{
+	if (!m_bCSVTableMode) {
+		SendStatusMessage(L"CSVテーブル表示に切り替えてから CSV チェックを実行してください。");
+		return;
+	}
+	if (m_bCSVValidationListActive && m_bCurlSyntaxErrorListVisible && !m_bCSVValidationStale) {
+		m_bCSVValidationListActive = false;
+		m_bCurlSyntaxErrorListVisible = false;
+		if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_HIDE);
+		if (m_hwndCurlSyntaxErrorList) ::ShowWindow(m_hwndCurlSyntaxErrorList, SW_HIDE);
+		RECT client{};
+		::GetClientRect(GetHwnd(), &client);
+		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+		return;
+	}
+	const CEditDoc* currentDocument = GetDocument();
+	if (!m_bCSVValidationListActive && m_bCSVValidationHasResult && !m_bCSVValidationStale &&
+		currentDocument && m_uCSVValidationVersion == currentDocument->m_uCurlSyntaxVersion) {
+		m_bCSVValidationListActive = true;
+		CreateCurlSyntaxErrorList();
+		if (!m_hwndCurlSyntaxErrorList) return;
+		m_bCurlSyntaxErrorListVisible = true;
+		if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_SHOW);
+		::ShowWindow(m_hwndCurlSyntaxErrorList, SW_SHOW);
+		RefreshCurlSyntaxErrorList();
+		RECT client{};
+		::GetClientRect(GetHwnd(), &client);
+		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+		return;
+	}
+	if (!m_csvTableSnapshot || !GetDocument() ||
+		m_csvTableSnapshot->DocumentVersion() != GetDocument()->m_uCurlSyntaxVersion) {
+		SendStatusMessage(L"CSV テーブルの解析が完了してから実行してください。");
+		return;
+	}
+	try {
+		if (!m_pCSVValidationService) m_pCSVValidationService = std::make_unique<csvtable::CSVValidationService>();
+	} catch (...) {
+		SendStatusMessage(L"CSV チェックを開始できませんでした。");
+		return;
+	}
+	m_bCSVValidationListActive = true;
+	m_bCSVValidationStale = true;
+	CreateCurlSyntaxErrorList();
+	if (!m_hwndCurlSyntaxErrorList) return;
+	m_bCurlSyntaxErrorListVisible = true;
+	if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_SHOW);
+	::ShowWindow(m_hwndCurlSyntaxErrorList, SW_SHOW);
+	RefreshCurlSyntaxErrorList();
+	RECT client{};
+	::GetClientRect(GetHwnd(), &client);
+	OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+	CEditDoc* document = GetDocument();
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	const HWND resultWindow = GetHwnd();
+	try {
+		csvtable::ValidationOptions options;
+		options.hasHeader = m_bCSVHasHeader;
+		m_pCSVValidationService->Schedule(documentId, m_csvTableSnapshot, std::move(options),
+			[this, resultWindow](csvtable::ValidationResult result) {
+				{
+					std::lock_guard<std::mutex> lock(m_csvValidationMailboxMutex);
+					m_csvValidationMailbox = std::move(result);
+				}
+				if (!::PostMessage(resultWindow, MYWM_CSV_VALIDATION_RESULT, 0, 0)) {
+					std::lock_guard<std::mutex> lock(m_csvValidationMailboxMutex);
+					m_csvValidationMailbox.reset();
+				}
+			});
+	} catch (...) {
+		m_bCSVValidationStale = false;
+		SendStatusMessage(L"CSV チェック要求を作成できませんでした。");
+	}
+}
+
+void CEditWnd::AcceptCSVValidationResult()
+{
+	std::optional<csvtable::ValidationResult> result;
+	{
+		std::lock_guard<std::mutex> lock(m_csvValidationMailboxMutex);
+		result.swap(m_csvValidationMailbox);
+	}
+	if (!m_bCSVTableMode || !m_bCSVValidationListActive || !result) return;
+	const CEditDoc* document = GetDocument();
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	if (!document || result->documentId != documentId ||
+		result->documentVersion != document->m_uCurlSyntaxVersion || !m_csvTableSnapshot ||
+		result->documentVersion != m_csvTableSnapshot->DocumentVersion()) return;
+	if (result->failed) {
+		m_bCSVValidationStale = false;
+		m_bCSVValidationHasResult = false;
+		m_vCSVValidationDiagnostics.clear();
+		SendStatusMessage(L"CSV チェックに失敗しました。");
+	} else {
+		m_bCSVValidationStale = false;
+		m_bCSVValidationHasResult = true;
+		m_uCSVValidationVersion = result->documentVersion;
+		m_vCSVValidationDiagnostics = std::move(result->diagnostics);
+	}
+	RefreshCurlSyntaxErrorList();
+}
+
+void CEditWnd::SetCSVDelimiter(wchar_t delimiter, bool autoDetect)
+{
+	if (delimiter == L'"' || delimiter == L'\r' || delimiter == L'\n' || delimiter == L'\0') return;
+	m_chCSVDelimiter = delimiter;
+	m_bCSVAutoDetectDelimiter = autoDetect;
+	auto& settings = csvtable::GetUserSettings();
+	settings.delimiter = delimiter;
+	settings.autoDetectDelimiter = autoDetect;
+	if (m_bCSVValidationListActive || m_bCSVValidationHasResult) {
+		m_bCSVValidationStale = true;
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+		RefreshCurlSyntaxErrorList();
+	}
+	if (m_bCSVTableMode) ScheduleCSVTableParse();
+}
+
+void CEditWnd::ToggleCSVHeader()
+{
+	m_bCSVHasHeader = !m_bCSVHasHeader;
+	csvtable::GetUserSettings().hasHeader = m_bCSVHasHeader;
+	if (!m_bCSVTableMode || !m_csvTableSnapshot) return;
+	if (m_bCSVValidationListActive || m_bCSVValidationHasResult) {
+		m_bCSVValidationStale = true;
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+		RefreshCurlSyntaxErrorList();
+	}
+	try {
+		m_csvTableModel = std::make_unique<csvtable::CSVTableModel>(m_csvTableSnapshot, m_bCSVHasHeader);
+	} catch (...) {
+		m_bCSVHasHeader = !m_bCSVHasHeader;
+		csvtable::GetUserSettings().hasHeader = m_bCSVHasHeader;
+		SendStatusMessage(L"CSV のヘッダー設定を切り替えられませんでした。");
+		return;
+	}
+	m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+	PopulateCSVTableColumns();
+	ScheduleCSVTableQuery();
+}
+
+void CEditWnd::ScheduleCSVTableParse()
+{
+	if (!m_bCSVTableMode || !GetDocument()) return;
+	++m_uCSVQueryGeneration;
+	if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+	m_csvTableModel.reset();
+	m_csvTableSnapshot.reset();
+	m_vCSVTableViewRows.clear();
+	m_bCSVTableViewOrderIdentity = true;
+	if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	const auto clearTableProjection = [this]() {
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		if (m_hwndCSVTable) {
+			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+		}
+	};
+	const CEditDoc* document = GetDocument();
+	std::size_t length = 0;
+	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+		const int lineLength = static_cast<int>(line->GetLengthWithEOL());
+		if (lineLength < 0 || static_cast<std::size_t>(lineLength) > static_cast<std::size_t>(std::numeric_limits<int>::max()) - length) {
+			clearTableProjection();
+			SendStatusMessage(L"文書が大きすぎるため CSV テーブル表示にできません。");
+			return;
+		}
+		length += static_cast<std::size_t>(lineLength);
+	}
+	std::wstring text;
+	try {
+		text.reserve(length);
+		for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+			const int lineLength = static_cast<int>(line->GetLengthWithEOL());
+			if (lineLength > 0) text.append(line->GetPtr(), static_cast<std::size_t>(lineLength));
+		}
+	} catch (...) {
+		clearTableProjection();
+		SendStatusMessage(L"CSV テーブル用のメモリを確保できませんでした。");
+		return;
+	}
+	try {
+		if (!m_pCSVTableParseService) m_pCSVTableParseService = std::make_unique<csvtable::CSVTableParseService>();
+	} catch (...) {
+		clearTableProjection();
+		SendStatusMessage(L"CSV テーブル解析を開始できませんでした。");
+		return;
+	}
+	csvtable::ParseOptions options;
+	options.delimiter = m_chCSVDelimiter;
+	options.autoDetectDelimiter = m_bCSVAutoDetectDelimiter;
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	const std::uint64_t version = document->m_uCurlSyntaxVersion;
+	const HWND resultWindow = GetHwnd();
+	m_pCSVTableParseService->Schedule(documentId, version, std::move(text), options,
+		[this, resultWindow](csvtable::TableParseResult result) {
+			{
+				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+				m_csvTableMailbox = std::move(result);
+			}
+			if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_PARSE_RESULT, 0, 0)) {
+				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+				m_csvTableMailbox.reset();
+			}
+		}, true);
+}
+
+void CEditWnd::AcceptCSVTableParseResult()
+{
+	std::optional<csvtable::TableParseResult> result;
+	{
+		std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+		result.swap(m_csvTableMailbox);
+	}
+	if (!m_bCSVTableMode || !result) return;
+	const CEditDoc* document = GetDocument();
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	if (!document || result->documentId != documentId || result->documentVersion != document->m_uCurlSyntaxVersion) {
+		ScheduleCSVTableParse();
+		return;
+	}
+	if (result->failed || !result->snapshot) {
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		SendStatusMessage(L"CSV テーブルの解析に失敗しました。テキスト表示へ戻してください。");
+		return;
+	}
+	try {
+		m_csvTableSnapshot = std::move(result->snapshot);
+		m_csvTableModel = std::make_unique<csvtable::CSVTableModel>(m_csvTableSnapshot, m_bCSVHasHeader);
+		const auto previousFilterCount = m_vCSVFilters.size();
+		m_vCSVFilters.erase(std::remove_if(m_vCSVFilters.begin(), m_vCSVFilters.end(),
+			[this](const csvtable::Filter& filter) { return filter.column >= m_csvTableModel->ColumnCount(); }),
+			m_vCSVFilters.end());
+		if (previousFilterCount != m_vCSVFilters.size()) {
+			SendStatusMessage(L"列構成が変わったため、一部の CSV フィルターを解除しました。");
+		}
+		m_vCSVSortKeys.erase(std::remove_if(m_vCSVSortKeys.begin(), m_vCSVSortKeys.end(),
+			[this](const csvtable::SortKey& key) { return key.column >= m_csvTableModel->ColumnCount(); }),
+			m_vCSVSortKeys.end());
+		PopulateCSVTableColumns();
+	} catch (...) {
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		SendStatusMessage(L"CSV テーブルの表示用メモリを確保できませんでした。テキスト表示へ戻してください。");
+		return;
+	}
+	const auto errorCount = m_csvTableSnapshot->Parsed().errors.size();
+	if (errorCount != 0) {
+		const std::wstring message = L"CSV 構文エラー " + std::to_wstring(errorCount) + L" 件。原文は保持されています。";
+		SendStatusMessage(message.c_str());
+	}
+	if (!m_vCSVSortKeys.empty() || !m_vCSVFilters.empty()) {
+		ScheduleCSVTableQuery();
+	} else if (m_nCSVPendingEditRow >= 0 && m_nCSVPendingEditColumn > 0) {
+		const int row = m_nCSVPendingEditRow;
+		const int column = m_nCSVPendingEditColumn;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		BeginCSVCellEdit(row, column);
+	}
+}
+
+void CEditWnd::ScheduleCSVTableQuery()
+{
+	if (!m_bCSVTableMode || !m_csvTableModel || !m_csvTableSnapshot || !GetDocument()) return;
+	const std::uint64_t requestToken = ++m_uCSVQueryGeneration;
+	if (m_vCSVSortKeys.empty() && m_vCSVFilters.empty()) {
+		if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+		m_vCSVTableViewRows.clear();
+		m_bCSVTableViewOrderIdentity = true;
+		ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(m_csvTableModel->RowCount()),
+			LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		UpdateCSVSortIndicator();
+		::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+		SendStatusMessage((L"表示件数 " + std::to_wstring(m_csvTableModel->RowCount()) +
+			L" 件 / 全件数 " + std::to_wstring(m_csvTableModel->RowCount()) + L" 件").c_str());
+		if (m_nCSVSortPendingSourceRow >= 0) {
+			const int row = m_nCSVSortPendingSourceRow;
+			m_nCSVSortPendingSourceRow = -1;
+			ListView_SetItemState(m_hwndCSVTable, -1, 0, LVIS_FOCUSED | LVIS_SELECTED);
+			if (static_cast<std::size_t>(row) < m_csvTableModel->RowCount()) {
+				ListView_SetItemState(m_hwndCSVTable, row, LVIS_FOCUSED | LVIS_SELECTED,
+					LVIS_FOCUSED | LVIS_SELECTED);
+				ListView_EnsureVisible(m_hwndCSVTable, row, FALSE);
+			}
+		}
+		if (m_nCSVPendingEditRow >= 0 && m_nCSVPendingEditColumn > 0) {
+			const int row = m_nCSVPendingEditRow;
+			const int column = m_nCSVPendingEditColumn;
+			m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+			BeginCSVCellEdit(row, column);
+		}
+		return;
+	}
+	try {
+		if (!m_pCSVTableQueryService) m_pCSVTableQueryService = std::make_unique<csvtable::CSVTableQueryService>();
+	} catch (...) {
+		SendStatusMessage(L"CSV の並べ替え／絞り込みを開始できませんでした。");
+		return;
+	}
+	const std::vector<csvtable::SortKey> sortKeys = m_vCSVSortKeys;
+	const CEditDoc* document = GetDocument();
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	const std::uint64_t version = m_csvTableModel->DocumentVersion();
+	const HWND resultWindow = GetHwnd();
+	try {
+		m_pCSVTableQueryService->Schedule(documentId, version, m_csvTableSnapshot, m_bCSVHasHeader,
+			m_vCSVFilters, m_csvFilterLogic, std::move(sortKeys),
+			[this, resultWindow, requestToken](csvtable::TableQueryResult result) {
+				result.requestToken = requestToken;
+				{
+					std::lock_guard<std::mutex> lock(m_csvTableQueryMailboxMutex);
+					m_csvTableQueryMailbox = std::move(result);
+				}
+				if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_QUERY_RESULT, 0, 0)) {
+					std::lock_guard<std::mutex> lock(m_csvTableQueryMailboxMutex);
+					m_csvTableQueryMailbox.reset();
+				}
+			});
+	} catch (...) {
+		SendStatusMessage(L"CSV の並べ替え／絞り込み要求を作成できませんでした。");
+	}
+}
+
+void CEditWnd::AcceptCSVTableQueryResult()
+{
+	std::optional<csvtable::TableQueryResult> result;
+	{
+		std::lock_guard<std::mutex> lock(m_csvTableQueryMailboxMutex);
+		result.swap(m_csvTableQueryMailbox);
+	}
+	if (!m_bCSVTableMode || !result) return;
+	const CEditDoc* document = GetDocument();
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
+	if (!document || result->requestToken != m_uCSVQueryGeneration ||
+		result->documentId != documentId || !m_csvTableModel ||
+		result->documentVersion != document->m_uCurlSyntaxVersion ||
+		result->documentVersion != m_csvTableModel->DocumentVersion()) return;
+	if (result->failed) {
+		m_nCSVSortPendingSourceRow = -1;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		SendStatusMessage(L"CSV の並べ替えに失敗しました。表示順は変更していません。");
+		return;
+	}
+	if (result->viewOrder.invalidFilter != static_cast<std::size_t>(-1)) {
+		m_nCSVSortPendingSourceRow = -1;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		SendStatusMessage(L"CSV の正規表現または数値フィルター条件を確認してください。");
+		return;
+	}
+	m_bCSVTableViewOrderIdentity = result->viewOrder.identity;
+	m_vCSVTableViewRows = std::move(result->viewOrder.rows);
+	bool invalidRows = !m_bCSVTableViewOrderIdentity &&
+		m_vCSVTableViewRows.size() > m_csvTableModel->RowCount();
+	if (!m_bCSVTableViewOrderIdentity && !invalidRows) {
+		invalidRows = std::any_of(m_vCSVTableViewRows.begin(), m_vCSVTableViewRows.end(),
+			[this](std::size_t row) { return row >= m_csvTableModel->RowCount(); });
+	}
+	if (invalidRows) {
+		m_vCSVTableViewRows.clear();
+		m_bCSVTableViewOrderIdentity = true;
+		SendStatusMessage(L"CSV の表示順を適用できませんでした。元の順序を表示します。");
+	}
+	const std::size_t displayCount = m_bCSVTableViewOrderIdentity
+		? m_csvTableModel->RowCount() : m_vCSVTableViewRows.size();
+	ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(displayCount),
+		LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	UpdateCSVSortIndicator();
+	::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+	SendStatusMessage((L"表示件数 " + std::to_wstring(displayCount) + L" 件 / 全件数 " +
+		std::to_wstring(m_csvTableModel->RowCount()) + L" 件").c_str());
+	if (m_nCSVSortPendingSourceRow >= 0) {
+		const std::size_t sourceRow = static_cast<std::size_t>(m_nCSVSortPendingSourceRow);
+		m_nCSVSortPendingSourceRow = -1;
+		int displayRow = -1;
+		if (m_bCSVTableViewOrderIdentity) {
+			displayRow = static_cast<int>(sourceRow);
+		} else {
+			const auto it = std::find(m_vCSVTableViewRows.begin(), m_vCSVTableViewRows.end(), sourceRow);
+			if (it != m_vCSVTableViewRows.end()) displayRow = static_cast<int>(it - m_vCSVTableViewRows.begin());
+		}
+		ListView_SetItemState(m_hwndCSVTable, -1, 0, LVIS_FOCUSED | LVIS_SELECTED);
+		if (displayRow >= 0) {
+			ListView_SetItemState(m_hwndCSVTable, displayRow, LVIS_FOCUSED | LVIS_SELECTED, LVIS_FOCUSED | LVIS_SELECTED);
+			ListView_EnsureVisible(m_hwndCSVTable, displayRow, FALSE);
+		}
+	}
+	if (m_nCSVPendingEditRow >= 0 && m_nCSVPendingEditColumn > 0) {
+		const std::size_t sourceRow = static_cast<std::size_t>(m_nCSVPendingEditRow);
+		int displayRow = -1;
+		if (m_bCSVTableViewOrderIdentity) {
+			displayRow = static_cast<int>(sourceRow);
+		} else {
+			const auto it = std::find(m_vCSVTableViewRows.begin(), m_vCSVTableViewRows.end(), sourceRow);
+			if (it != m_vCSVTableViewRows.end()) displayRow = static_cast<int>(it - m_vCSVTableViewRows.begin());
+		}
+		const int column = m_nCSVPendingEditColumn;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		if (displayRow >= 0) {
+			ListView_SetItemState(m_hwndCSVTable, displayRow, LVIS_FOCUSED | LVIS_SELECTED, LVIS_FOCUSED | LVIS_SELECTED);
+			ListView_EnsureVisible(m_hwndCSVTable, displayRow, FALSE);
+			BeginCSVCellEdit(displayRow, column);
+		}
+	}
+	if (m_uCSVValidationPendingOffset != static_cast<std::size_t>(-1)) {
+		const std::size_t textOffset = m_uCSVValidationPendingOffset;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		GoToCSVValidationDiagnostic(textOffset);
+	}
+}
+
+void CEditWnd::ShowCSVFilterMenu(std::size_t column, POINT screenPoint)
+{
+	if (!m_bCSVTableMode || !m_csvTableModel || column >= m_csvTableModel->ColumnCount()) return;
+	enum : UINT {
+		FilterContains = 1, FilterNotContains, FilterEquals, FilterStarts, FilterEnds,
+		FilterRegex, FilterNumberGreater, FilterNumberLess, FilterNumberEqual,
+		FilterEmpty, FilterNonEmpty, FilterClearColumn, FilterClearAll, FilterToggleLogic,
+		SortString, SortNumeric, SortDate, SortNatural, SortRemoveColumn, SortClearAll
+	};
+	HMENU menu = ::CreatePopupMenu();
+	if (!menu) return;
+	const std::wstring title = m_csvTableModel->ColumnTitle(column);
+	const std::wstring titleLine = L"列「" + title + L"」";
+	::AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, titleLine.c_str());
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, FilterContains, L"次を含む...");
+	::AppendMenuW(menu, MF_STRING, FilterNotContains, L"次を含まない...");
+	::AppendMenuW(menu, MF_STRING, FilterEquals, L"完全一致...");
+	::AppendMenuW(menu, MF_STRING, FilterStarts, L"次で始まる...");
+	::AppendMenuW(menu, MF_STRING, FilterEnds, L"次で終わる...");
+	::AppendMenuW(menu, MF_STRING, FilterRegex, L"正規表現...");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, FilterNumberGreater, L"数値が次より大きい...");
+	::AppendMenuW(menu, MF_STRING, FilterNumberLess, L"数値が次より小さい...");
+	::AppendMenuW(menu, MF_STRING, FilterNumberEqual, L"数値が次と等しい...");
+	::AppendMenuW(menu, MF_STRING, FilterEmpty, L"空欄");
+	::AppendMenuW(menu, MF_STRING, FilterNonEmpty, L"空欄以外");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, FilterClearColumn, L"この列の条件を解除");
+	::AppendMenuW(menu, MF_STRING, FilterClearAll, L"すべての条件を解除");
+	::AppendMenuW(menu, MF_STRING, FilterToggleLogic,
+		m_csvFilterLogic == csvtable::FilterLogic::Or
+			? L"複数条件を AND で結合" : L"複数条件を OR で結合");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"並べ替え（Shift+クリックで複数列）");
+	::AppendMenuW(menu, MF_STRING, SortString, L"文字列の昇順で並べ替え");
+	::AppendMenuW(menu, MF_STRING, SortNumeric, L"数値の昇順で並べ替え");
+	::AppendMenuW(menu, MF_STRING, SortDate, L"日付の昇順で並べ替え");
+	::AppendMenuW(menu, MF_STRING, SortNatural, L"自然順の昇順で並べ替え");
+	::AppendMenuW(menu, MF_STRING, SortRemoveColumn, L"この列を並べ替え条件から外す");
+	::AppendMenuW(menu, MF_STRING, SortClearAll, L"並べ替えを解除");
+	const auto existing = std::find_if(m_vCSVFilters.begin(), m_vCSVFilters.end(),
+		[column](const csvtable::Filter& filter) { return filter.column == column; });
+	::EnableMenuItem(menu, FilterClearColumn, MF_BYCOMMAND |
+		(existing == m_vCSVFilters.end() ? MF_GRAYED : MF_ENABLED));
+	::EnableMenuItem(menu, FilterClearAll, MF_BYCOMMAND |
+		(m_vCSVFilters.empty() ? MF_GRAYED : MF_ENABLED));
+	::CheckMenuItem(menu, FilterToggleLogic, MF_BYCOMMAND |
+		(m_csvFilterLogic == csvtable::FilterLogic::Or ? MF_CHECKED : MF_UNCHECKED));
+	const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+		screenPoint.x, screenPoint.y, 0, GetHwnd(), nullptr);
+	::DestroyMenu(menu);
+	if (command >= SortString && command <= SortClearAll) {
+		if (command == SortClearAll) {
+			m_vCSVSortKeys.clear();
+		} else if (command == SortRemoveColumn) {
+			m_vCSVSortKeys.erase(std::remove_if(m_vCSVSortKeys.begin(), m_vCSVSortKeys.end(),
+				[column](const csvtable::SortKey& key) { return key.column == column; }), m_vCSVSortKeys.end());
+		} else {
+			const csvtable::SortKind kind = command == SortNumeric ? csvtable::SortKind::Numeric
+				: command == SortDate ? csvtable::SortKind::Date
+				: command == SortNatural ? csvtable::SortKind::Natural : csvtable::SortKind::String;
+			auto key = std::find_if(m_vCSVSortKeys.begin(), m_vCSVSortKeys.end(),
+				[column](const csvtable::SortKey& item) { return item.column == column; });
+			if (key == m_vCSVSortKeys.end()) {
+				m_vCSVSortKeys.insert(m_vCSVSortKeys.begin(), { column, kind, false });
+			} else {
+				csvtable::SortKey updated = *key;
+				updated.kind = kind;
+				updated.descending = false;
+				m_vCSVSortKeys.erase(key);
+				m_vCSVSortKeys.insert(m_vCSVSortKeys.begin(), updated);
+			}
+		}
+		const int focusedRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_FOCUSED);
+		m_nCSVSortPendingSourceRow = focusedRow >= 0
+			? static_cast<int>(CSVSourceRow(static_cast<std::size_t>(focusedRow))) : -1;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		UpdateCSVSortIndicator();
+		ScheduleCSVTableQuery();
+		return;
+	}
+
+	csvtable::Filter filter;
+	filter.column = column;
+	bool needsValue = true;
+	switch (command) {
+	case FilterContains: filter.op = csvtable::FilterOperator::Contains; break;
+	case FilterNotContains: filter.op = csvtable::FilterOperator::NotContains; break;
+	case FilterEquals: filter.op = csvtable::FilterOperator::Equals; break;
+	case FilterStarts: filter.op = csvtable::FilterOperator::StartsWith; break;
+	case FilterEnds: filter.op = csvtable::FilterOperator::EndsWith; break;
+	case FilterRegex: filter.op = csvtable::FilterOperator::Regex; break;
+	case FilterNumberGreater: filter.op = csvtable::FilterOperator::NumberGreater; break;
+	case FilterNumberLess: filter.op = csvtable::FilterOperator::NumberLess; break;
+	case FilterNumberEqual: filter.op = csvtable::FilterOperator::NumberEqual; break;
+	case FilterEmpty: filter.op = csvtable::FilterOperator::Empty; needsValue = false; break;
+	case FilterNonEmpty: filter.op = csvtable::FilterOperator::NonEmpty; needsValue = false; break;
+	case FilterClearColumn:
+		m_vCSVFilters.erase(std::remove_if(m_vCSVFilters.begin(), m_vCSVFilters.end(),
+			[column](const csvtable::Filter& item) { return item.column == column; }), m_vCSVFilters.end());
+		break;
+	case FilterClearAll:
+		m_vCSVFilters.clear();
+		break;
+	case FilterToggleLogic:
+		m_csvFilterLogic = m_csvFilterLogic == csvtable::FilterLogic::And
+			? csvtable::FilterLogic::Or : csvtable::FilterLogic::And;
+		break;
+	default:
+		return;
+	}
+	if (needsValue && command != FilterClearColumn && command != FilterClearAll &&
+		command != FilterToggleLogic) {
+		WCHAR value[512]{};
+		if (existing != m_vCSVFilters.end()) {
+			wcsncpy_s(value, existing->value.c_str(), _TRUNCATE);
+		}
+		CDlgInput1 dialog;
+		if (!dialog.DoModal(CEditApp::getInstance()->GetAppInstance(), GetHwnd(),
+			L"CSVフィルター", L"フィルター値を入力してください。",
+			_countof(value) - 1, value)) return;
+		filter.value = value;
+		m_vCSVFilters.erase(std::remove_if(m_vCSVFilters.begin(), m_vCSVFilters.end(),
+			[column](const csvtable::Filter& item) { return item.column == column; }), m_vCSVFilters.end());
+		m_vCSVFilters.push_back(std::move(filter));
+	} else if (!needsValue) {
+		m_vCSVFilters.erase(std::remove_if(m_vCSVFilters.begin(), m_vCSVFilters.end(),
+			[column](const csvtable::Filter& item) { return item.column == column; }), m_vCSVFilters.end());
+		m_vCSVFilters.push_back(std::move(filter));
+	}
+	const int focusedRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_FOCUSED);
+	m_nCSVSortPendingSourceRow = focusedRow >= 0
+		? static_cast<int>(CSVSourceRow(static_cast<std::size_t>(focusedRow))) : -1;
+	m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+	ScheduleCSVTableQuery();
+	SendStatusMessage((L"CSV フィルター: " + std::to_wstring(m_vCSVFilters.size()) + L" 列").c_str());
+}
+
+void CEditWnd::ShowCSVColumnMenuForCurrentColumn()
+{
+	if (!m_bCSVTableMode || !m_csvTableModel || m_csvTableModel->ColumnCount() == 0) {
+		SendStatusMessage(L"CSV テーブル表示に切り替えてください。");
+		return;
+	}
+	const int column = std::clamp(m_nCSVCurrentColumn, 1,
+		static_cast<int>(m_csvTableModel->ColumnCount())) - 1;
+	POINT screenPoint{};
+	::GetCursorPos(&screenPoint);
+	ShowCSVFilterMenu(static_cast<std::size_t>(column), screenPoint);
+}
+
+void CEditWnd::UpdateCSVSelectionStatistics()
+{
+	if (!m_bCSVTableMode || !m_hwndCSVTable || !m_csvTableModel || m_nCSVCurrentColumn <= 0) return;
+	const int selectedCount = ListView_GetSelectedCount(m_hwndCSVTable);
+	if (selectedCount <= 0) {
+		const std::size_t displayCount = m_bCSVTableViewOrderIdentity
+			? m_csvTableModel->RowCount() : m_vCSVTableViewRows.size();
+		SendStatusMessage((L"表示件数 " + std::to_wstring(displayCount) + L" 件 / 全件数 " +
+			std::to_wstring(m_csvTableModel->RowCount()) + L" 件").c_str());
+		return;
+	}
+	std::vector<csvtable::CellPosition> cells;
+	try {
+		cells.reserve(static_cast<std::size_t>(selectedCount));
+		for (int displayRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_SELECTED);
+			displayRow >= 0;
+			displayRow = ListView_GetNextItem(m_hwndCSVTable, displayRow, LVNI_SELECTED)) {
+			const std::size_t sourceRow = CSVSourceRow(static_cast<std::size_t>(displayRow));
+			if (sourceRow < m_csvTableModel->RowCount()) {
+				cells.push_back({ sourceRow, static_cast<std::size_t>(m_nCSVCurrentColumn - 1) });
+			}
+		}
+		const csvtable::StatisticsResult result = csvtable::CalculateStatistics(*m_csvTableModel, cells);
+		std::wstring message = L"選択 " + std::to_wstring(result.selectedCount) + L" 件 / 数値 " +
+			std::to_wstring(result.numericCount) + L" 件";
+		if (result.sum) {
+			message += L" / 合計 " + std::to_wstring(*result.sum) + L" / 平均 " +
+				std::to_wstring(*result.average) + L" / 最大 " + std::to_wstring(*result.maximum) +
+				L" / 最小 " + std::to_wstring(*result.minimum);
+		}
+		SendStatusMessage(message.c_str());
+	} catch (...) {
+		SendStatusMessage(L"選択範囲の CSV 統計を計算できませんでした。");
+	}
+}
+
+bool CEditWnd::ApplyCSVEditBatch(csvtable::TextEditBatch patches, int pendingEditRow, int pendingEditColumn)
+{
+	FinishCSVCellEdit(true);
+	CEditDoc* document = GetDocument();
+	if (!m_bCSVTableMode || !document || !m_csvTableModel || !m_csvTableSnapshot ||
+		m_csvTableModel->DocumentVersion() != document->m_uCurlSyntaxVersion) {
+		SendStatusMessage(L"CSV テーブルの状態が更新されました。再度操作してください。");
+		return false;
+	}
+	if (patches.empty()) {
+		SendStatusMessage(L"この CSV では指定した行または列を変更できませんでした。");
+		return false;
+	}
+	const std::wstring_view source = m_csvTableSnapshot->Text();
+	std::sort(patches.begin(), patches.end(), [](const auto& lhs, const auto& rhs) {
+		return lhs.begin < rhs.begin;
+	});
+	std::size_t previousEnd = 0;
+	for (const auto& patch : patches) {
+		if (!patch.valid || patch.documentVersion != m_csvTableModel->DocumentVersion() ||
+			patch.begin > source.size() || patch.deleteLength > source.size() - patch.begin ||
+			patch.begin < previousEnd || patch.replacement.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+			SendStatusMessage(L"CSV の編集範囲を安全に特定できませんでした。");
+			return false;
+		}
+		previousEnd = patch.begin + patch.deleteLength;
+	}
+	if (patches.size() > 1) {
+		if (source.size() > CSV_BATCH_EDIT_MAX_SOURCE_CHARS || patches.size() > CSV_BATCH_EDIT_MAX_RECORDS) {
+			SendStatusMessage(L"大きな CSV では複数行一括編集を中止しました。原文を保護するためテキスト表示で編集してください。");
+			return false;
+		}
+		try {
+			const std::size_t begin = patches.front().begin;
+			const std::size_t end = patches.back().begin + patches.back().deleteLength;
+			std::wstring replacement;
+			replacement.reserve(end - begin);
+			std::size_t cursor = begin;
+			for (const auto& patch : patches) {
+				replacement.append(source.substr(cursor, patch.begin - cursor));
+				replacement.append(patch.replacement);
+				cursor = patch.begin + patch.deleteLength;
+			}
+			replacement.append(source.substr(cursor, end - cursor));
+			csvtable::TextEditPatch merged;
+			merged.begin = begin;
+			merged.deleteLength = end - begin;
+			merged.replacement = std::move(replacement);
+			merged.valid = true;
+			merged.documentVersion = m_csvTableModel->DocumentVersion();
+			patches.assign(1, std::move(merged));
+		} catch (...) {
+			SendStatusMessage(L"CSV の一括編集用メモリを確保できませんでした。");
+			return false;
+		}
+	}
+	const auto& patch = patches.front();
+	CLogicPoint logicFrom, logicTo;
+	if (!CSVOffsetToLogicPoint(patch.begin, &logicFrom) ||
+		!CSVOffsetToLogicPoint(patch.begin + patch.deleteLength, &logicTo)) {
+		SendStatusMessage(L"CSV の編集位置を文書上で特定できませんでした。");
+		return false;
+	}
+	try {
+		CLayoutRange layoutRange;
+		document->m_cLayoutMgr.LogicToLayout(CLogicRange(logicFrom, logicTo), &layoutRange);
+		CEditView& view = GetActiveView();
+		view.GetCaret().MoveCursor(layoutRange.GetFrom(), false);
+		view.GetSelectionInfo().DisableSelectArea(false);
+		if (logicFrom != logicTo) view.GetSelectionInfo().SetSelectArea(layoutRange);
+		if (pendingEditRow >= 0 && pendingEditColumn > 0) {
+			m_nCSVPendingEditRow = pendingEditRow;
+			m_nCSVPendingEditColumn = pendingEditColumn;
+		}
+		view.GetCommander().HandleCommand(F_INSTEXT_W, true,
+			reinterpret_cast<LPARAM>(patch.replacement.c_str()),
+			static_cast<LPARAM>(patch.replacement.size()), TRUE, 0);
+		return true;
+	} catch (...) {
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		SendStatusMessage(L"CSV の編集を適用できませんでした。文書内容を確認してください。");
+		return false;
+	}
+}
+
+void CEditWnd::ShowCSVTableContextMenu(POINT screenPoint, int displayRow, int subItem)
+{
+	if (!m_bCSVTableMode || !m_csvTableModel) return;
+	enum : UINT { AddRow = 1, DeleteRow, AddColumn, DeleteColumn };
+	HMENU menu = ::CreatePopupMenu();
+	if (!menu) return;
+	const auto& parsed = m_csvTableSnapshot->Parsed();
+	const bool canEditColumns = !parsed.records.empty() && parsed.records.size() <= CSV_BATCH_EDIT_MAX_RECORDS &&
+		m_csvTableSnapshot->Text().size() <= CSV_BATCH_EDIT_MAX_SOURCE_CHARS &&
+		std::none_of(parsed.records.begin(), parsed.records.end(), [](const csvtable::Record& record) {
+			return record.malformed;
+		});
+	::AppendMenuW(menu, MF_STRING, AddRow, L"行を追加");
+	::AppendMenuW(menu, MF_STRING, DeleteRow, L"この行を削除");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING | (canEditColumns ? 0 : MF_GRAYED), AddColumn,
+		canEditColumns ? L"列を追加" : L"列を追加（大きい CSV／不正行では無効）");
+	::AppendMenuW(menu, MF_STRING | (canEditColumns ? 0 : MF_GRAYED), DeleteColumn,
+		canEditColumns ? L"選択列を削除" : L"選択列を削除（大きい CSV／不正行では無効）");
+	const std::size_t sourceRow = displayRow >= 0 ? CSVSourceRow(static_cast<std::size_t>(displayRow))
+		: static_cast<std::size_t>(-1);
+	::EnableMenuItem(menu, DeleteRow, MF_BYCOMMAND |
+		(sourceRow < m_csvTableModel->RowCount() ? MF_ENABLED : MF_GRAYED));
+	const int column = subItem > 0 ? subItem - 1 : m_nCSVCurrentColumn - 1;
+	::EnableMenuItem(menu, DeleteColumn, MF_BYCOMMAND |
+		(column >= 0 && static_cast<std::size_t>(column) < m_csvTableModel->ColumnCount() ? MF_ENABLED : MF_GRAYED));
+	const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+		screenPoint.x, screenPoint.y, 0, GetHwnd(), nullptr);
+	::DestroyMenu(menu);
+	if (command == 0) return;
+	if (subItem > 0) m_nCSVCurrentColumn = subItem;
+	if (command == AddRow) {
+		const int newRow = static_cast<int>(m_csvTableModel->RowCount());
+		ApplyCSVEditBatch({ m_csvTableModel->PrepareAppendRow({}) }, newRow, 1);
+	} else if (command == DeleteRow && sourceRow < m_csvTableModel->RowCount()) {
+		ApplyCSVEditBatch({ m_csvTableModel->PrepareDeleteRow(sourceRow) });
+	} else if (command == AddColumn && canEditColumns) {
+		ApplyCSVEditBatch(m_csvTableModel->PrepareAppendColumn());
+	} else if (command == DeleteColumn && canEditColumns && column >= 0 &&
+		static_cast<std::size_t>(column) < m_csvTableModel->ColumnCount()) {
+		ApplyCSVEditBatch(m_csvTableModel->PrepareDeleteColumn(static_cast<std::size_t>(column)));
+	}
+}
+
+void CEditWnd::ShowCSVTableEditMenu()
+{
+	if (!m_bCSVTableMode || !m_hwndCSVTable) {
+		SendStatusMessage(L"CSV テーブル表示に切り替えてください。");
+		return;
+	}
+	int displayRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_FOCUSED);
+	if (displayRow < 0) displayRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_SELECTED);
+	POINT screenPoint{};
+	::GetCursorPos(&screenPoint);
+	ShowCSVTableContextMenu(screenPoint, displayRow, m_nCSVCurrentColumn);
+}
+
+std::size_t CEditWnd::CSVSourceRow(std::size_t displayRow) const noexcept
+{
+	if (m_bCSVTableViewOrderIdentity) return displayRow;
+	return displayRow < m_vCSVTableViewRows.size()
+		? m_vCSVTableViewRows[displayRow]
+		: static_cast<std::size_t>(-1);
+}
+
+void CEditWnd::UpdateCSVSortIndicator()
+{
+	if (!m_hwndCSVTable) return;
+	HWND header = ListView_GetHeader(m_hwndCSVTable);
+	if (!header) return;
+	const int count = Header_GetItemCount(header);
+	for (int index = 0; index < count; ++index) {
+		HDITEMW item{};
+		item.mask = HDI_FORMAT;
+		if (!::SendMessageW(header, HDM_GETITEMW, index, reinterpret_cast<LPARAM>(&item))) continue;
+		item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+		const auto sort = std::find_if(m_vCSVSortKeys.begin(), m_vCSVSortKeys.end(),
+			[index](const csvtable::SortKey& key) { return key.column + 1 == static_cast<std::size_t>(index); });
+		if (sort != m_vCSVSortKeys.end()) item.fmt |= sort->descending ? HDF_SORTDOWN : HDF_SORTUP;
+		::SendMessageW(header, HDM_SETITEMW, index, reinterpret_cast<LPARAM>(&item));
+	}
+}
+
+void CEditWnd::PopulateCSVTableColumns()
+{
+	if (!m_hwndCSVTable || !m_csvTableModel) return;
+	const std::size_t columns = m_csvTableModel->ColumnCount();
+	const std::size_t rows = m_csvTableModel->RowCount();
+	if (columns >= static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+		rows > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+		SendStatusMessage(L"行数または列数が多すぎるため CSV テーブル表示にできません。");
+		return;
+	}
+	ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	HWND header = ListView_GetHeader(m_hwndCSVTable);
+	int count = header ? Header_GetItemCount(header) : 0;
+	while (count-- > 0) ListView_DeleteColumn(m_hwndCSVTable, count);
+	std::wstring title = L"#";
+	LVCOLUMNW column{};
+	column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+	column.pszText = title.data();
+	column.cx = DpiScaleX(58);
+	column.iSubItem = 0;
+	ListView_InsertColumn(m_hwndCSVTable, 0, &column);
+	for (std::size_t index = 0; index < columns; ++index) {
+		title = m_csvTableModel->ColumnTitle(index);
+		column.pszText = title.data();
+		const auto& savedWidths = csvtable::GetUserSettings().columnWidths;
+		const int savedWidth = index < savedWidths.size() && savedWidths[index] >= 24
+			? savedWidths[index] : 140;
+		column.cx = DpiScaleX(savedWidth);
+		column.iSubItem = static_cast<int>(index + 1);
+		ListView_InsertColumn(m_hwndCSVTable, static_cast<int>(index + 1), &column);
+	}
+	ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(rows), LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	m_vCSVTableViewRows.clear();
+	m_bCSVTableViewOrderIdentity = true;
+	UpdateCSVSortIndicator();
+	::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+}
+
+void CEditWnd::AutoSizeCSVTableColumns()
+{
+	if (!m_bCSVTableMode || !m_hwndCSVTable || !m_csvTableModel || !m_csvTableSnapshot) {
+		SendStatusMessage(L"CSV テーブル表示に切り替えてください。");
+		return;
+	}
+	HDC dc = ::GetDC(m_hwndCSVTable);
+	if (!dc) {
+		SendStatusMessage(L"列幅を自動調整できませんでした。");
+		return;
+	}
+	HFONT font = reinterpret_cast<HFONT>(::SendMessageW(m_hwndCSVTable, WM_GETFONT, 0, 0));
+	HGDIOBJ previousFont = font ? ::SelectObject(dc, font) : nullptr;
+	const auto measure = [dc](std::wstring_view value) {
+		SIZE size{};
+		const int length = static_cast<int>(std::min<std::size_t>(value.size(), 512));
+		return ::GetTextExtentPoint32W(dc, value.data(), length, &size) ? size.cx : 0;
+	};
+	auto& widths = csvtable::GetUserSettings().columnWidths;
+	const std::size_t columnCount = std::min<std::size_t>(m_csvTableModel->ColumnCount(), 512);
+	const std::size_t sampleRows = std::min<std::size_t>(m_csvTableModel->RowCount(), 200);
+	try {
+		if (widths.size() < columnCount) widths.resize(columnCount, 0);
+		for (std::size_t columnIndex = 0; columnIndex < columnCount; ++columnIndex) {
+			std::wstring title;
+			const auto& records = m_csvTableSnapshot->Parsed().records;
+			if (m_csvTableModel->HasHeader() && !records.empty()) {
+				if (const csvtable::Field* field = m_csvTableSnapshot->Parsed().FieldAt(records.front(), columnIndex)) {
+					if (field->rawLength <= 512) title = csvtable::DecodeField(m_csvTableSnapshot->Text(), *field);
+					else title.assign(m_csvTableSnapshot->Text().substr(field->rawBegin, 512));
+				}
+			} else {
+				title = m_csvTableModel->ColumnTitle(columnIndex);
+			}
+			std::replace(title.begin(), title.end(), L'\r', L' ');
+			std::replace(title.begin(), title.end(), L'\n', L' ');
+			int widthPixels = measure(title);
+			for (std::size_t row = 0; row < sampleRows; ++row) {
+				const csvtable::RawFieldRange range = m_csvTableModel->CellRawRange(row, columnIndex);
+				if (!range.valid) continue;
+				int cellWidth = 0;
+				if (range.length <= 512) {
+					std::wstring value = m_csvTableModel->CellText(row, columnIndex);
+					std::replace(value.begin(), value.end(), L'\r', L' ');
+					std::replace(value.begin(), value.end(), L'\n', L' ');
+					cellWidth = measure(value);
+				} else {
+					std::wstring raw(m_csvTableSnapshot->Text().substr(range.begin, 512));
+					std::replace(raw.begin(), raw.end(), L'\r', L' ');
+					std::replace(raw.begin(), raw.end(), L'\n', L' ');
+					cellWidth = measure(raw);
+				}
+				widthPixels = std::max(widthPixels, cellWidth);
+			}
+			const int width = std::clamp(DpiUnscaleX(widthPixels + DpiScaleX(28)), 40, 600);
+			widths[columnIndex] = width;
+			ListView_SetColumnWidth(m_hwndCSVTable, static_cast<int>(columnIndex + 1), DpiScaleX(width));
+		}
+	} catch (...) {
+		if (previousFont && previousFont != HGDI_ERROR) ::SelectObject(dc, previousFont);
+		::ReleaseDC(m_hwndCSVTable, dc);
+		SendStatusMessage(L"列幅の計算中にメモリを確保できませんでした。");
+		return;
+	}
+	if (previousFont && previousFont != HGDI_ERROR) ::SelectObject(dc, previousFont);
+	::ReleaseDC(m_hwndCSVTable, dc);
+	SendStatusMessage((L"先頭 " + std::to_wstring(sampleRows) + L" 件から列幅を自動調整しました。").c_str());
+}
+
+bool CEditWnd::CSVOffsetToLogicPoint(std::size_t offset, CLogicPoint* point) const
+{
+	const CEditDoc* document = GetDocument();
+	if (!document || !point || offset > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
+	std::size_t consumed = 0;
+	int lineNumber = 0;
+	const CDocLine* lastLine = nullptr;
+	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+		lastLine = line;
+		const int length = static_cast<int>(line->GetLengthWithEOL());
+		if (length < 0) return false;
+		if (offset < consumed + static_cast<std::size_t>(length)) {
+			*point = CLogicPoint(static_cast<int>(offset - consumed), lineNumber);
+			return true;
+		}
+		consumed += static_cast<std::size_t>(length);
+		++lineNumber;
+	}
+	if (!lastLine || offset != consumed || lineNumber == 0) return false;
+	*point = CLogicPoint(static_cast<int>(lastLine->GetLengthWithEOL()), lineNumber - 1);
+	return true;
+}
+
+void CEditWnd::BeginCSVCellEdit(int row, int column)
+{
+	if (!m_bCSVTableMode || !m_hwndCSVTable || row < 0 || column < 1) return;
+	FinishCSVCellEdit(true);
+	if (!m_csvTableModel || !m_csvTableSnapshot) return;
+	if (!GetDocument() || m_csvTableModel->DocumentVersion() != GetDocument()->m_uCurlSyntaxVersion) return;
+	const std::size_t dataColumn = static_cast<std::size_t>(column - 1);
+	const std::size_t dataRow = CSVSourceRow(static_cast<std::size_t>(row));
+	if (dataRow >= m_csvTableModel->RowCount() || dataColumn >= m_csvTableModel->ColumnCount()) return;
+	const std::size_t recordIndex = m_csvTableModel->RecordIndexForRow(dataRow);
+	const auto& parsed = m_csvTableSnapshot->Parsed();
+	if (recordIndex >= parsed.records.size()) return;
+	const csvtable::Field* field = parsed.FieldAt(parsed.records[recordIndex], dataColumn);
+	if (!field || field->malformed) {
+		SendStatusMessage(L"不正な CSV フィールドは表形式では編集できません。テキスト表示で修正してください。");
+		return;
+	}
+	RECT rect{};
+	if (!ListView_GetSubItemRect(m_hwndCSVTable, row, column, LVIR_BOUNDS, &rect)) return;
+	std::wstring value;
+	try {
+		value = m_csvTableModel->CellText(dataRow, dataColumn);
+	} catch (...) {
+		SendStatusMessage(L"セル編集用のメモリを確保できませんでした。");
+		return;
+	}
+	const bool multiline = value.find_first_of(L"\r\n") != std::wstring::npos;
+	if (multiline) {
+		RECT client{};
+		::GetClientRect(m_hwndCSVTable, &client);
+		rect.bottom = std::min<LONG>(rect.bottom + DpiScaleY(80), client.bottom);
+	}
+	DWORD editStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL;
+	if (multiline) editStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL;
+	HWND edit = ::CreateWindowExW(0, L"EDIT", value.c_str(), editStyle,
+		rect.left, rect.top, std::max<LONG>(1, rect.right - rect.left), std::max<LONG>(1, rect.bottom - rect.top),
+		m_hwndCSVTable, nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
+	if (!edit) {
+		SendStatusMessage(L"セル編集欄を作成できませんでした。");
+		return;
+	}
+	m_hwndCSVCellEdit = edit;
+	m_nCSVEditingRow = row;
+	m_nCSVEditingColumn = column;
+	::SendMessageW(edit, EM_SETLIMITTEXT, static_cast<WPARAM>(std::numeric_limits<int>::max()), 0);
+	::SendMessageW(edit, WM_SETFONT, ::SendMessageW(m_hwndCSVTable, WM_GETFONT, 0, 0), FALSE);
+	::SetWindowSubclass(edit, &CEditWnd::CSVCellEditProc, 1, reinterpret_cast<DWORD_PTR>(this));
+	::SendMessageW(edit, EM_SETSEL, 0, -1);
+	::SetFocus(edit);
+}
+
+void CEditWnd::FinishCSVCellEdit(bool commit)
+{
+	if (!m_hwndCSVCellEdit || m_bCSVFinishingCellEdit) return;
+	m_bCSVFinishingCellEdit = true;
+	HWND edit = m_hwndCSVCellEdit;
+	const int row = m_nCSVEditingRow;
+	const int column = m_nCSVEditingColumn;
+	std::wstring value;
+	if (commit) {
+		try {
+			const int length = ::GetWindowTextLengthW(edit);
+			if (length >= 0) {
+				value.resize(static_cast<std::size_t>(length) + 1);
+				::GetWindowTextW(edit, value.data(), length + 1);
+				value.resize(static_cast<std::size_t>(length));
+			}
+		} catch (...) {
+			commit = false;
+			SendStatusMessage(L"セル編集結果を確保できませんでした。変更を取り消しました。");
+		}
+	}
+	::RemoveWindowSubclass(edit, &CEditWnd::CSVCellEditProc, 1);
+	m_hwndCSVCellEdit = nullptr;
+	m_nCSVEditingRow = m_nCSVEditingColumn = -1;
+	::DestroyWindow(edit);
+	if (commit && m_csvTableModel && m_csvTableSnapshot && row >= 0 && column > 0 && GetDocument() &&
+		m_csvTableModel->DocumentVersion() == GetDocument()->m_uCurlSyntaxVersion) {
+		try {
+			const std::size_t dataColumn = static_cast<std::size_t>(column - 1);
+			const std::size_t dataRow = CSVSourceRow(static_cast<std::size_t>(row));
+			if (dataRow >= m_csvTableModel->RowCount()) {
+				SendStatusMessage(L"表示中のセル位置が古いため、編集を適用しませんでした。");
+			} else {
+				const std::wstring oldValue = m_csvTableModel->CellText(dataRow, dataColumn);
+				if (value != oldValue) {
+					const auto patch = m_csvTableModel->PrepareCellEdit(dataRow, dataColumn, value);
+					CLogicPoint logicFrom, logicTo;
+					if (patch.valid && patch.replacement.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+						CSVOffsetToLogicPoint(patch.begin, &logicFrom) &&
+						CSVOffsetToLogicPoint(patch.begin + patch.deleteLength, &logicTo)) {
+						CLayoutRange layoutRange;
+						GetDocument()->m_cLayoutMgr.LogicToLayout(CLogicRange(logicFrom, logicTo), &layoutRange);
+						CEditView& view = GetActiveView();
+						view.GetCaret().MoveCursor(layoutRange.GetFrom(), false);
+						view.GetSelectionInfo().DisableSelectArea(false);
+						if (logicFrom != logicTo) view.GetSelectionInfo().SetSelectArea(layoutRange);
+						view.GetCommander().HandleCommand(F_INSTEXT_W, true,
+							reinterpret_cast<LPARAM>(patch.replacement.c_str()),
+							static_cast<LPARAM>(patch.replacement.size()), TRUE, 0);
+					} else {
+						SendStatusMessage(L"セルの原文範囲を特定できないため、編集を適用しませんでした。");
+					}
+				}
+			}
+		} catch (...) {
+			SendStatusMessage(L"セル編集を適用できませんでした。テキスト表示へ戻して確認してください。");
+		}
+	} else if (commit && row >= 0 && column > 0) {
+		SendStatusMessage(L"文書が更新されているため、古いセル編集を破棄しました。");
+	}
+	m_bCSVFinishingCellEdit = false;
+}
+
+LRESULT CALLBACK CEditWnd::CSVCellEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
+	[[maybe_unused]] UINT_PTR subclassId, DWORD_PTR referenceData)
+{
+	auto* owner = reinterpret_cast<CEditWnd*>(referenceData);
+	if (message == WM_KEYDOWN && owner) {
+		if (wParam == VK_ESCAPE) {
+			owner->FinishCSVCellEdit(false);
+			if (owner->m_hwndCSVTable) ::SetFocus(owner->m_hwndCSVTable);
+			return 0;
+		}
+		if (wParam == VK_RETURN) {
+			const bool multiline = (::GetWindowLongPtrW(hwnd, GWL_STYLE) & ES_MULTILINE) != 0;
+			const bool ctrl = (::GetKeyState(VK_CONTROL) & 0x8000) != 0;
+			if (!multiline || ctrl) {
+				owner->FinishCSVCellEdit(true);
+				if (owner->m_hwndCSVTable) ::SetFocus(owner->m_hwndCSVTable);
+				return 0;
+			}
+		}
+		if (wParam == VK_TAB) {
+			const int row = owner->m_nCSVEditingRow;
+			const std::size_t sourceRow = owner->CSVSourceRow(static_cast<std::size_t>(std::max(0, row)));
+			const bool backwards = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+			int column = owner->m_nCSVEditingColumn + (backwards ? -1 : 1);
+			if (column < 1) column = 1;
+			if (owner->m_csvTableModel && column > static_cast<int>(owner->m_csvTableModel->ColumnCount()))
+				column = static_cast<int>(owner->m_csvTableModel->ColumnCount());
+			const std::uint64_t versionBefore = owner->GetDocument() ? owner->GetDocument()->m_uCurlSyntaxVersion : 0;
+			owner->FinishCSVCellEdit(true);
+			if (owner->m_hwndCSVTable && column > 0) {
+				ListView_SetItemState(owner->m_hwndCSVTable, row, LVIS_FOCUSED | LVIS_SELECTED, LVIS_FOCUSED | LVIS_SELECTED);
+				ListView_EnsureVisible(owner->m_hwndCSVTable, row, FALSE);
+				owner->m_nCSVCurrentColumn = column;
+				if (owner->m_csvTableModel && owner->GetDocument() &&
+					owner->m_csvTableModel->DocumentVersion() == owner->GetDocument()->m_uCurlSyntaxVersion) {
+					owner->BeginCSVCellEdit(row, column);
+				} else if (owner->GetDocument() && owner->GetDocument()->m_uCurlSyntaxVersion != versionBefore) {
+					owner->m_nCSVPendingEditRow = static_cast<int>(sourceRow);
+					owner->m_nCSVPendingEditColumn = column;
+				}
+			}
+			return 0;
+		}
+	}
+	const LRESULT result = ::DefSubclassProc(hwnd, message, wParam, lParam);
+	if (message == WM_KILLFOCUS && owner && !owner->m_bCSVFinishingCellEdit) owner->FinishCSVCellEdit(true);
+	return result;
+}
+
+void CEditWnd::UpdateCSVTableLayout()
+{
+	if (!m_bCSVTableMode || !m_hwndCSVTable || !m_cSplitterWnd.GetHwnd()) return;
+	RECT rect{};
+	if (!::GetWindowRect(m_cSplitterWnd.GetHwnd(), &rect)) return;
+	::MapWindowPoints(nullptr, GetHwnd(), reinterpret_cast<POINT*>(&rect), 2);
+	::SetWindowPos(m_hwndCSVTable, HWND_TOP, rect.left, rect.top,
+		std::max<LONG>(0, rect.right - rect.left), std::max<LONG>(0, rect.bottom - rect.top),
+		SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 void CEditWnd::NotifyCurlSyntaxDocumentLoaded()
@@ -476,6 +2289,60 @@ void CEditWnd::RefreshCurlSyntaxErrorList()
 {
 	if (!m_hwndCurlSyntaxErrorList && !m_hwndCurlSyntaxErrorSummary) return;
 	const CEditDoc* document = GetDocument();
+	if (m_bCSVValidationListActive) {
+		std::size_t errors = 0;
+		std::size_t warnings = 0;
+		for (const auto& diagnostic : m_vCSVValidationDiagnostics) {
+			if (diagnostic.severity == csvtable::Severity::Error) ++errors;
+			else ++warnings;
+		}
+		if (m_hwndCurlSyntaxErrorSummary) {
+			std::wstring summary = m_bCSVValidationStale
+				? L"CSVチェック中 / 文書変更後は再チェックが必要です"
+				: L"CSV エラー " + std::to_wstring(errors) + L" 件 / 警告 " + std::to_wstring(warnings) + L" 件";
+			::SetWindowTextW(m_hwndCurlSyntaxErrorSummary, summary.c_str());
+		}
+		if (!m_hwndCurlSyntaxErrorList) return;
+		ListView_DeleteAllItems(m_hwndCurlSyntaxErrorList);
+		if (m_bCSVValidationStale) {
+			LVITEMW item{};
+			item.mask = LVIF_TEXT;
+			item.iItem = 0;
+			item.pszText = const_cast<LPWSTR>(L"文書が変更されたため、CSVチェック結果は古くなっています。再チェックしてください。");
+			ListView_InsertItem(m_hwndCurlSyntaxErrorList, &item);
+			return;
+		}
+		if (m_vCSVValidationDiagnostics.empty()) {
+			LVITEMW item{};
+			item.mask = LVIF_TEXT;
+			item.iItem = 0;
+			item.pszText = const_cast<LPWSTR>(L"CSV エラーはありません");
+			ListView_InsertItem(m_hwndCurlSyntaxErrorList, &item);
+			return;
+		}
+		const std::wstring fileName = document ? document->m_cDocFile.GetFileName() : L"";
+		for (std::size_t i = 0; i < m_vCSVValidationDiagnostics.size(); ++i) {
+			const auto& diagnostic = m_vCSVValidationDiagnostics[i];
+			const std::wstring severity = diagnostic.severity == csvtable::Severity::Error ? L"Error" : L"Warning";
+			const std::wstring location = L"R" + std::to_wstring(diagnostic.record) +
+				L" / L" + std::to_wstring(diagnostic.physicalLine);
+			const std::wstring column = std::to_wstring(diagnostic.column) +
+				(diagnostic.columnName.empty() ? L"" : L" (" + diagnostic.columnName + L")");
+			LVITEMW item{};
+			item.mask = LVIF_TEXT | LVIF_PARAM;
+			item.iItem = static_cast<int>(i);
+			item.lParam = static_cast<LPARAM>(diagnostic.textOffset);
+			item.pszText = const_cast<LPWSTR>(severity.c_str());
+			const int index = ListView_InsertItem(m_hwndCurlSyntaxErrorList, &item);
+			if (index < 0) continue;
+			ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 1, const_cast<LPWSTR>(fileName.c_str()));
+			ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 2, const_cast<LPWSTR>(location.c_str()));
+			ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 3, const_cast<LPWSTR>(column.c_str()));
+			ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 4, const_cast<LPWSTR>(diagnostic.code.c_str()));
+			ListView_SetItemText(m_hwndCurlSyntaxErrorList, index, 5, const_cast<LPWSTR>(diagnostic.message.c_str()));
+		}
+		return;
+	}
 	if (m_hwndCurlSyntaxErrorSummary) {
 		std::wstring summary;
 		if (document && document->m_bCurlSyntaxResultStale) {
@@ -539,6 +2406,57 @@ void CEditWnd::GoToCurlSyntaxDiagnostic(size_t index)
 	const auto& diagnostic = document->m_vCurlSyntaxDiagnostics[index];
 	CLayoutPoint layoutPosition;
 	document->m_cLayoutMgr.LogicToLayout(CLogicPoint(diagnostic.column - 1, diagnostic.line - 1), &layoutPosition);
+	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
+	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
+	GetActiveView().Redraw();
+}
+
+void CEditWnd::GoToCSVValidationDiagnostic(std::size_t textOffset)
+{
+	CEditDoc* document = GetDocument();
+	if (!document || m_bCSVValidationStale || m_uCSVValidationVersion != document->m_uCurlSyntaxVersion) return;
+	if (m_bCSVTableMode && m_csvTableModel && m_hwndCSVTable) {
+		const std::size_t displayRows = m_bCSVTableViewOrderIdentity
+			? m_csvTableModel->RowCount() : m_vCSVTableViewRows.size();
+		for (std::size_t row = 0; row < displayRows; ++row) {
+			const std::size_t sourceRow = CSVSourceRow(row);
+			const std::size_t recordIndex = m_csvTableModel->RecordIndexForRow(sourceRow);
+			const auto& parsed = m_csvTableSnapshot->Parsed();
+			if (recordIndex >= parsed.records.size()) continue;
+			const auto& record = parsed.records[recordIndex];
+			if (textOffset >= record.rawBegin && textOffset <= record.rawBegin + record.rawLength) {
+				ListView_SetItemState(m_hwndCSVTable, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+				ListView_SetItemState(m_hwndCSVTable, static_cast<int>(row), LVIS_SELECTED | LVIS_FOCUSED,
+					LVIS_SELECTED | LVIS_FOCUSED);
+				ListView_EnsureVisible(m_hwndCSVTable, static_cast<int>(row), FALSE);
+				if (!m_vCSVValidationDiagnostics.empty()) {
+					for (const auto& diagnostic : m_vCSVValidationDiagnostics) {
+						if (diagnostic.textOffset == textOffset) {
+							m_nCSVCurrentColumn = static_cast<int>(diagnostic.column);
+							break;
+						}
+					}
+				}
+				::SetFocus(m_hwndCSVTable);
+				return;
+			}
+		}
+		if (!m_vCSVFilters.empty()) {
+			m_uCSVValidationPendingOffset = textOffset;
+			m_nCSVSortPendingSourceRow = -1;
+			m_vCSVFilters.clear();
+			ScheduleCSVTableQuery();
+			if (m_vCSVSortKeys.empty()) {
+				m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+				GoToCSVValidationDiagnostic(textOffset);
+			}
+			return;
+		}
+	}
+	CLogicPoint logic;
+	if (!CSVOffsetToLogicPoint(textOffset, &logic)) return;
+	CLayoutPoint layoutPosition;
+	document->m_cLayoutMgr.LogicToLayout(logic, &layoutPosition);
 	GetActiveView().GetCaret().MoveCursor(layoutPosition, true);
 	GetActiveView().GetCaret().m_nCaretPosX_Prev = layoutPosition.x;
 	GetActiveView().Redraw();
@@ -615,11 +2533,34 @@ void CEditWnd::NavigateCurlSyntaxError(bool forward)
 	GoToCurlSyntaxDiagnostic(target);
 }
 
-void CEditWnd::UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition)
+void CEditWnd::UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition, bool foldGutterHover)
 {
 	const CEditDoc* document = GetDocument();
+	std::wstring tooltipText;
+	if (document && foldGutterHover && document->m_cLayoutMgr.IsCodeFoldSupported()) {
+		const CLayout* row = document->m_cLayoutMgr.SearchLineByLayoutY(layoutPosition.y);
+		if (row && row->GetLogicOffset() == CLogicInt(0)
+			&& document->m_cLayoutMgr.IsCodeFoldCollapsedAtLine(row->GetLogicLineNo())) {
+			if (const auto* region = document->m_cLayoutMgr.FindCodeFoldAtLine(row->GetLogicLineNo())) {
+				tooltipText = L"折りたたみ: " + region->kind + L"（" +
+					std::to_wstring(document->m_cLayoutMgr.GetCodeFoldHiddenLineCount(row->GetLogicLineNo())) + L" 行）";
+				const size_t previewEnd = region->firstLine + (std::min)(size_t(3), region->lastLine - region->firstLine);
+				for (size_t lineNo = region->firstLine + 1; lineNo <= previewEnd; ++lineNo) {
+					const CDocLine* line = document->m_cDocLineMgr.GetLine(CLogicInt(static_cast<Int>(lineNo)));
+					if (!line) continue;
+					const size_t previewLength = static_cast<size_t>((std::max)(0, static_cast<Int>(line->GetLengthWithoutEOL())));
+					std::wstring_view preview;
+					if (previewLength > 0) preview = std::wstring_view(line->GetPtr(), previewLength);
+					while (!preview.empty() && std::iswspace(preview.front())) preview.remove_prefix(1);
+					if (preview.size() > 96) preview = preview.substr(0, 96);
+					tooltipText += L"\n";
+					tooltipText.append(preview);
+				}
+			}
+		}
+	}
 	const curlsyntax::Diagnostic* found = nullptr;
-	if (document && !document->m_bCurlSyntaxResultStale && IsCurlSyntaxDocument()) {
+	if (tooltipText.empty() && document && !document->m_bCurlSyntaxResultStale && IsCurlSyntaxDocument()) {
 		CLogicPoint logicPosition;
 		document->m_cLayoutMgr.LayoutToLogic(layoutPosition, &logicPosition);
 		const int line = static_cast<int>(logicPosition.y) + 1;
@@ -628,7 +2569,7 @@ void CEditWnd::UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT s
 			if (diagnostic.line == line && (diagnostic.column == column || static_cast<int>(layoutPosition.x) <= 0)) { found = &diagnostic; break; }
 		}
 	}
-	if (!found) {
+	if (tooltipText.empty() && !found) {
 		HideCurlSyntaxTooltip();
 		return;
 	}
@@ -645,9 +2586,13 @@ void CEditWnd::UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT s
 		tool.lpszText = const_cast<LPWSTR>(L"");
 		::SendMessageW(m_hwndCurlSyntaxTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
 	}
-	m_strCurlSyntaxTooltip = found->message + L"\n行：" + std::to_wstring(found->line) +
-		L"\n列：" + std::to_wstring(found->column) + L"\nエラーコード：" +
-		std::wstring(found->code.begin(), found->code.end());
+	if (tooltipText.empty()) {
+		m_strCurlSyntaxTooltip = found->message + L"\n行：" + std::to_wstring(found->line) +
+			L"\n列：" + std::to_wstring(found->column) + L"\nエラーコード：" +
+			std::wstring(found->code.begin(), found->code.end());
+	} else {
+		m_strCurlSyntaxTooltip = std::move(tooltipText);
+	}
 	TOOLINFOW tool{};
 	tool.cbSize = sizeof(tool);
 	tool.hwnd = GetHwnd();
@@ -1559,6 +3504,18 @@ LRESULT CEditWnd::DispatchEvent(
 	case MYWM_CURL_SYNTAX_RESULT:
 		AcceptCurlSyntaxResult();
 		return 0L;
+	case MYWM_CSV_TABLE_PARSE_RESULT:
+		AcceptCSVTableParseResult();
+		return 0L;
+	case MYWM_CSV_TABLE_QUERY_RESULT:
+		AcceptCSVTableQueryResult();
+		return 0L;
+	case MYWM_CSV_VALIDATION_RESULT:
+		AcceptCSVValidationResult();
+		return 0L;
+	case MYWM_REALTIME_FILTER_RESULT:
+		AcceptRealtimeFilterResult();
+		return 0L;
 	case WM_PAINTICON:
 		return 0;
 	case WM_ICONERASEBKGND:
@@ -1798,7 +3755,8 @@ LRESULT CEditWnd::DispatchEvent(
 
 		// ビューにフォーカスを移動する	// 2007.10.16 ryoji
 		if( !m_pPrintPreview ){
-			::SetFocus( GetActiveView().GetHwnd() );
+			::SetFocus(m_bRealtimeFilterMode && m_hwndRealtimeFilterList ? m_hwndRealtimeFilterList :
+				m_bCSVTableMode && m_hwndCSVTable ? m_hwndCSVTable : GetActiveView().GetHwnd());
 		}
 		lRes = 0;
 
@@ -1812,13 +3770,150 @@ LRESULT CEditWnd::DispatchEvent(
 
 	case WM_NOTIFY:
 		pnmh = (LPNMHDR) lParam;
+		if (!pnmh) return 0L;
+		if (m_bRealtimeFilterMode && m_hwndRealtimeFilterList &&
+			pnmh->hwndFrom == m_hwndRealtimeFilterList && pnmh->code == LVN_GETDISPINFOW) {
+			auto* display = reinterpret_cast<NMLVDISPINFOW*>(lParam);
+			if ((display->item.mask & LVIF_TEXT) != 0 && display->item.iItem >= 0 &&
+				GetDocument() && GetDocument()->m_uCurlSyntaxVersion == m_uRealtimeFilterDocumentVersion) {
+				const auto sourceLine = textfilter::SourceLineForVisibleIndex(
+					m_vRealtimeFilterVisibleRanges, static_cast<std::size_t>(display->item.iItem));
+				if (sourceLine && *sourceLine < m_vRealtimeFilterLineIndex.size()) {
+					const CDocLine* line = m_vRealtimeFilterLineIndex[*sourceLine];
+					const std::size_t lineLength = static_cast<std::size_t>(line->GetLengthWithoutEOL());
+					m_strRealtimeFilterDisplayText = std::to_wstring(*sourceLine + 1) + L": ";
+					m_strRealtimeFilterDisplayText.append(line->GetPtr(), lineLength);
+					display->item.pszText = m_strRealtimeFilterDisplayText.data();
+				}
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == NM_RCLICK) {
+			const auto* activate = reinterpret_cast<const NMITEMACTIVATE*>(lParam);
+			if (activate->iSubItem > 0) m_nCSVCurrentColumn = activate->iSubItem;
+			POINT screenPoint{};
+			::GetCursorPos(&screenPoint);
+			ShowCSVTableContextMenu(screenPoint, activate->iItem, activate->iSubItem);
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == LVN_GETDISPINFOW && m_csvTableModel) {
+			auto* display = reinterpret_cast<NMLVDISPINFOW*>(lParam);
+			if ((display->item.mask & LVIF_TEXT) != 0 && display->item.iItem >= 0) {
+				try {
+					if (display->item.iSubItem == 0) {
+						m_csvTableDisplayText = std::to_wstring(static_cast<std::size_t>(display->item.iItem) + 1);
+					} else {
+						const std::size_t sourceRow = CSVSourceRow(static_cast<std::size_t>(display->item.iItem));
+						m_csvTableDisplayText = sourceRow < m_csvTableModel->RowCount()
+							? m_csvTableModel->CellText(sourceRow, static_cast<std::size_t>(display->item.iSubItem - 1))
+							: std::wstring{};
+						std::replace(m_csvTableDisplayText.begin(), m_csvTableDisplayText.end(), L'\r', L' ');
+						std::replace(m_csvTableDisplayText.begin(), m_csvTableDisplayText.end(), L'\n', L' ');
+					}
+				} catch (...) {
+					m_csvTableDisplayText.clear();
+				}
+				display->item.pszText = m_csvTableDisplayText.data();
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == NM_CLICK) {
+			const auto* click = reinterpret_cast<const NMITEMACTIVATE*>(lParam);
+			if (click->iSubItem > 0) m_nCSVCurrentColumn = click->iSubItem;
+			::SetTimer(GetHwnd(), IDT_CSV_SELECTION_STATS, 150, nullptr);
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == LVN_ITEMCHANGED) {
+			const auto* change = reinterpret_cast<const NMLISTVIEW*>(lParam);
+			if ((change->uChanged & LVIF_STATE) != 0 &&
+				((change->uOldState ^ change->uNewState) & LVIS_SELECTED) != 0) {
+				::SetTimer(GetHwnd(), IDT_CSV_SELECTION_STATS, 150, nullptr);
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == NM_DBLCLK) {
+			const auto* activate = reinterpret_cast<const NMITEMACTIVATE*>(lParam);
+			if (activate->iItem >= 0 && activate->iSubItem > 0) {
+				m_nCSVCurrentColumn = activate->iSubItem;
+				BeginCSVCellEdit(activate->iItem, activate->iSubItem);
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == m_hwndCSVTable && pnmh->code == LVN_KEYDOWN) {
+			const auto* key = reinterpret_cast<const NMLVKEYDOWN*>(lParam);
+			if (key->wVKey == VK_F2) {
+				const int row = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_FOCUSED);
+				if (row >= 0) BeginCSVCellEdit(row, m_nCSVCurrentColumn);
+				return 0;
+			}
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == ListView_GetHeader(m_hwndCSVTable) &&
+			pnmh->code == NM_RCLICK) {
+			POINT point{};
+			::GetCursorPos(&point);
+			HWND header = ListView_GetHeader(m_hwndCSVTable);
+			POINT clientPoint = point;
+			::ScreenToClient(header, &clientPoint);
+			HDHITTESTINFO hit{};
+			hit.pt = clientPoint;
+			Header_HitTest(header, &hit);
+			if (hit.iItem > 0) {
+				ShowCSVFilterMenu(static_cast<std::size_t>(hit.iItem - 1), point);
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == ListView_GetHeader(m_hwndCSVTable) &&
+			pnmh->code == HDN_ENDTRACKW) {
+			const auto* headerResize = reinterpret_cast<const NMHEADERW*>(lParam);
+			if (headerResize->iItem > 0 && headerResize->iItem <= 512 && headerResize->pitem) {
+				auto& widths = csvtable::GetUserSettings().columnWidths;
+				const std::size_t column = static_cast<std::size_t>(headerResize->iItem - 1);
+				if (widths.size() <= column) widths.resize(column + 1, 0);
+				widths[column] = std::clamp(DpiUnscaleX(headerResize->pitem->cxy), 24, 4000);
+			}
+			return 0;
+		}
+		if (m_hwndCSVTable && pnmh->hwndFrom == ListView_GetHeader(m_hwndCSVTable) &&
+			(pnmh->code == HDN_ITEMCLICKW || pnmh->code == HDN_ITEMCLICK)) {
+			const auto* headerClick = reinterpret_cast<const NMHEADERW*>(lParam);
+			if (headerClick->iItem > 0) {
+				const int focusedRow = ListView_GetNextItem(m_hwndCSVTable, -1, LVNI_FOCUSED);
+				m_nCSVSortPendingSourceRow = focusedRow >= 0
+					? static_cast<int>(CSVSourceRow(static_cast<std::size_t>(focusedRow)))
+					: -1;
+				const int column = headerClick->iItem - 1;
+				m_nCSVCurrentColumn = column + 1;
+				::SetTimer(GetHwnd(), IDT_CSV_SELECTION_STATS, 150, nullptr);
+				const bool addSortKey = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+			auto key = std::find_if(m_vCSVSortKeys.begin(), m_vCSVSortKeys.end(),
+				[column](const csvtable::SortKey& item) { return item.column == static_cast<std::size_t>(column); });
+			if (!addSortKey) {
+				const bool toggleDescending = m_vCSVSortKeys.size() == 1 && key != m_vCSVSortKeys.end();
+				const csvtable::SortKind kind = key != m_vCSVSortKeys.end()
+					? key->kind : csvtable::SortKind::String;
+				const bool descending = toggleDescending && !key->descending;
+				m_vCSVSortKeys.assign(1, { static_cast<std::size_t>(column), kind, descending });
+			} else if (key == m_vCSVSortKeys.end()) {
+				m_vCSVSortKeys.push_back({ static_cast<std::size_t>(column), csvtable::SortKind::String, false });
+			} else {
+				key->descending = !key->descending;
+			}
+				m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+				UpdateCSVSortIndicator();
+				ScheduleCSVTableQuery();
+			}
+			return 0;
+		}
 		if (m_hwndCurlSyntaxErrorList && pnmh->hwndFrom == m_hwndCurlSyntaxErrorList && pnmh->code == NM_DBLCLK) {
 			const int selected = ListView_GetNextItem(m_hwndCurlSyntaxErrorList, -1, LVNI_SELECTED);
 			if (selected >= 0) {
 				LVITEMW item{};
 				item.mask = LVIF_PARAM;
 				item.iItem = selected;
-				if (ListView_GetItem(m_hwndCurlSyntaxErrorList, &item)) GoToCurlSyntaxDiagnostic(static_cast<size_t>(item.lParam));
+				if (ListView_GetItem(m_hwndCurlSyntaxErrorList, &item)) {
+					if (m_bCSVValidationListActive) GoToCSVValidationDiagnostic(static_cast<std::size_t>(item.lParam));
+					else GoToCurlSyntaxDiagnostic(static_cast<size_t>(item.lParam));
+				}
 			}
 			return 0;
 		}
@@ -1956,7 +4051,13 @@ LRESULT CEditWnd::DispatchEvent(
 		return 0L;
 	case WM_DESTROY:
 		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+		if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
 		if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+		if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
 		if( m_pShareData->m_sFlags.m_bRecordingKeyMacro ){					/* キーボードマクロの記録中 */
 			if( m_pShareData->m_sFlags.m_hwndRecordingKeyMacro == GetHwnd() ){	/* キーボードマクロを記録中のウィンドウ */
 				m_pShareData->m_sFlags.m_bRecordingKeyMacro = FALSE;			/* キーボードマクロの記録中 */
@@ -2595,6 +4696,77 @@ int	CEditWnd::OnClose(HWND hWndActive, bool bGrepNoConfirm )
 */
 void CEditWnd::OnCommand( WORD wNotifyCode, WORD wID , HWND hwndCtl )
 {
+	if (m_bRealtimeFilterMode && wNotifyCode == 0 &&
+		(wID == F_COPY || wID == F_CUT || wID == F_PASTE || wID == F_UNDO || wID == F_REDO || wID == F_SELECTALL)) {
+		const HWND focus = ::GetFocus();
+		if (focus == m_hwndRealtimeFilterInclude || focus == m_hwndRealtimeFilterExclude) {
+			const UINT message = wID == F_COPY ? WM_COPY : wID == F_CUT ? WM_CUT :
+				wID == F_PASTE ? WM_PASTE : wID == F_UNDO ? WM_UNDO :
+				wID == F_REDO ? EM_REDO : EM_SETSEL;
+			if (wID == F_SELECTALL) ::SendMessageW(focus, EM_SETSEL, 0, -1);
+			else ::SendMessageW(focus, message, 0, 0);
+			return;
+		}
+	}
+	if (hwndCtl && (wID == IDC_REALTIME_FILTER_INCLUDE || wID == IDC_REALTIME_FILTER_EXCLUDE)) {
+		if (wNotifyCode == EN_CHANGE) ScheduleRealtimeFilter();
+		return;
+	}
+	if (hwndCtl && (wID == IDC_REALTIME_FILTER_LOGIC || wID == IDC_REALTIME_FILTER_CONTEXT)) {
+		if (wNotifyCode == CBN_SELCHANGE || wNotifyCode == CBN_EDITCHANGE) ScheduleRealtimeFilter();
+		return;
+	}
+	if (hwndCtl && (wID == IDC_REALTIME_FILTER_CASE || wID == IDC_REALTIME_FILTER_REGEX) && wNotifyCode == BN_CLICKED) {
+		ScheduleRealtimeFilter();
+		return;
+	}
+	if (hwndCtl && wNotifyCode == BN_CLICKED) {
+		switch (wID) {
+		case IDC_REALTIME_FILTER_COPY: ExportRealtimeFilter(false); return;
+		case IDC_REALTIME_FILTER_NEW: ExportRealtimeFilter(true); return;
+		case IDC_REALTIME_FILTER_SAVEAS: ExportRealtimeFilter(true, true); return;
+		case IDC_REALTIME_FILTER_CLEAR:
+			::SetWindowTextW(m_hwndRealtimeFilterInclude, L"");
+			::SetWindowTextW(m_hwndRealtimeFilterExclude, L"");
+			::SendMessageW(m_hwndRealtimeFilterLogic, CB_SETCURSEL, 0, 0);
+			::SendMessageW(m_hwndRealtimeFilterCase, BM_SETCHECK, BST_UNCHECKED, 0);
+			::SendMessageW(m_hwndRealtimeFilterRegex, BM_SETCHECK, BST_UNCHECKED, 0);
+			::SetWindowTextW(m_hwndRealtimeFilterContext, L"0");
+			ScheduleRealtimeFilter();
+			return;
+		case IDC_REALTIME_FILTER_CLOSE: CloseRealtimeFilter(); return;
+		case IDC_REALTIME_FILTER_AUTOSCROLL:
+			m_bRealtimeFilterAutoScroll = ::SendMessageW(m_hwndRealtimeFilterAutoScroll, BM_GETCHECK, 0, 0) == BST_CHECKED;
+			return;
+		default: break;
+		}
+	}
+	if (m_bRealtimeFilterMode && (wNotifyCode == 0 || wNotifyCode == CMD_FROM_MOUSE)) {
+		switch (static_cast<EFunctionCode>(wID)) {
+		case F_FILEOPEN:
+		case F_FILEOPEN_DROPDOWN:
+		case F_FILECLOSE_OPEN:
+		case F_FILESAVE:
+		case F_FILESAVEAS_DIALOG:
+		case F_FILESAVEAS:
+		case F_FILESAVE_QUIET:
+		case F_FILESAVECLOSE:
+		case F_FILECLOSE:
+		case F_WINCLOSE:
+		case F_FILENEW:
+		case F_EXITALL:
+		case F_EXITALLEDITORS:
+			break;
+		default:
+			SendStatusMessage(L"フィルター表示中は編集できません。編集するにはフィルターを閉じてください。");
+			return;
+		}
+		if (wID == F_FILEOPEN || wID == F_FILEOPEN_DROPDOWN || wID == F_FILECLOSE_OPEN || wID == F_FILESAVECLOSE ||
+			wID == F_FILECLOSE || wID == F_WINCLOSE || wID == F_FILENEW ||
+			wID == F_EXITALL || wID == F_EXITALLEDITORS) {
+			CloseRealtimeFilter();
+		}
+	}
 	// 検索ボックスからの WM_COMMAND はすべてコンボボックス通知
 	// ##### 検索ボックス処理はツールバー側の WindowProc に集約するほうがスマートかも
 	if( m_cToolbar.GetSearchHwnd() && hwndCtl == m_cToolbar.GetSearchHwnd() ){
@@ -3294,6 +5466,17 @@ LRESULT CEditWnd::OnTimer( WPARAM wParam, [[maybe_unused]] LPARAM lParam )
 		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
 		RunCurlSyntaxCheck();
 		break;
+	case IDT_CSV_SELECTION_STATS:
+		::KillTimer(GetHwnd(), IDT_CSV_SELECTION_STATS);
+		UpdateCSVSelectionStatistics();
+		break;
+	case IDT_REALTIME_FILTER_DEBOUNCE:
+		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+		StartRealtimeFilterScan();
+		break;
+	case IDT_REALTIME_FILTER_SCAN:
+		ContinueRealtimeFilterScan();
+		break;
 	case IDT_EDIT:
 		OnEditTimer();
 		break;
@@ -3528,6 +5711,52 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		::SendMessage( hwndToolBar, WM_SIZE, wParam, lParam );
 		::GetWindowRect( hwndToolBar, &rc );
 		nToolBarHeight = rc.bottom - rc.top;
+	}
+	if (m_bRealtimeFilterMode && m_hwndRealtimeFilterBar) {
+		const int filterHeight = DpiScaleY(150);
+		const int panelTop = nToolBarHeight;
+		::MoveWindow(m_hwndRealtimeFilterBar, 0, panelTop, cx, filterHeight, TRUE);
+		const int margin = DpiScaleX(8);
+		const int labelWidth = DpiScaleX(112);
+		const int editLeft = margin + labelWidth;
+		const int editWidth = std::clamp(cx * 34 / 100, DpiScaleX(180), DpiScaleX(520));
+		const int smallGap = DpiScaleX(8);
+		const int rowHeight = DpiScaleY(32);
+		const int lineEditHeight = DpiScaleY(46);
+		const int row1 = panelTop + DpiScaleY(4);
+		const int row2 = panelTop + DpiScaleY(54);
+		const int row3 = panelTop + DpiScaleY(111);
+		auto moveControl = [this](int id, int x, int y, int width, int height) {
+			if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::MoveWindow(control, x, y, width, height, TRUE);
+		};
+		moveControl(IDC_REALTIME_FILTER_INCLUDE_LABEL, margin, row1 + DpiScaleY(5), labelWidth - smallGap, DpiScaleY(20));
+		moveControl(IDC_REALTIME_FILTER_INCLUDE, editLeft, row1, editWidth, lineEditHeight);
+		int x = editLeft + editWidth + smallGap;
+		moveControl(IDC_REALTIME_FILTER_LOGIC, x, row1, DpiScaleX(82), rowHeight);
+		x += DpiScaleX(88);
+		moveControl(IDC_REALTIME_FILTER_CASE, x, row1, DpiScaleX(145), rowHeight);
+		x += DpiScaleX(150);
+		moveControl(IDC_REALTIME_FILTER_REGEX, x, row1, DpiScaleX(96), rowHeight);
+		moveControl(IDC_REALTIME_FILTER_EXCLUDE_LABEL, margin, row2 + DpiScaleY(5), labelWidth - smallGap, DpiScaleY(20));
+		moveControl(IDC_REALTIME_FILTER_EXCLUDE, editLeft, row2, editWidth, lineEditHeight);
+		x = editLeft + editWidth + smallGap;
+		moveControl(IDC_REALTIME_FILTER_CONTEXT_LABEL, x, row2 + DpiScaleY(5), DpiScaleX(70), DpiScaleY(20));
+		x += DpiScaleX(72);
+		moveControl(IDC_REALTIME_FILTER_CONTEXT, x, row2, DpiScaleX(92), rowHeight);
+		x += DpiScaleX(100);
+		moveControl(IDC_REALTIME_FILTER_STATS, x, row2 + DpiScaleY(1), std::max(DpiScaleX(80), cx - x - margin), rowHeight - DpiScaleY(2));
+		moveControl(IDC_REALTIME_FILTER_AUTOSCROLL, margin, row3 + DpiScaleY(1), DpiScaleX(190), DpiScaleY(24));
+		const int buttonHeight = DpiScaleY(24);
+		const int buttonWidths[] = { DpiScaleX(105), DpiScaleX(116), DpiScaleX(88), DpiScaleX(92), DpiScaleX(72) };
+		const int buttonIds[] = { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
+			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CLOSE };
+		int buttonX = cx - margin;
+		for (int index = static_cast<int>(std::size(buttonIds)) - 1; index >= 0; --index) {
+			buttonX -= buttonWidths[index];
+			moveControl(buttonIds[index], buttonX, row3, buttonWidths[index], buttonHeight);
+			buttonX -= smallGap;
+		}
+		nToolBarHeight += filterHeight;
 	}
 	nFuncKeyWndHeight = 0;
 	if( nullptr != m_cFuncKeyWnd.GetHwnd() ){
@@ -3772,6 +6001,8 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		(eDockSideFL == DOCKSIDE_TOP || eDockSideFL == DOCKSIDE_BOTTOM)? nHeight - nFuncListHeight: nHeight,	//@@@ 2003.05.31 MIK
 		TRUE
 	);
+	UpdateCSVTableLayout();
+	UpdateRealtimeFilterLayout();
 	//@@@ To 2003.05.31 MIK
 
 	/* 印刷プレビューモードか */

@@ -56,6 +56,7 @@
 void CEditView::OnLBUTTONDOWN( WPARAM fwKeys, int _xPos , int _yPos )
 {
 	CMyPoint ptMouse(_xPos,_yPos);
+	m_sMultiCursorAltClick.pending = false;
 
 	if( m_bHokan ){
 		GetEditWnd().m_cHokanMgr.Hide();
@@ -75,6 +76,38 @@ void CEditView::OnLBUTTONDOWN( WPARAM fwKeys, int _xPos , int _yPos )
 		m_bMiniMapMouseDown = true;
 		OnMOUSEMOVE( fwKeys, _xPos, _yPos );
 		return;
+	}
+	if (!m_bMiniMap && m_pcEditDoc && m_pcEditDoc->m_cLayoutMgr.IsCodeFoldSupported()
+		&& _xPos >= GetTextArea().GetLeftYohaku()
+		&& _xPos < GetTextArea().GetLeftYohaku() + GetTextMetrics().GetHankakuDx()
+		&& _yPos >= GetTextArea().GetAreaTop() && _yPos < GetTextArea().GetAreaBottom()) {
+		CLayoutPoint foldLayoutPos;
+		GetTextArea().ClientToLayout(ptMouse, &foldLayoutPos);
+		auto& layoutMgr = m_pcEditDoc->m_cLayoutMgr;
+		const CLayout* row = layoutMgr.SearchLineByLayoutY(foldLayoutPos.y);
+		if (row && row->GetLogicOffset() == CLogicInt(0)) {
+			const CLogicInt foldLine = row->GetLogicLineNo();
+			const auto* regionPtr = layoutMgr.FindCodeFoldAtLine(foldLine);
+			if (regionPtr) {
+				const auto region = *regionPtr;
+				const bool wasCollapsed = layoutMgr.IsCodeFoldCollapsedAtLine(foldLine);
+				if (layoutMgr.ToggleCodeFoldAtLine(foldLine)) {
+					if (!wasCollapsed) {
+						const auto caretLine = GetCaret().GetCaretLogicPos().y;
+						if (static_cast<size_t>(caretLine) > region.firstLine && static_cast<size_t>(caretLine) <= region.lastLine) {
+							GetCaret().MoveCursor(CLayoutPoint(CLayoutInt(0), CLayoutInt(static_cast<Int>(region.firstLine))), true);
+						}
+					}
+					for (int pane = 0; pane < GetEditWnd().GetAllViewCount(); ++pane) {
+						auto& view = GetEditWnd().GetView(pane);
+						const auto maxTop = t_max(CLayoutInt(0), layoutMgr.GetLineCount() + CLayoutInt(2) - view.GetTextArea().m_nViewRowNum);
+						if (view.GetTextArea().GetViewTopLine() > maxTop) view.ScrollAtV(maxTop);
+					}
+					GetEditWnd().Views_RedrawAll();
+					return;
+				}
+			}
+		}
 	}
 	const int syntaxMarkerLeft = GetTextArea().GetLineNumberWidth() + DpiScaleX(1);
 	if (m_pcEditDoc && !m_pcEditDoc->m_bCurlSyntaxResultStale && GetEditWnd().IsCurlSyntaxDocument()
@@ -184,6 +217,25 @@ normal_action:;
 
 	// ALTキーが押されている、かつトリプルクリックでない		// 2007.11.15 nasukoji	トリプルクリック対応
 	if( ApiWrap::GetKeyState_Alt() &&( ! tripleClickMode)){
+		if (ptMouse.x >= GetTextArea().GetAreaLeft() && ptMouse.x < GetTextArea().GetAreaRight()
+			&& ptMouse.y >= GetTextArea().GetAreaTop() && ptMouse.y < GetTextArea().GetAreaBottom()) {
+			auto& snapshot = m_sMultiCursorAltClick;
+			snapshot.pending = true;
+			snapshot.mouseDown = ptMouse;
+			snapshot.clickedLayout = ptNew;
+			snapshot.caret = GetCaret().GetCaretLayoutPos();
+			auto& selection = GetSelectionInfo();
+			snapshot.hadSelection = selection.IsTextSelected();
+			snapshot.selection = selection.m_sSelect;
+			snapshot.selectionAnchor = selection.m_sSelectBgn;
+			snapshot.oldSelection = selection.m_sSelectOld;
+			snapshot.boxSelection = selection.IsBoxSelecting();
+			snapshot.mouseSelecting = selection.IsMouseSelecting();
+			snapshot.selectingLock = selection.m_bSelectingLock;
+			snapshot.drawSelection = selection.m_bDrawSelectArea;
+			snapshot.lineSelection = selection.m_bBeginLineSelect;
+			snapshot.wordSelection = selection.m_bBeginWordSelect;
+		}
 		if( GetSelectionInfo().IsTextSelected() ){	/* テキストが選択されているか */
 			/* 現在の選択範囲を非選択状態に戻す */
 			GetSelectionInfo().DisableSelectArea( true );
@@ -215,6 +267,7 @@ normal_action:;
 		}
 	}
 	else{
+		ClearExtraCursors();
 		/* カーソル移動 */
 		if( ptMouse.y >= GetTextArea().GetAreaTop() && ptMouse.y < GetTextArea().GetAreaBottom() ){
 			if( ptMouse.x >= GetTextArea().GetAreaLeft() && ptMouse.x < GetTextArea().GetAreaRight() ){
@@ -605,6 +658,82 @@ void CEditView::OnRBUTTONUP( WPARAM fwKeys, int xPos , int yPos )
 	if( GetSelectionInfo().IsMouseSelecting() ){	/* 範囲選択中 */
 		/* マウス左ボタン開放のメッセージ処理 */
 		OnLBUTTONUP( fwKeys, xPos, yPos );
+	}
+	if (!m_bMiniMap && m_pcEditDoc && m_pcEditDoc->m_cLayoutMgr.IsCodeFoldSupported()
+		&& xPos >= GetTextArea().GetLeftYohaku()
+		&& xPos < GetTextArea().GetLeftYohaku() + GetTextMetrics().GetHankakuDx()
+		&& yPos >= GetTextArea().GetAreaTop() && yPos < GetTextArea().GetAreaBottom()) {
+		CLayoutPoint clickedLayout;
+		GetTextArea().ClientToLayout(CMyPoint(xPos, yPos), &clickedLayout);
+		auto& layoutMgr = m_pcEditDoc->m_cLayoutMgr;
+		const CLayout* row = layoutMgr.SearchLineByLayoutY(clickedLayout.y);
+		if (row && row->GetLogicOffset() == CLogicInt(0)) {
+			const CLogicInt clickedLine = row->GetLogicLineNo();
+			const auto* regionPtr = layoutMgr.FindCodeFoldAtLine(clickedLine);
+			if (regionPtr) {
+				const auto region = *regionPtr;
+				constexpr UINT foldDepthMenuBase = 0x7600;
+				HMENU menu = ::CreatePopupMenu();
+				HMENU depthMenu = ::CreatePopupMenu();
+				if (menu && depthMenu) {
+					::AppendMenuW(menu, MF_STRING, F_CODEFOLD_TOGGLE, L"このブロックを折りたたむ／展開する");
+					::AppendMenuW(menu, MF_STRING, F_CODEFOLD_CURRENT_DEPTH, L"この階層を折りたたむ");
+					::AppendMenuW(menu, MF_STRING, F_CODEFOLD_ALL, L"すべてのブロックを折りたたむ");
+					::AppendMenuW(menu, MF_STRING, F_CODEFOLD_EXPAND_ALL, L"すべてのブロックを展開する");
+					for (UINT depth = 1; depth <= 8; ++depth) {
+						const std::wstring label = L"レベル " + std::to_wstring(depth);
+						::AppendMenuW(depthMenu, MF_STRING, foldDepthMenuBase + depth, label.c_str());
+					}
+					::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(depthMenu), L"指定した階層まで折りたたむ");
+					POINT screenPoint{ xPos, yPos };
+					::ClientToScreen(GetHwnd(), &screenPoint);
+					const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+						screenPoint.x, screenPoint.y, 0, GetHwnd(), nullptr);
+					::DestroyMenu(menu);
+					if (command != 0) {
+						const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
+						bool changed = false;
+						switch (command) {
+						case F_CODEFOLD_TOGGLE:
+							changed = layoutMgr.ToggleCodeFoldAtLine(clickedLine);
+							break;
+						case F_CODEFOLD_CURRENT_DEPTH:
+							changed = layoutMgr.FoldCodeBlocksAtDepth(region.depth);
+							break;
+						case F_CODEFOLD_ALL:
+							changed = layoutMgr.FoldAllCodeBlocks();
+							break;
+						case F_CODEFOLD_EXPAND_ALL:
+							changed = layoutMgr.UnfoldAllCodeBlocks();
+							break;
+						default:
+							if (command > foldDepthMenuBase && command <= foldDepthMenuBase + 8) {
+								changed = layoutMgr.FoldCodeBlocksToDepth(command - foldDepthMenuBase);
+							}
+							break;
+						}
+						if (changed) {
+							if (layoutMgr.IsCodeFoldHiddenLine(caretLine)) {
+								if (const auto* collapsed = layoutMgr.FindCollapsedCodeFoldContainingLine(caretLine)) {
+									CLayoutPoint header;
+									layoutMgr.LogicToLayout(CLogicPoint(CLogicInt(0), CLogicInt(static_cast<Int>(collapsed->firstLine))), &header);
+									GetCaret().MoveCursor(header, true);
+								}
+							}
+							for (int pane = 0; pane < GetEditWnd().GetAllViewCount(); ++pane) {
+								auto& view = GetEditWnd().GetView(pane);
+								const auto maxTop = t_max(CLayoutInt(0), layoutMgr.GetLineCount() + CLayoutInt(2) - view.GetTextArea().m_nViewRowNum);
+								if (view.GetTextArea().GetViewTopLine() > maxTop) view.ScrollAtV(maxTop);
+							}
+							GetEditWnd().Views_RedrawAll();
+						}
+					}
+					return;
+				}
+				if (depthMenu) ::DestroyMenu(depthMenu);
+				if (menu) ::DestroyMenu(menu);
+			}
+		}
 	}
 
 	int		nIdx;
@@ -1046,7 +1175,12 @@ void CEditView::OnMOUSEMOVE( [[maybe_unused]] WPARAM fwKeys, int xPos_, int yPos
 		GetTextArea().ClientToLayout(ptMouse, &ptNew);
 		POINT syntaxTipPoint{ ptMouse.x, ptMouse.y };
 		::ClientToScreen(GetHwnd(), &syntaxTipPoint);
-		GetEditWnd().UpdateCurlSyntaxHover(ptNew, syntaxTipPoint);
+		const bool foldGutterHover = !m_bMiniMap && m_pcEditDoc
+			&& m_pcEditDoc->m_cLayoutMgr.IsCodeFoldSupported()
+			&& ptMouse.x >= GetTextArea().GetLeftYohaku()
+			&& ptMouse.x < GetTextArea().GetLeftYohaku() + GetTextMetrics().GetHankakuDx()
+			&& ptMouse.y >= GetTextArea().GetAreaTop() && ptMouse.y < GetTextArea().GetAreaBottom();
+		GetEditWnd().UpdateCurlSyntaxHover(ptNew, syntaxTipPoint, foldGutterHover);
 
 		CLogicRange	cUrlRange;	//URL範囲
 
@@ -1505,6 +1639,13 @@ bool CEditView::IsSpecialScrollMode( int nSelect )
 void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] int xPos, [[maybe_unused]] int yPos )
 {
 //	MYTRACE( L"OnLBUTTONUP()\n" );
+	const auto snapshot = m_sMultiCursorAltClick;
+	const int clickToleranceX = t_max(1, ::GetSystemMetrics(SM_CXDRAG) / 2);
+	const int clickToleranceY = t_max(1, ::GetSystemMetrics(SM_CYDRAG) / 2);
+	const bool altClick = snapshot.pending
+		&& abs(xPos - snapshot.mouseDown.x) <= clickToleranceX
+		&& abs(yPos - snapshot.mouseDown.y) <= clickToleranceY;
+	m_sMultiCursorAltClick.pending = false;
 
 	/* 範囲選択終了 & マウスキャプチャおわり */
 	if( GetSelectionInfo().IsMouseSelecting() ){	/* 範囲選択中 */
@@ -1513,7 +1654,7 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 		GetCaret().ShowCaret_( GetHwnd() ); // 2002/07/22 novice
 
 		GetSelectionInfo().SelectEnd();
-		if (GetSelectionInfo().IsTextSelected()) {
+		if (!altClick && GetSelectionInfo().IsTextSelected()) {
 			CNativeW selected;
 			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
 				CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
@@ -1534,6 +1675,32 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 	if( m_bMiniMapMouseDown ){
 		m_bMiniMapMouseDown = false;
 		::ReleaseCapture();
+	}
+	if (altClick) {
+		auto& selection = GetSelectionInfo();
+		GetCaret().MoveCursor(snapshot.caret, true);
+		selection.DisableSelectArea(false);
+		selection.m_sSelect = snapshot.selection;
+		selection.m_sSelectBgn = snapshot.selectionAnchor;
+		selection.m_sSelectOld = snapshot.oldSelection;
+		selection.m_bDrawSelectArea = snapshot.drawSelection;
+		selection.m_bSelectingLock = snapshot.selectingLock;
+		selection.m_bBeginLineSelect = snapshot.lineSelection;
+		selection.m_bBeginWordSelect = snapshot.wordSelection;
+		selection.SetBoxSelect(snapshot.boxSelection);
+		if (snapshot.mouseSelecting) {
+			if (snapshot.boxSelection) selection.SelectBeginBox();
+			else selection.SelectBeginNazo();
+		} else {
+			selection.SelectEnd();
+		}
+		selection.SetBoxSelect(snapshot.boxSelection);
+		if (!snapshot.hadSelection) {
+			selection.m_sSelect.Clear(-1);
+			selection.m_bDrawSelectArea = false;
+		}
+		ToggleExtraCursorAt(snapshot.clickedLayout);
+		Redraw();
 	}
 	return;
 }

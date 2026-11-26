@@ -154,6 +154,11 @@ public:
 		if (mark) *mark = *it;
 		return true;
 	}
+	std::vector<SRainbowBracketMark>& GetMutableRainbowBracketMarks() noexcept
+	{
+		static std::vector<SRainbowBracketMark> empty;
+		return m_rainbowBracketCache ? m_rainbowBracketCache->marks : empty;
+	}
 
 private:
 	CLayout*			m_pPrev;

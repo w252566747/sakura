@@ -614,6 +614,25 @@ void CEditView::OnPaint2( HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp
 {
 //	MY_RUNNINGTIMER( cRunningTimer, "CEditView::OnPaint" );
 	CGraphics gr(_hdc);
+	auto drawExtraCarets = [this](HDC hdc) {
+		if (m_vExtraCursors.empty() || GetEditWnd().GetActivePane() != m_nMyIndex) return;
+		const CMySize size = GetCaret().GetCaretSize();
+		if (size.cx <= 0 || size.cy <= 0) return;
+		const int colorIndex = m_pTypeData->m_ColorInfoArr[COLORIDX_CARET_IME].m_bDisp && IsImeON()
+			? COLORIDX_CARET_IME : COLORIDX_CARET;
+		HBRUSH brush = ::CreateSolidBrush(m_pTypeData->m_ColorInfoArr[colorIndex].m_sColorAttr.m_cTEXT);
+		if (!brush) return;
+		for (const auto& extra : m_vExtraCursors) {
+			CLayoutPoint point;
+			if (!ResolveExtraCursor(extra, &point)) continue;
+			if (point.GetY2() < GetTextArea().GetViewTopLine() || point.GetY2() > GetTextArea().GetBottomLine()) continue;
+			const POINT origin = GetCaret().CalcCaretDrawPos(point);
+			if (origin.y < GetTextArea().GetAreaTop() || origin.y >= GetTextArea().GetAreaBottom()) continue;
+			RECT rect{ origin.x, origin.y, origin.x + size.cx, origin.y + size.cy };
+			::FillRect(hdc, &rect, brush);
+		}
+		::DeleteObject(brush);
+	};
 
 	// 2004.01.28 Moca デスクトップに作画しないように
 	if( nullptr == GetHwnd() || nullptr == _hdc )return;
@@ -645,6 +664,7 @@ void CEditView::OnPaint2( HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp
 			pPs->rcPaint.top,
 			SRCCOPY
 		);
+		drawExtraCarets(_hdc);
 		if ( GetEditWnd().GetActivePane() == m_nMyIndex ){
 			/* アクティブペインは、アンダーライン描画 */
 			GetCaret().m_cUnderLine.CaretUnderLineON( true, false );
@@ -858,6 +878,8 @@ void CEditView::OnPaint2( HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp
 	}
 
 	cTextType.RewindGraphicsState(gr);
+	// Draw secondary carets after text rendering so the selection/text colors stay intact.
+	drawExtraCarets(bUseMemoryDC ? hdcOld : _hdc);
 
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 	//                       ルーラー描画                          //

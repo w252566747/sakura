@@ -54,6 +54,7 @@ void CDocEditor::SetModified( bool flag, bool redraw)
 
 void CDocEditor::OnBeforeLoad([[maybe_unused]] SLoadInfo* sLoadInfo)
 {
+	GetEditWnd().NotifyRealtimeFilterDocumentLoading(m_pcDocRef);
 	//ビューのテキスト選択解除
 	GetEditWnd().Views_DisableSelectArea(true);
 }
@@ -61,6 +62,8 @@ void CDocEditor::OnBeforeLoad([[maybe_unused]] SLoadInfo* sLoadInfo)
 void CDocEditor::OnAfterLoad(const SLoadInfo& sLoadInfo)
 {
 	CEditDoc* pcDoc = GetListeningDoc();
+	// ファイル切り替え後に前文書の行番号ベースの折りたたみ状態を持ち越さない。
+	pcDoc->m_cLayoutMgr.ResetCodeFolds();
 	const STypeConfig& type = pcDoc->m_cDocType.GetDocumentAttribute();
 
 	if (type.m_bDetectIndentationStyleOnFileLoad) {
@@ -120,6 +123,11 @@ void CDocEditor::OnAfterLoad(const SLoadInfo& sLoadInfo)
 
 	CAppMode::getInstance()->SetViewMode(sLoadInfo.bViewMode);		// ビューモード	##ここも、アリかな
 	GetEditWnd().NotifyCurlSyntaxDocumentLoaded();
+}
+
+void CDocEditor::OnFinalLoad([[maybe_unused]] ELoadResult eLoadResult)
+{
+	GetEditWnd().NotifyRealtimeFilterDocumentLoadFinished(m_pcDocRef);
 }
 
 void CDocEditor::OnAfterSave([[maybe_unused]] const SSaveInfo& sSaveInfo)

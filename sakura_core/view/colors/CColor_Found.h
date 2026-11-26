@@ -10,6 +10,7 @@
 #pragma once
 
 #include "view/colors/CColorStrategy.h"
+#include <vector>
 
 class CColor_Select final : public CColorStrategy{
 public:
@@ -29,6 +30,11 @@ private:
 	CLayoutInt		m_nSelectLine;
 	CLogicInt		m_nSelectStart;
 	CLogicInt		m_nSelectEnd;
+	struct SExtraSelectRange {
+		CLogicInt nStart;
+		CLogicInt nEnd;
+	};
+	std::vector<SExtraSelectRange> m_vExtraSelectCache;
 };
 
 class CColor_Found final : public CColorStrategy{

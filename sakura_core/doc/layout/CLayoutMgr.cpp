@@ -36,6 +36,11 @@
 #include "charset/charcode.h"
 #include "config/app_constants.h"
 #include "util/window.h"
+#include "parse/CodeFoldParser.h"
+#include <algorithm>
+#include <cwctype>
+#include <limits>
+#include <string_view>
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 //                        生成と破棄                           //
@@ -78,6 +83,7 @@ CLayoutMgr::~CLayoutMgr()
 void CLayoutMgr::Create( CEditDoc* pcEditDoc, CDocLineMgr* pcDocLineMgr )
 {
 	_Empty();
+	ResetCodeFolds();
 	Init();
 	//	Jun. 20, 2003 genta EditDocへのポインタ追加
 	m_pcEditDoc = pcEditDoc;
@@ -91,6 +97,7 @@ void CLayoutMgr::Init()
 	m_nPrevReferLine = CLayoutInt(0);
 	m_pLayoutPrevRefer = nullptr;
 	m_nLines = CLayoutInt(0);			/* 全物理行数 */
+	m_nVisibleLines = CLayoutInt(0);
 	m_nLineTypeBot = COLORIDX_DEFAULT;
 
 	// EOFレイアウト位置記憶	//2006.10.07 Moca
@@ -131,6 +138,8 @@ void CLayoutMgr::SetLayoutInfo(
 	assert_warning( (!bDoLayout && m_nTabSpace == refType.m_nTabSpace) || bDoLayout );
 
 	//タイプ別設定
+	// 言語タイプが変わると解析規則も変わるため、以前の折りたたみ位置を持ち越さない。
+	if (m_pTypeConfig && m_pTypeConfig != &refType) ResetCodeFolds();
 	m_pTypeConfig = &refType;
 	m_nMaxLineKetas = nMaxLineKetas;
 	m_nTabSpace = nTabSpace;
@@ -213,116 +222,297 @@ void CLayoutMgr::SetLayoutInfo(
 
 	@param nLineNum [in] 物理行番号 (0～)
 */
-const CLayout* CLayoutMgr::SearchLineByLayoutY(
-	CLayoutInt nLineLayout
-) const
+const CLayout* CLayoutMgr::SearchLineByLayoutY(CLayoutInt nLineLayout) const
 {
-	CLayoutInt nLineNum = nLineLayout;
-
-	CLayout*	pLayout;
-	CLayoutInt	nCount;
-	if( CLayoutInt(0) == m_nLines ){
+	if (CLayoutInt(0) > nLineLayout || nLineLayout >= m_nVisibleLines) {
+		if (CLayoutInt(0) > nLineLayout) DEBUG_TRACE(L"CLayoutMgr::SearchLineByLayoutY() nLineNum = %d\n", nLineLayout);
 		return nullptr;
 	}
 
-	//	Mar. 19, 2003 Moca nLineNumが負の場合のチェックを追加
-	if( CLayoutInt(0) > nLineNum || nLineNum >= m_nLines ){
-		if( CLayoutInt(0) > nLineNum ){
-			DEBUG_TRACE( L"CLayoutMgr::SearchLineByLayoutY() nLineNum = %d\n", nLineNum );
-		}
-		return nullptr;
-	}
-//	/*+++++++ 低速版 +++++++++*/
-//	if( nLineNum < (m_nLines / 2) ){
-//		nCount = 0;
-//		pLayout = m_pLayoutTop;
-//		while( NULL != pLayout ){
-//			if( nLineNum == nCount ){
-//				m_pLayoutPrevRefer = pLayout;
-//				m_nPrevReferLine = nLineNum;
-//				return pLayout;
-//			}
-//			pLayout = pLayout->GetNextLayout();
-//			nCount++;
-//		}
-//	}else{
-//		nCount = m_nLines - 1;
-//		pLayout = m_pLayoutBot;
-//		while( NULL != pLayout ){
-//			if( nLineNum == nCount ){
-//				m_pLayoutPrevRefer = pLayout;
-//				m_nPrevReferLine = nLineNum;
-//				return pLayout;
-//			}
-//			pLayout = pLayout->GetPrevLayout();
-//			nCount--;
-//		}
-//	}
+	auto isVisible = [this](const CLayout* layout) {
+		return layout && !IsCodeFoldHiddenLine(layout->GetLogicLineNo());
+	};
+	auto remember = [this, nLineLayout](CLayout* layout) -> const CLayout* {
+		m_pLayoutPrevRefer = layout;
+		m_nPrevReferLine = nLineLayout;
+		return layout;
+	};
 
-	/*+++++++わずかに高速版+++++++*/
-	// 2004.03.28 Moca m_pLayoutPrevReferより、Top,Botのほうが近い場合は、そちらを利用する
-	CLayoutInt nPrevToLineNumDiff = t_abs( m_nPrevReferLine - nLineNum );
-	if( m_pLayoutPrevRefer == nullptr
-	  || nLineNum < nPrevToLineNumDiff
-	  || m_nLines - nLineNum < nPrevToLineNumDiff
-	){
-		if( nLineNum < (m_nLines / 2) ){
-			nCount = CLayoutInt(0);
-			pLayout = m_pLayoutTop;
-			while( nullptr != pLayout ){
-				if( nLineNum == nCount ){
-					m_pLayoutPrevRefer = pLayout;
-					m_nPrevReferLine = nLineNum;
-					return pLayout;
-				}
-				pLayout = pLayout->GetNextLayout();
-				nCount++;
+	if (m_pLayoutPrevRefer && m_nPrevReferLine >= CLayoutInt(0) && m_nPrevReferLine < m_nVisibleLines) {
+		if (nLineLayout == m_nPrevReferLine && isVisible(m_pLayoutPrevRefer)) return m_pLayoutPrevRefer;
+		if (nLineLayout > m_nPrevReferLine) {
+			CLayoutInt visibleIndex = m_nPrevReferLine;
+			for (CLayout* layout = m_pLayoutPrevRefer->GetNextLayout(); layout; layout = layout->GetNextLayout()) {
+				if (!isVisible(layout)) continue;
+				++visibleIndex;
+				if (visibleIndex == nLineLayout) return remember(layout);
 			}
-		}else{
-			nCount = m_nLines - CLayoutInt(1);
-			pLayout = m_pLayoutBot;
-			while( nullptr != pLayout ){
-				if( nLineNum == nCount ){
-					m_pLayoutPrevRefer = pLayout;
-					m_nPrevReferLine = nLineNum;
-					return pLayout;
-				}
-				pLayout = pLayout->GetPrevLayout();
-				nCount--;
+		} else {
+			CLayoutInt visibleIndex = m_nPrevReferLine;
+			for (CLayout* layout = m_pLayoutPrevRefer->GetPrevLayout(); layout; layout = layout->GetPrevLayout()) {
+				if (!isVisible(layout)) continue;
+				--visibleIndex;
+				if (visibleIndex == nLineLayout) return remember(layout);
 			}
 		}
-	}else{
-		if( nLineNum == m_nPrevReferLine ){
-			return m_pLayoutPrevRefer;
+	}
+
+	if (nLineLayout < m_nVisibleLines / 2) {
+		CLayoutInt visibleIndex(0);
+		for (CLayout* layout = m_pLayoutTop; layout; layout = layout->GetNextLayout()) {
+			if (!isVisible(layout)) continue;
+			if (visibleIndex == nLineLayout) return remember(layout);
+			++visibleIndex;
 		}
-		else if( nLineNum > m_nPrevReferLine ){
-			nCount = m_nPrevReferLine + CLayoutInt(1);
-			pLayout = m_pLayoutPrevRefer->GetNextLayout();
-			while( nullptr != pLayout ){
-				if( nLineNum == nCount ){
-					m_pLayoutPrevRefer = pLayout;
-					m_nPrevReferLine = nLineNum;
-					return pLayout;
-				}
-				pLayout = pLayout->GetNextLayout();
-				nCount++;
-			}
-		}
-		else{
-			nCount = m_nPrevReferLine - CLayoutInt(1);
-			pLayout = m_pLayoutPrevRefer->GetPrevLayout();
-			while( nullptr != pLayout ){
-				if( nLineNum == nCount ){
-					m_pLayoutPrevRefer = pLayout;
-					m_nPrevReferLine = nLineNum;
-					return pLayout;
-				}
-				pLayout = pLayout->GetPrevLayout();
-				nCount--;
-			}
+	} else {
+		CLayoutInt visibleIndex = m_nVisibleLines - CLayoutInt(1);
+		for (CLayout* layout = m_pLayoutBot; layout; layout = layout->GetPrevLayout()) {
+			if (!isVisible(layout)) continue;
+			if (visibleIndex == nLineLayout) return remember(layout);
+			--visibleIndex;
 		}
 	}
 	return nullptr;
+}
+
+bool CLayoutMgr::IsCodeFoldSupported() const
+{
+	if (!m_pTypeConfig) return false;
+	auto lower = [](std::wstring value) {
+		std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+		return value;
+	};
+	const std::wstring name = lower(m_pTypeConfig->m_szTypeName);
+	const std::wstring exts = lower(m_pTypeConfig->m_szTypeExts);
+	return name.find(L"curl") != std::wstring::npos || exts.find(L"scurl") != std::wstring::npos
+		|| name.find(L"c/c++") != std::wstring::npos || name.find(L"c++") != std::wstring::npos
+		|| name.find(L"java") != std::wstring::npos || name.find(L"javascript") != std::wstring::npos
+		|| name.find(L"json") != std::wstring::npos || name.find(L"xml") != std::wstring::npos
+		|| name.find(L"html") != std::wstring::npos || name.find(L"sql") != std::wstring::npos
+		|| exts.find(L".cpp") != std::wstring::npos || exts.find(L"cpp") != std::wstring::npos
+		|| exts.find(L".java") != std::wstring::npos || exts.find(L"java") != std::wstring::npos
+		|| exts.find(L".js") != std::wstring::npos || exts.find(L"js") != std::wstring::npos
+		|| exts.find(L"json") != std::wstring::npos || exts.find(L"xml") != std::wstring::npos
+		|| exts.find(L"html") != std::wstring::npos || exts.find(L"sql") != std::wstring::npos
+		|| exts.find(L"plsql") != std::wstring::npos;
+}
+
+bool CLayoutMgr::EnsureCodeFoldRegions() const
+{
+	if (m_bCodeFoldRegionsValid) return true;
+	CLayoutMgr* self = const_cast<CLayoutMgr*>(this);
+	self->m_vCodeFoldRegions.clear();
+	if (!IsCodeFoldSupported() || !m_pcDocLineMgr) {
+		self->m_bCodeFoldRegionsValid = true;
+		return false;
+	}
+
+	codefold::Language language = codefold::Language::CLike;
+	std::wstring typeName = m_pTypeConfig->m_szTypeName;
+	std::transform(typeName.begin(), typeName.end(), typeName.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+	std::wstring extensions = m_pTypeConfig->m_szTypeExts;
+	std::transform(extensions.begin(), extensions.end(), extensions.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+	if (typeName.find(L"curl") != std::wstring::npos || extensions.find(L"scurl") != std::wstring::npos) language = codefold::Language::Curl;
+	else if (typeName.find(L"xml") != std::wstring::npos || typeName.find(L"html") != std::wstring::npos || extensions.find(L"xml") != std::wstring::npos || extensions.find(L"html") != std::wstring::npos) language = codefold::Language::Xml;
+	else if (typeName.find(L"sql") != std::wstring::npos || extensions.find(L"sql") != std::wstring::npos || extensions.find(L"plsql") != std::wstring::npos) language = codefold::Language::Sql;
+
+	try {
+		std::vector<std::wstring_view> lines;
+		lines.reserve(static_cast<size_t>(m_pcDocLineMgr->GetLineCount()));
+		for (const CDocLine* line = m_pcDocLineMgr->GetDocLineTop(); line; line = line->GetNextLine()) {
+			const CLogicInt length = line->GetLengthWithoutEOL();
+			lines.emplace_back(line->GetPtr(), length > CLogicInt(0) ? static_cast<size_t>(length) : 0u);
+		}
+		self->m_vCodeFoldRegions = codefold::Parse(lines, language);
+		self->m_bCodeFoldRegionsValid = true;
+		return true;
+	} catch (...) {
+		self->m_vCodeFoldRegions.clear();
+		self->m_bCodeFoldRegionsValid = true;
+		return false;
+	}
+}
+
+const codefold::Region* CLayoutMgr::FindCodeFoldAtLine(CLogicInt logicLine) const
+{
+	if (logicLine < CLogicInt(0)) return nullptr;
+	if (!EnsureCodeFoldRegions()) return nullptr;
+	auto it = std::lower_bound(m_vCodeFoldRegions.begin(), m_vCodeFoldRegions.end(), static_cast<size_t>(logicLine),
+		[](const codefold::Region& region, size_t line) { return region.firstLine < line; });
+	return it != m_vCodeFoldRegions.end() && it->firstLine == static_cast<size_t>(logicLine) ? &*it : nullptr;
+}
+
+const codefold::Region* CLayoutMgr::FindCodeFoldContainingLine(CLogicInt logicLine, bool outermost) const
+{
+	if (logicLine < CLogicInt(0) || !EnsureCodeFoldRegions()) return nullptr;
+	const size_t line = static_cast<size_t>(logicLine);
+	const codefold::Region* best = nullptr;
+	for (const auto& region : m_vCodeFoldRegions) {
+		if (region.firstLine > line || region.lastLine < line) continue;
+		if (!best || (outermost ? region.depth < best->depth : region.depth > best->depth)) best = &region;
+	}
+	return best;
+}
+
+const codefold::Region* CLayoutMgr::FindCollapsedCodeFoldContainingLine(CLogicInt logicLine) const
+{
+	if (logicLine < CLogicInt(0)) return nullptr;
+	const size_t line = static_cast<size_t>(logicLine);
+	const codefold::Region* best = nullptr;
+	for (const auto& region : m_vCollapsedCodeFolds) {
+		if (region.firstLine >= line || region.lastLine < line) continue;
+		if (!best || region.depth < best->depth) best = &region;
+	}
+	return best;
+}
+
+bool CLayoutMgr::IsCodeFoldCollapsedAtLine(CLogicInt logicLine) const
+{
+	return std::any_of(m_vCollapsedCodeFolds.begin(), m_vCollapsedCodeFolds.end(), [logicLine](const codefold::Region& region) {
+		return region.firstLine == static_cast<size_t>(logicLine);
+	});
+}
+
+bool CLayoutMgr::IsCodeFoldHiddenLine(CLogicInt logicLine) const
+{
+	auto it = std::upper_bound(m_vFoldHiddenLogicalLines.begin(), m_vFoldHiddenLogicalLines.end(), logicLine,
+		[](CLogicInt line, const FoldLineRange& range) { return line < range.first; });
+	if (it == m_vFoldHiddenLogicalLines.begin()) return false;
+	--it;
+	return it->first <= logicLine && logicLine <= it->last;
+}
+
+size_t CLayoutMgr::GetCodeFoldHiddenLineCount(CLogicInt logicLine) const
+{
+	const auto* region = FindCodeFoldAtLine(logicLine);
+	return region && region->lastLine > region->firstLine ? region->lastLine - region->firstLine : 0;
+}
+
+void CLayoutMgr::RebuildFoldHiddenRanges()
+{
+	m_vFoldHiddenLogicalLines.clear();
+	for (const auto& region : m_vCollapsedCodeFolds) {
+		if (region.lastLine <= region.firstLine || region.lastLine > static_cast<size_t>(std::numeric_limits<Int>::max())) continue;
+		m_vFoldHiddenLogicalLines.push_back({ CLogicInt(region.firstLine + 1), CLogicInt(region.lastLine) });
+	}
+	std::sort(m_vFoldHiddenLogicalLines.begin(), m_vFoldHiddenLogicalLines.end(), [](const FoldLineRange& a, const FoldLineRange& b) {
+		return a.first < b.first || (a.first == b.first && a.last < b.last);
+	});
+	std::vector<FoldLineRange> merged;
+	for (const auto& range : m_vFoldHiddenLogicalLines) {
+		if (merged.empty() || range.first > merged.back().last + CLogicInt(1)) merged.push_back(range);
+		else merged.back().last = t_max(merged.back().last, range.last);
+	}
+	m_vFoldHiddenLogicalLines.swap(merged);
+	RebuildVisibleLineCount();
+}
+
+void CLayoutMgr::RebuildVisibleLineCount()
+{
+	m_nVisibleLines = CLayoutInt(0);
+	for (const CLayout* layout = m_pLayoutTop; layout; layout = layout->GetNextLayout()) {
+		if (!IsCodeFoldHiddenLine(layout->GetLogicLineNo())) ++m_nVisibleLines;
+	}
+	m_pLayoutPrevRefer = nullptr;
+	m_nPrevReferLine = CLayoutInt(0);
+	m_nEOFLine = CLayoutInt(-1);
+	m_nEOFColumn = CLayoutInt(-1);
+}
+
+void CLayoutMgr::ExpandCodeFoldsContaining(CLogicInt logicLine)
+{
+	const size_t line = static_cast<size_t>(logicLine);
+	const auto oldSize = m_vCollapsedCodeFolds.size();
+	m_vCollapsedCodeFolds.erase(std::remove_if(m_vCollapsedCodeFolds.begin(), m_vCollapsedCodeFolds.end(), [line](const codefold::Region& region) {
+		return region.firstLine < line && line <= region.lastLine;
+	}), m_vCollapsedCodeFolds.end());
+	if (m_vCollapsedCodeFolds.size() != oldSize) RebuildFoldHiddenRanges();
+}
+
+bool CLayoutMgr::ToggleCodeFoldAtLine(CLogicInt logicLine)
+{
+	const auto* found = FindCodeFoldAtLine(logicLine);
+	if (!found) return false;
+	const codefold::Region region = *found; // parser vector remains stable only until the next parse
+	auto collapsed = std::find_if(m_vCollapsedCodeFolds.begin(), m_vCollapsedCodeFolds.end(), [&region](const codefold::Region& item) {
+		return item.firstLine == region.firstLine && item.lastLine == region.lastLine;
+	});
+	if (collapsed != m_vCollapsedCodeFolds.end()) m_vCollapsedCodeFolds.erase(collapsed);
+	else m_vCollapsedCodeFolds.push_back(region);
+	RebuildFoldHiddenRanges();
+	return true;
+}
+
+bool CLayoutMgr::FoldAllCodeBlocks()
+{
+	if (!EnsureCodeFoldRegions() || m_vCodeFoldRegions.empty()) return false;
+	m_vCollapsedCodeFolds = m_vCodeFoldRegions;
+	RebuildFoldHiddenRanges();
+	return true;
+}
+
+bool CLayoutMgr::UnfoldAllCodeBlocks()
+{
+	if (m_vCollapsedCodeFolds.empty()) return false;
+	m_vCollapsedCodeFolds.clear();
+	RebuildFoldHiddenRanges();
+	return true;
+}
+
+bool CLayoutMgr::FoldCodeBlocksAtDepth(size_t depth)
+{
+	if (!EnsureCodeFoldRegions()) return false;
+	const size_t oldSize = m_vCollapsedCodeFolds.size();
+	for (const auto& region : m_vCodeFoldRegions) {
+		if (region.depth == depth && std::none_of(m_vCollapsedCodeFolds.begin(), m_vCollapsedCodeFolds.end(), [&region](const codefold::Region& item) {
+			return item.firstLine == region.firstLine;
+		})) m_vCollapsedCodeFolds.push_back(region);
+	}
+	if (m_vCollapsedCodeFolds.size() == oldSize) return false;
+	RebuildFoldHiddenRanges();
+	return true;
+}
+
+bool CLayoutMgr::FoldCodeBlocksToDepth(size_t oneBasedDepth)
+{
+	if (!EnsureCodeFoldRegions()) return false;
+	const size_t minimumDepth = oneBasedDepth > 0 ? oneBasedDepth - 1 : 0;
+	const size_t oldSize = m_vCollapsedCodeFolds.size();
+	for (const auto& region : m_vCodeFoldRegions) {
+		if (region.depth < minimumDepth) continue;
+		if (std::none_of(m_vCollapsedCodeFolds.begin(), m_vCollapsedCodeFolds.end(), [&region](const codefold::Region& item) {
+			return item.firstLine == region.firstLine;
+		})) m_vCollapsedCodeFolds.push_back(region);
+	}
+	if (m_vCollapsedCodeFolds.size() == oldSize) return false;
+	RebuildFoldHiddenRanges();
+	return true;
+}
+
+CLayoutInt CLayoutMgr::GetFirstCollapsedFoldDisplayLine() const
+{
+	if (m_vCollapsedCodeFolds.empty()) return m_nVisibleLines;
+	size_t firstFold = m_vCollapsedCodeFolds.front().firstLine;
+	for (const auto& fold : m_vCollapsedCodeFolds) firstFold = std::min(firstFold, fold.firstLine);
+	CLayoutInt visibleLine(0);
+	for (const CLayout* layout = m_pLayoutTop; layout; layout = layout->GetNextLayout()) {
+		if (layout->GetLogicLineNo() >= CLogicInt(firstFold) && layout->GetLogicOffset() == CLogicInt(0)) return visibleLine;
+		if (!IsCodeFoldHiddenLine(layout->GetLogicLineNo())) ++visibleLine;
+	}
+	return CLayoutInt(0);
+}
+
+void CLayoutMgr::ResetCodeFolds()
+{
+	m_vCollapsedCodeFolds.clear();
+	m_vFoldHiddenLogicalLines.clear();
+	m_vCodeFoldRegions.clear();
+	m_bCodeFoldRegionsValid = false;
+	m_nVisibleLines = m_nLines;
+	m_pLayoutPrevRefer = nullptr;
+	m_nPrevReferLine = CLayoutInt(0);
+	m_nEOFLine = CLayoutInt(-1);
+	m_nEOFColumn = CLayoutInt(-1);
 }
 
 //@@@ 2002.09.23 YAZAKI CLayout*を作成するところは分離して、InsertLineNext()と共通化
@@ -338,6 +528,7 @@ void CLayoutMgr::AddLineBottom( CLayout* pLayout )
 	}
 	pLayout->m_pNext = nullptr;
 	m_nLines++;
+	if (!IsCodeFoldHiddenLine(pLayout->GetLogicLineNo())) ++m_nVisibleLines;
 	return;
 }
 
@@ -374,6 +565,7 @@ CLayout* CLayoutMgr::InsertLineNext( CLayout* pLayoutPrev, CLayout* pLayout )
 		pLayout->m_pNext = pLayoutNext;
 	}
 	m_nLines++;
+	if (!IsCodeFoldHiddenLine(pLayout->GetLogicLineNo())) ++m_nVisibleLines;
 	return pLayout;
 }
 
@@ -508,6 +700,11 @@ void CLayoutMgr::GetEndLayoutPos(
 		m_nEOFLine = ptLayoutEnd->y;
 		return;
 	}
+	// Ctrl+End / 全選択の終端は必ず実ファイル末尾へ到達させる。
+	// 末尾が折りたたみ範囲内なら先に展開して、可視行座標と物理末尾を一致させる。
+	if (m_pcDocLineMgr && m_pcDocLineMgr->GetLineCount() > CLogicInt(0)) {
+		ExpandCodeFoldsContaining(m_pcDocLineMgr->GetLineCount() - CLogicInt(1));
+	}
 
 	CLayout *btm = m_pLayoutBot;
 	if( btm->m_cEol.IsValid() ){
@@ -605,10 +802,12 @@ CLayout* CLayoutMgr::DeleteLayoutAsLogical(
 			DEBUG_TRACE( L"バグバグ\n" );
 		}
 
+		const bool layoutWasVisible = !IsCodeFoldHiddenLine(pLayout->GetLogicLineNo());
 		pLayout->~CLayout();
 		m_layoutMemRes->deallocate(pLayout, sizeof(CLayout), alignof(CLayout));
 
 		m_nLines--;	/* 全物理行数 */
+		if (layoutWasVisible) --m_nVisibleLines;
 		if( nullptr == pLayoutNext ){
 			m_pLayoutBot = pLayoutWork;
 		}
@@ -812,19 +1011,49 @@ int CLayoutMgr::SearchWord(
 void CLayoutMgr::LogicToLayout(
 	const CLogicPoint&	ptLogic,
 	CLayoutPoint*		pptLayout,
-	CLayoutInt			nLineHint
+	CLayoutInt			nLineHint,
+	bool			expandHiddenLine
 )
 {
 	pptLayout->Clear();
 
 	if(GetLineCount()==0)return; //変換不可
+	if (IsCodeFoldHiddenLine(ptLogic.y)) {
+		if (expandHiddenLine) {
+			ExpandCodeFoldsContaining(ptLogic.y);
+		} else if (const auto* collapsed = FindCollapsedCodeFoldContainingLine(ptLogic.y)) {
+			// Batch marker scans map hidden lines to a visible fold header without expanding it.
+			LogicToLayout(CLogicPoint(CLogicInt(0), CLogicInt(static_cast<Int>(collapsed->firstLine))), pptLayout, nLineHint, false);
+			return;
+		}
+	}
 
 	// サーチ開始地点 -> pLayout, nCaretPosX, nCaretPosY
 	CLayoutInt		nCaretPosX = CLayoutInt(0);
 	CLayoutInt		nCaretPosY;
 	const CLayout*	pLayout;
-	// 2013.05.15 ヒント、ありなしの処理を統合
-	{
+	if (IsCodeFoldActive()) {
+		// 論理行番号と表示行番号は折りたたみ後に一致しない。
+		// 対象行が隠れている場合は展開し、先頭から表示行番号を数えて正しい位置を得る。
+		ExpandCodeFoldsContaining(ptLogic.y);
+		nCaretPosY = CLayoutInt(0);
+		pLayout = m_pLayoutTop;
+		while (pLayout && pLayout->GetLogicLineNo() < ptLogic.y) {
+			if (!IsCodeFoldHiddenLine(pLayout->GetLogicLineNo())) ++nCaretPosY;
+			pLayout = pLayout->GetNextLayout();
+		}
+		if (!pLayout) {
+			pptLayout->SetY(GetLineCount());
+			return;
+		}
+		while (pLayout->GetNextLayout()
+			&& pLayout->GetNextLayout()->GetLogicLineNo() == ptLogic.y
+			&& pLayout->GetNextLayout()->GetLogicOffset() <= ptLogic.x) {
+			pLayout = pLayout->GetNextLayout();
+			if (!IsCodeFoldHiddenLine(pLayout->GetLogicLineNo())) ++nCaretPosY;
+		}
+	} else {
+		// 2013.05.15 ヒント、ありなしの処理を統合
 		nLineHint = t_min(GetLineCount() - 1, nLineHint);
 		nCaretPosY = t_max(CLayoutInt(ptLogic.y), nLineHint);
 

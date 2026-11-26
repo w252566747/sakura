@@ -25,6 +25,7 @@ public:
 	//ロード前後
 	void OnBeforeLoad(SLoadInfo* sLoadInfo) override;
 	void OnAfterLoad(const SLoadInfo& sLoadInfo) override;
+	void OnFinalLoad(ELoadResult eLoadResult) override;
 
 	//セーブ前後
 	void OnAfterSave(const SSaveInfo& sSaveInfo) override;

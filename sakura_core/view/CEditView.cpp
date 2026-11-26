@@ -23,6 +23,7 @@
 */
 
 #include "StdAfx.h"
+#include <algorithm>
 #include <limits.h>
 #include "view/CEditView.h"
 #include "view/CViewFont.h"
@@ -127,6 +128,116 @@ CEditView::CEditView( void )
 , m_cTextDrawer(this)			// warning C4355: 'this' : ベース メンバー初期化子リストで使用されました。
 , m_cCommander(this)			// warning C4355: 'this' : ベース メンバー初期化子リストで使用されました。
 {
+}
+
+bool CEditView::ResolveExtraCursor(const SExtraCursor& extra, CLayoutPoint* out) const
+{
+	if (!out || !m_pcEditDoc) return false;
+	CLogicPoint logical = extra.caret;
+	const CDocLine* line = m_pcEditDoc->m_cDocLineMgr.GetLine(logical.y);
+	if (!line) return false;
+	if (m_pcEditDoc->m_cLayoutMgr.IsCodeFoldHiddenLine(logical.y)) return false;
+	const CLogicInt length = line->GetLengthWithoutEOL();
+	int column = std::clamp(static_cast<int>(logical.x), 0, static_cast<int>(length));
+	for (CLogicInt index(0); index < CLogicInt(column);) {
+		const int charLength = CNativeW::GetSizeOfChar(line->GetPtr(), length, index);
+		if (charLength <= 0) return false;
+		if (static_cast<int>(index) + charLength > column) {
+			column = static_cast<int>(index);
+			break;
+		}
+		index += CLogicInt(charLength);
+	}
+	logical.x = CLogicInt(column);
+	m_pcEditDoc->m_cLayoutMgr.LogicToLayout(logical, out, CLayoutInt(0), false);
+	return true;
+}
+
+namespace {
+std::size_t g_nMaxMultiCursors = CEditView::MAX_MULTI_CURSORS;
+bool g_bRainbowUnmatchedHighlightEnabled = true;
+}
+
+std::size_t CEditView::GetMaxMultiCursors() noexcept
+{
+	return g_nMaxMultiCursors;
+}
+
+std::size_t CEditView::GetMaxExtraCursors() noexcept
+{
+	return g_nMaxMultiCursors - 1;
+}
+
+void CEditView::SetMaxMultiCursors(std::size_t count) noexcept
+{
+	g_nMaxMultiCursors = std::clamp(count, std::size_t(1), MAX_MULTI_CURSORS);
+}
+
+bool CEditView::IsRainbowUnmatchedHighlightEnabled() noexcept
+{
+	return g_bRainbowUnmatchedHighlightEnabled;
+}
+
+void CEditView::SetRainbowUnmatchedHighlightEnabled(bool enabled) noexcept
+{
+	g_bRainbowUnmatchedHighlightEnabled = enabled;
+}
+
+bool CEditView::ResolveExtraCursorAnchor(const SExtraCursor& extra, CLayoutPoint* out) const
+{
+	if (!extra.bHasSelection || !out || !m_pcEditDoc) return false;
+	SExtraCursor anchor = extra;
+	anchor.caret = extra.anchor;
+	return ResolveExtraCursor(anchor, out);
+}
+
+CLayoutRange CEditView::ResolveExtraCursorSelectAreaLine(const SExtraCursor& extra, CLayoutInt line) const
+{
+	CLayoutRange result;
+	result.Clear(-1);
+	CLayoutPoint anchor;
+	CLayoutPoint caret;
+	if (!ResolveExtraCursorAnchor(extra, &anchor) || !ResolveExtraCursor(extra, &caret) || anchor == caret) return result;
+	if (PointCompare(caret, anchor) < 0) std::swap(anchor, caret);
+	const CLayout* layout = m_pcEditDoc->m_cLayoutMgr.SearchLineByLayoutY(line);
+	if (layout) GetSelectionInfo().GetSelectAreaLineFromRange(result, line, layout, CLayoutRange(anchor, caret));
+	return result;
+}
+
+bool CEditView::ToggleExtraCursorAt(const CLayoutPoint& point)
+{
+	if (!m_pcEditDoc) return false;
+	const CLayoutPoint primary = GetCaret().GetCaretLayoutPos();
+	CLogicPoint targetLogic;
+	m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(point, &targetLogic);
+	SExtraCursor candidate;
+	candidate.caret = targetLogic;
+	CLayoutPoint target;
+	if (!ResolveExtraCursor(candidate, &target)) return false;
+	if (target == primary) return false;
+
+	for (auto it = m_vExtraCursors.begin(); it != m_vExtraCursors.end(); ++it) {
+		CLayoutPoint existing;
+		if (ResolveExtraCursor(*it, &existing) && existing == target) {
+			m_vExtraCursors.erase(it);
+			Redraw();
+			return true;
+		}
+	}
+	if (m_vExtraCursors.size() >= GetMaxExtraCursors()) return false;
+
+	SExtraCursor extra;
+	extra.caret = targetLogic;
+	m_vExtraCursors.push_back(extra);
+	Redraw();
+	return true;
+}
+
+void CEditView::ClearExtraCursors()
+{
+	if (m_vExtraCursors.empty()) return;
+	m_vExtraCursors.clear();
+	Redraw();
 }
 
 // 2007.10.23 kobake コンストラクタ内の処理をすべてCreateに移しました。(初期化処理が不必要に分散していたため)
@@ -1733,6 +1844,9 @@ void CEditView::CopyViewStatus( CEditView* pView ) const
 
 	// 入力状態
 	GetCaret().CopyCaretStatus(&pView->GetCaret());
+	// Multi-cursor positions are transient and are relative to this view's caret.
+	pView->m_vExtraCursors.clear();
+	pView->m_sMultiCursorAltClick.pending = false;
 
 	// 選択状態
 	GetSelectionInfo().CopySelectStatus(&pView->GetSelectionInfo());
@@ -1908,6 +2022,99 @@ bool CEditView::GetSelectedData(
 	else{
 		CEol appendEol(neweol);
 		buffer->Clear();
+		CLayoutMgr& layoutMgr = m_pcEditDoc->m_cLayoutMgr;
+		if (layoutMgr.IsCodeFoldActive()) {
+			CLogicPoint logicFrom;
+			CLogicPoint logicTo;
+			layoutMgr.LayoutToLogic(GetSelectionInfo().m_sSelect.GetFrom(), &logicFrom);
+			layoutMgr.LayoutToLogic(GetSelectionInfo().m_sSelect.GetTo(), &logicTo);
+
+			const int firstLine = std::max(0, static_cast<int>(logicFrom.y));
+			const int lastLine = std::min(static_cast<int>(m_pcEditDoc->m_cDocLineMgr.GetLineCount()) - 1,
+				static_cast<int>(logicTo.y));
+			const CLayout* layout = layoutMgr.GetTopLayout();
+			CLayoutInt physicalLayoutLine(0);
+			const CLogicInt logicLineCount = m_pcEditDoc->m_cDocLineMgr.GetLineCount();
+			if (logicLineCount > CLogicInt(0) && firstLine > static_cast<int>(logicLineCount) / 2) {
+				layout = layoutMgr.GetBottomLayout();
+				physicalLayoutLine = layoutMgr.GetPhysicalLayoutLineCount() - CLayoutInt(1);
+				while (layout != nullptr && static_cast<int>(layout->GetLogicLineNo()) > firstLine) {
+					layout = layout->GetPrevLayout();
+					--physicalLayoutLine;
+				}
+				while (layout != nullptr && layout->GetPrevLayout() != nullptr
+					&& static_cast<int>(layout->GetPrevLayout()->GetLogicLineNo()) == firstLine) {
+					layout = layout->GetPrevLayout();
+					--physicalLayoutLine;
+				}
+			} else {
+				for (; layout != nullptr && static_cast<int>(layout->GetLogicLineNo()) < firstLine;
+					layout = layout->GetNextLayout(), ++physicalLayoutLine) {
+				}
+			}
+
+			for (; layout != nullptr && static_cast<int>(layout->GetLogicLineNo()) <= lastLine;
+				layout = layout->GetNextLayout(), ++physicalLayoutLine) {
+				const int logicLine = static_cast<int>(layout->GetLogicLineNo());
+				const CDocLine* docLine = layout->GetDocLineRef();
+				if (docLine == nullptr) continue;
+
+				const int contentLength = static_cast<int>(docLine->GetLengthWithoutEOL());
+				const int fullLength = static_cast<int>(docLine->GetLengthWithEOL());
+				const int segmentStart = static_cast<int>(layout->GetLogicOffset());
+				const int segmentContentEnd = std::min(contentLength,
+					segmentStart + static_cast<int>(layout->GetLengthWithoutEOL()));
+				const int requestedStart = logicLine == firstLine ? static_cast<int>(logicFrom.x) : 0;
+				const int requestedEnd = logicLine == lastLine ? static_cast<int>(logicTo.x) : fullLength;
+				const int contentFrom = std::clamp(std::max(segmentStart, requestedStart), segmentStart, segmentContentEnd);
+				const int contentTo = std::clamp(std::min(segmentContentEnd, requestedEnd), contentFrom, segmentContentEnd);
+				const int eolFrom = layout->GetLayoutEol().IsValid()
+					? std::clamp(std::max(contentLength, requestedStart), contentLength, fullLength) : fullLength;
+				const int eolTo = layout->GetLayoutEol().IsValid()
+					? std::clamp(requestedEnd, eolFrom, fullLength) : fullLength;
+				const bool appendWrapEol = bAddCRLFWhenCopy
+					&& !layout->GetLayoutEol().IsValid()
+					&& contentTo == segmentContentEnd
+					&& contentTo > contentFrom;
+				const bool fullPhysicalEolSelected = layout->GetLayoutEol().IsValid()
+					&& eolFrom == contentLength && eolTo == fullLength;
+				const int selectedEolLength = std::max(0, eolTo - eolFrom);
+				if (contentTo == contentFrom && selectedEolLength == 0 && !appendWrapEol) continue;
+
+				if (pszQuote != nullptr && pszQuote[0] != L'\0') {
+					buffer->Append(pszQuote, quoteLen);
+				}
+				if (bWithLineNumber) {
+					std::wstring lineNumber = L" " + std::to_wstring(static_cast<Int>(physicalLayoutLine) + 1) + L":";
+					const size_t lineNumberWidth = std::max(static_cast<size_t>(nLineNumCols), lineNumber.size());
+					for (size_t padding = lineNumberWidth - lineNumber.size(); padding > 0;) {
+						const size_t chunk = std::min(padding, wcslen(pszSpaces));
+						buffer->Append(pszSpaces, chunk);
+						padding -= chunk;
+					}
+					buffer->Append(lineNumber.data(), lineNumber.size());
+				}
+
+				const wchar_t* lineText = docLine->GetPtr();
+				if (contentTo > contentFrom) {
+					buffer->Append(lineText + contentFrom, static_cast<size_t>(contentTo - contentFrom));
+				}
+				if (selectedEolLength > 0) {
+					if (fullPhysicalEolSelected && neweol != EEolType::none) {
+						buffer->Append(appendEol.GetValue2(), static_cast<size_t>(appendEol.GetLen()));
+					} else {
+						buffer->Append(lineText + eolFrom, static_cast<size_t>(selectedEolLength));
+					}
+				}
+				if (appendWrapEol) {
+					const CEol& eol = neweol == EEolType::none
+						? m_pcEditDoc->m_cDocEditor.GetNewLineCode() : appendEol;
+					buffer->Append(eol.GetValue2(), static_cast<size_t>(eol.GetLen()));
+				}
+				if (bLineOnly) break;
+			}
+		return true;
+	}
 
 		//<< 2002/04/18 Azumaiya
 		//  これから貼り付けに使う領域の大まかなサイズを取得する。
@@ -2637,6 +2844,8 @@ void CEditView::SetInsMode(bool mode)
 
 void CEditView::OnAfterLoad([[maybe_unused]] const SLoadInfo& sLoadInfo)
 {
+	m_vExtraCursors.clear();
+	m_sMultiCursorAltClick.pending = false;
 	if( nullptr == GetHwnd() ){
 		// MiniMap 非表示
 		return;

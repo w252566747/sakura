@@ -18,6 +18,10 @@
 /** Scrollbar overview data, independent of window handles and document storage. */
 class CScrollBarMarkerModel final {
 public:
+	static constexpr unsigned KIND_COUNT = 6;
+	static constexpr unsigned VISIBILITY_MASK = (1u << KIND_COUNT) - 1;
+	static constexpr unsigned NormalizeVisibilityMask(unsigned mask) noexcept { return mask & VISIBILITY_MASK; }
+
 	enum class Kind : std::uint8_t {
 		Search,
 		WordMarker,
@@ -33,6 +37,7 @@ public:
 		std::uint32_t color = 0;      // 0x00RRGGBB, independent of Win32 COLORREF
 		std::wstring label;
 		std::wstring detail;
+		int logicalLine = -1;          // optional source line used when navigating folded views
 	};
 
 	struct Tick {
@@ -42,9 +47,32 @@ public:
 		std::uint32_t color = 0;
 		int firstLine = 0;
 		int lastLine = 0;
+		int firstLogicalLine = -1;
+		int lastLogicalLine = -1;
 		std::size_t count = 0;
 		std::wstring tooltip;
 	};
+
+	static const wchar_t* KindName(Kind kind) noexcept
+	{
+		switch (kind) {
+		case Kind::Search: return L"検索結果";
+		case Kind::WordMarker: return L"Marker";
+		case Kind::SyntaxError: return L"構文エラー";
+		case Kind::SyntaxWarning: return L"構文警告";
+		case Kind::Bookmark: return L"ブックマーク";
+		case Kind::Modified: return L"変更行";
+		default: return L"Marker";
+		}
+	}
+
+	static std::wstring FormatTooltip(const Tick& tick)
+	{
+		std::wstring text = KindName(tick.kind);
+		if (tick.count > 1) text += L" / " + std::to_wstring(tick.count) + L"件";
+		if (!tick.tooltip.empty()) text += L"\n" + tick.tooltip;
+		return text;
+	}
 
 	void SetMarkers(std::vector<Marker> markers)
 	{
@@ -88,6 +116,8 @@ public:
 			tick.color = marker.color;
 			tick.firstLine = line;
 			tick.lastLine = line;
+			tick.firstLogicalLine = marker.logicalLine;
+			tick.lastLogicalLine = marker.logicalLine;
 			tick.count = 1;
 			tick.tooltip = marker.label;
 			if (!marker.detail.empty()) {
@@ -99,6 +129,10 @@ public:
 			Tick& tick = found->second;
 			tick.firstLine = std::min(tick.firstLine, line);
 			tick.lastLine = std::max(tick.lastLine, line);
+			if (marker.logicalLine >= 0) {
+				tick.firstLogicalLine = tick.firstLogicalLine < 0 ? marker.logicalLine : std::min(tick.firstLogicalLine, marker.logicalLine);
+				tick.lastLogicalLine = std::max(tick.lastLogicalLine, marker.logicalLine);
+			}
 			++tick.count;
 			if (tick.count <= 8 && !marker.label.empty() && tick.tooltip.find(marker.label) == std::wstring::npos) {
 				if (!tick.tooltip.empty()) tick.tooltip += L"\n";
@@ -149,6 +183,8 @@ public:
 				tick.color = marker.color;
 				tick.firstLine = marker.line;
 				tick.lastLine = marker.line;
+				tick.firstLogicalLine = marker.logicalLine;
+				tick.lastLogicalLine = marker.logicalLine;
 				tick.count = 1;
 				tick.tooltip = marker.label;
 				if (!marker.detail.empty()) {
@@ -161,6 +197,10 @@ public:
 				Tick& tick = ticks[found->second];
 				tick.firstLine = std::min(tick.firstLine, marker.line);
 				tick.lastLine = std::max(tick.lastLine, marker.line);
+				if (marker.logicalLine >= 0) {
+					tick.firstLogicalLine = tick.firstLogicalLine < 0 ? marker.logicalLine : std::min(tick.firstLogicalLine, marker.logicalLine);
+					tick.lastLogicalLine = std::max(tick.lastLogicalLine, marker.logicalLine);
+				}
 				++tick.count;
 				if (tick.count <= 8 && !marker.label.empty() && tick.tooltip.find(marker.label) == std::wstring::npos) {
 					if (!tick.tooltip.empty()) tick.tooltip += L"\n";

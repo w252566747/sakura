@@ -420,6 +420,25 @@ void CLayoutMgr::_DoLayout(bool bBlockingHook)
 		vecWorkerThreads[i].join();
 		_AppendAsMove(vecWorkerLayoutMgrs[i]);
 	}
+	RefreshUnmatchedRainbowBrackets();
+	RebuildVisibleLineCount();
+}
+
+void CLayoutMgr::RefreshUnmatchedRainbowBrackets()
+{
+	if (!m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) return;
+	CBracketMatchResolver resolver;
+	for (CLayout* layout = GetTopLayout(); layout; layout = layout->GetNextLayout()) {
+		const CDocLine* line = layout->GetDocLineRef();
+		if (!line) continue;
+		const wchar_t* text = line->GetPtr();
+		const int length = static_cast<int>(line->GetLengthWithoutEOL());
+		for (auto& mark : layout->GetMutableRainbowBracketMarks()) {
+			if (mark.position < 0 || mark.position >= length) continue;
+			resolver.Consume(text[mark.position], &mark);
+		}
+	}
+	resolver.Finish();
 }
 
 /*!
@@ -677,6 +696,7 @@ CLayoutInt CLayoutMgr::DoLayout_Range(
 
 	// 2009.08.28 nasukoji	テキストが編集されたら最大幅を算出する
 	CalculateTextWidth_Range(pctwArg);
+	RefreshUnmatchedRainbowBrackets();
 
 // 1999.12.22 レイアウト情報がなくなる訳ではないので
 //	m_nPrevReferLine = 0;
@@ -810,7 +830,7 @@ void CLayoutMgr::_AppendAsMove( CLayoutMgr& other )
 	}
 	m_pLayoutBot = other.GetBottomLayout();
 
-	m_nLines += other.GetLineCount();
+	m_nLines += other.GetPhysicalLayoutLineCount();
 
 	// 所有権が移ったので空っぽにしておく
 	other.Init();

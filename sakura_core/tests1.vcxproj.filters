@@ -190,6 +190,15 @@
     <ClCompile Include="..\src\test\cpp\tests1\test-cdoclinemgr.cpp">
       <Filter>Test Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\test\cpp\tests1\test-realtimetextfilter.cpp">
+      <Filter>Test Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\test\cpp\tests1\test-codefoldparser.cpp">
+      <Filter>Test Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\test\cpp\tests1\test-multicursorpointtransform.cpp">
+      <Filter>Test Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\test\cpp\tests1\test-csearchagent.cpp">
       <Filter>Test Files</Filter>
     </ClCompile>

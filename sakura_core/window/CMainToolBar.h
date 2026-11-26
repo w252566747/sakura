@@ -54,6 +54,7 @@ private:
 	void LayoutMarkerControls();
 	void HandleMarkerControl(UINT controlId);
 	void HandleMarkerColorChange(UINT controlId);
+	void ShowCSVOptionsMenu();
 
 	CEditWnd*	m_pOwner;
 	HWND		m_hwndToolBar = nullptr;

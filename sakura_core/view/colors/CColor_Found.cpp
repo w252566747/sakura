@@ -18,6 +18,7 @@ void CColor_Select::OnStartScanLogic()
 	m_nSelectLine	= CLayoutInt(-1);
 	m_nSelectStart	= CLogicInt(-1);
 	m_nSelectEnd	= CLogicInt(-1);
+	m_vExtraSelectCache.clear();
 }
 
 bool CColor_Select::BeginColor([[maybe_unused]] const CStringRef& cStr, [[maybe_unused]] int nPos)
@@ -31,32 +32,45 @@ bool CColor_Select::BeginColorEx(const CStringRef& cStr, int nPos, CLayoutInt nL
 	if(!cStr.IsValid())return false;
 
 	const CEditView& view = *(CColorStrategyPool::getInstance()->GetCurrentView());
-	if( !view.GetSelectionInfo().IsTextSelected() || !CTypeSupport(&view,COLORIDX_SELECT).IsDisp() ){
+	if( (!view.GetSelectionInfo().IsTextSelected() && view.m_vExtraCursors.empty()) || !CTypeSupport(&view,COLORIDX_SELECT).IsDisp() ){
 		return false;
 	}
 
 	// 2011.12.27 レイアウト行頭で1回だけ確認してあとはメンバー変数をみる
-	if( m_nSelectLine == nLineNum ){
-		if( m_nSelectStart <= nPos && nPos < m_nSelectEnd ){
-			return true;
+	if( m_nSelectLine != nLineNum ){
+		m_nSelectLine = nLineNum;
+		CLayoutRange selectArea = view.GetSelectionInfo().GetSelectAreaLine(nLineNum, pcLayout);
+		CLayoutInt nSelectFrom = selectArea.GetFrom().x;
+		CLayoutInt nSelectTo = selectArea.GetTo().x;
+		if( nSelectFrom == nSelectTo || -1 == nSelectFrom || !pcLayout ){
+			m_nSelectStart = -1;
+			m_nSelectEnd = -1;
 		}
-		return false;
+		else{
+			m_nSelectStart = view.LineColumnToIndex(pcLayout, nSelectFrom) + pcLayout->GetLogicOffset();
+			m_nSelectEnd = view.LineColumnToIndex(pcLayout, nSelectTo) + pcLayout->GetLogicOffset();
+		}
+		m_vExtraSelectCache.clear();
+		m_vExtraSelectCache.reserve(view.m_vExtraCursors.size());
+		for( const auto& extra : view.m_vExtraCursors ){
+			SExtraSelectRange range{ CLogicInt(-1), CLogicInt(-1) };
+			if( pcLayout ){
+				CLayoutRange extraArea = view.ResolveExtraCursorSelectAreaLine(extra, nLineNum);
+				CLayoutInt nFrom = extraArea.GetFrom().x;
+				CLayoutInt nTo = extraArea.GetTo().x;
+				if( nFrom != nTo && nFrom != CLayoutInt(-1) ){
+					range.nStart = view.LineColumnToIndex(pcLayout, nFrom) + pcLayout->GetLogicOffset();
+					range.nEnd = view.LineColumnToIndex(pcLayout, nTo) + pcLayout->GetLogicOffset();
+				}
+			}
+			m_vExtraSelectCache.push_back(range);
+		}
 	}
-	m_nSelectLine = nLineNum;
-	CLayoutRange selectArea = view.GetSelectionInfo().GetSelectAreaLine(nLineNum, pcLayout);
-	CLayoutInt nSelectFrom = selectArea.GetFrom().x;
-	CLayoutInt nSelectTo = selectArea.GetTo().x;
-	if( nSelectFrom == nSelectTo || -1 == nSelectFrom ){
-		m_nSelectStart = -1;
-		m_nSelectEnd = -1;
-		return false;
-	}
-	CLogicInt nIdxFrom = view.LineColumnToIndex(pcLayout, nSelectFrom) + pcLayout->GetLogicOffset();
-	CLogicInt nIdxTo = view.LineColumnToIndex(pcLayout, nSelectTo) + pcLayout->GetLogicOffset();
-	m_nSelectStart = nIdxFrom;
-	m_nSelectEnd = nIdxTo;
 	if( m_nSelectStart <= nPos && nPos < m_nSelectEnd ){
 		return true;
+	}
+	for( const auto& range : m_vExtraSelectCache ){
+		if( range.nStart <= nPos && nPos < range.nEnd ) return true;
 	}
 	return false;
 }

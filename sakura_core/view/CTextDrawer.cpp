@@ -19,6 +19,7 @@
 #include "charset/charcode.h"
 #include "doc/layout/CLayout.h"
 #include "apiwrap/StdApi.h"
+#include <string>
 
 const CTextArea* CTextDrawer::GetTextArea() const
 {
@@ -519,6 +520,69 @@ void CTextDrawer::DispLineNumber(
 			gr.FillSolidMyRect(rcLineNum, bgcolor);
 		}
 		bDispLineNumTrans = true;
+	}
+
+	// 折りたたみ可能な論理行にだけ、行番号領域の左端へネイティブ風の +/- 印を描く。
+	if (!pView->m_bMiniMap && pView->m_pcEditDoc) {
+		auto& foldMgr = pView->m_pcEditDoc->m_cLayoutMgr;
+		const CLayout* foldLayout = foldMgr.SearchLineByLayoutY(nLineNum);
+		if (foldMgr.IsCodeFoldSupported() && foldLayout && foldLayout->GetLogicOffset() == CLogicInt(0)
+			&& foldMgr.FindCodeFoldAtLine(foldLayout->GetLogicLineNo())) {
+			const int boxWidth = std::max(5, std::min(9, nCharWidth - 2));
+			const int boxHeight = std::max(5, std::min(9, nLineHeight - 2));
+			const int left = pView->GetTextArea().GetLeftYohaku() + (nCharWidth - boxWidth) / 2;
+			const int top = y + (nLineHeight - boxHeight) / 2;
+			RECT box{ left, top, left + boxWidth, top + boxHeight };
+			const int saved = ::SaveDC(gr);
+			::SelectObject(gr, ::GetStockObject(DC_PEN));
+			::SelectObject(gr, ::GetStockObject(DC_BRUSH));
+			::SetDCPenColor(gr, ::GetSysColor(COLOR_GRAYTEXT));
+			::SetDCBrushColor(gr, bgcolor);
+			::Rectangle(gr, box.left, box.top, box.right, box.bottom);
+			const int midX = (box.left + box.right) / 2;
+			const int midY = (box.top + box.bottom) / 2;
+			::MoveToEx(gr, box.left + 2, midY, nullptr);
+			::LineTo(gr, box.right - 2, midY);
+			if (foldMgr.IsCodeFoldCollapsedAtLine(foldLayout->GetLogicLineNo())) {
+				::MoveToEx(gr, midX, box.top + 2, nullptr);
+				::LineTo(gr, midX, box.bottom - 2);
+			}
+			if (saved) ::RestoreDC(gr, saved);
+
+			if (foldMgr.IsCodeFoldCollapsedAtLine(foldLayout->GetLogicLineNo())) {
+				const size_t hiddenLineCount = foldMgr.GetCodeFoldHiddenLineCount(foldLayout->GetLogicLineNo());
+				if (hiddenLineCount > 0) {
+					const std::wstring label = L" … " + std::to_wstring(hiddenLineCount) + L" 行";
+					std::vector<int> labelDx;
+					const int* dx = pView->GetTextMetrics().GenerateDxArray2(
+						&labelDx, label.c_str(), static_cast<int>(label.size()));
+					const int labelWidth = CTextMetrics::CalcTextWidth(
+						label.c_str(), static_cast<int>(label.size()), dx);
+					CMemoryIterator lineEnd = foldMgr.CreateCMemoryIterator(foldLayout);
+					while (lineEnd.getIndex() < foldLayout->GetLengthWithoutEOL()) {
+						lineEnd.scanNext();
+						lineEnd.addDelta();
+					}
+					const int labelLeft = pView->GetTextArea().GetAreaLeft()
+						+ static_cast<Int>(lineEnd.getColumn())
+						- static_cast<Int>(pView->GetTextArea().GetViewLeftCol())
+						+ DpiScaleX(4);
+					const int labelTop = y + (nLineHeight - pView->GetTextMetrics().GetHankakuHeight()) / 2;
+					RECT labelRect{ labelLeft, y, labelLeft + labelWidth, y + nLineHeight };
+					const RECT areaRect = pView->GetTextArea().GetAreaRect();
+					if (labelLeft >= areaRect.left && labelRect.right <= areaRect.right) {
+						gr.PushTextForeColor(::GetSysColor(COLOR_GRAYTEXT));
+						gr.PushTextBackColor(cBackType.GetBackColor());
+						gr.PushMyFont(cTextType.GetTypeFont());
+						::ExtTextOut(gr, labelLeft, labelTop, ETO_OPAQUE | ETO_CLIPPED,
+							&labelRect, label.c_str(), static_cast<UINT>(label.size()), dx);
+						gr.PopMyFont();
+						gr.PopTextBackColor();
+						gr.PopTextForeColor();
+					}
+				}
+			}
+		}
 	}
 
 	//行属性描画 ($$$分離予定)

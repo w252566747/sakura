@@ -37,28 +37,35 @@
 #include "config/app_constants.h"
 #include "apiwrap/DarkMode.h"
 #include <CommCtrl.h>
+#include <commdlg.h>
 #include <array>
 #include <chrono>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 constexpr UINT_PTR IDT_SCROLLBAR_MARKERS = 2;
 constexpr int SCROLLBAR_MARKER_MENU_BASE = 0x6b00;
 constexpr UINT SCROLLBAR_MARKER_KIND_COUNT = 6;
+unsigned g_uScrollBarMarkerVisibility = CScrollBarMarkerModel::VISIBILITY_MASK;
+std::array<unsigned, SCROLLBAR_MARKER_KIND_COUNT> g_uScrollBarMarkerColors{
+	0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu };
+
+void InvalidateAllScrollBarMarkers()
+{
+	CEditWnd* editWindow = CEditWnd::getInstance();
+	if (!editWindow) return;
+	for (int index = 0; index < editWindow->GetAllViewCount(); ++index) {
+		HWND scrollBar = editWindow->GetView(index).m_hwndVScrollBar;
+		if (scrollBar) ::InvalidateRect(scrollBar, nullptr, FALSE);
+	}
+}
 
 const wchar_t* ScrollBarMarkerKindName(CScrollBarMarkerModel::Kind kind)
 {
-	switch (kind) {
-	case CScrollBarMarkerModel::Kind::Search: return L"検索結果";
-	case CScrollBarMarkerModel::Kind::WordMarker: return L"Marker";
-	case CScrollBarMarkerModel::Kind::SyntaxError: return L"構文エラー";
-	case CScrollBarMarkerModel::Kind::SyntaxWarning: return L"構文警告";
-	case CScrollBarMarkerModel::Kind::Bookmark: return L"ブックマーク";
-	case CScrollBarMarkerModel::Kind::Modified: return L"変更行";
-	default: return L"Marker";
-	}
+	return CScrollBarMarkerModel::KindName(kind);
 }
 
 COLORREF GetTypeColor(const CEditView* view, EColorIndexType index, COLORREF fallback)
@@ -87,6 +94,28 @@ int ScrollBarMarkerTrackTop()
 {
 	return std::max(0, ::GetSystemMetrics(SM_CYVSCROLL));
 }
+}
+
+unsigned CEditView::GetScrollBarMarkerVisibility() noexcept
+{
+	return g_uScrollBarMarkerVisibility;
+}
+
+void CEditView::SetScrollBarMarkerVisibility(unsigned mask) noexcept
+{
+	g_uScrollBarMarkerVisibility = CScrollBarMarkerModel::NormalizeVisibilityMask(mask);
+}
+
+unsigned CEditView::GetScrollBarMarkerColor(unsigned kind) noexcept
+{
+	return kind < g_uScrollBarMarkerColors.size() ? g_uScrollBarMarkerColors[kind] : 0xffffffffu;
+}
+
+void CEditView::SetScrollBarMarkerColor(unsigned kind, unsigned color) noexcept
+{
+	if (kind < g_uScrollBarMarkerColors.size()) {
+		g_uScrollBarMarkerColors[kind] = color <= 0x00ffffffu ? color : 0xffffffffu;
+	}
 }
 
 /*! スクロールバー作成
@@ -248,6 +277,8 @@ void CEditView::UpdateScrollBarMarkerScan()
 	mix(static_cast<uint64_t>(m_pcEditDoc->m_bCurlSyntaxResultStale));
 	mix(static_cast<uint64_t>(m_pcEditDoc->m_vCurlSyntaxDiagnostics.size()));
 	mix(static_cast<uint64_t>(m_pcEditDoc->m_cDocEditor.m_cOpeBuf.GetNoModifiedSeq()));
+	for (unsigned kind = 0; kind < SCROLLBAR_MARKER_KIND_COUNT; ++kind)
+		mix(static_cast<uint64_t>(GetScrollBarMarkerColor(kind)));
 	if (!m_bScrollBarMarkerCacheKeyValid || key != m_uScrollBarMarkerScanKey) {
 		m_cScrollBarMarkerModel.ResetOverview(trackHeight, lineCount);
 		m_uScrollBarMarkerScanKey = key;
@@ -290,15 +321,19 @@ void CEditView::UpdateScrollBarMarkerScan()
 		auto mapLine = [&]() {
 			if (!mapped) {
 				CLayoutPoint point;
-				layout.LogicToLayout(CLogicPoint(CLogicInt(0), CLogicInt(physicalLine)), &point);
+				layout.LogicToLayout(CLogicPoint(CLogicInt(0), CLogicInt(physicalLine)), &point, CLayoutInt(0), false);
 				overviewLine = static_cast<int>(point.GetY());
 				mapped = true;
 			}
 			return overviewLine;
 		};
 		auto addMarker = [&](CScrollBarMarkerModel::Kind kind, COLORREF color, const std::wstring& label, const std::wstring& detail) {
+			const unsigned customColor = GetScrollBarMarkerColor(static_cast<unsigned>(kind));
+			if (kind != CScrollBarMarkerModel::Kind::WordMarker && customColor != 0xffffffffu)
+				color = static_cast<COLORREF>(customColor);
 			CScrollBarMarkerModel::Marker marker;
 			marker.line = mapLine();
+			marker.logicalLine = physicalLine;
 			marker.kind = kind;
 			marker.color = static_cast<std::uint32_t>(color);
 			marker.label = label;
@@ -314,7 +349,8 @@ void CEditView::UpdateScrollBarMarkerScan()
 			if (searchActive && length > 0 && length <= 65536) {
 				CLogicInt matchStart, matchEnd;
 				if (IsSearchString(CStringRef(text, static_cast<std::size_t>(length)), CLogicInt(0), &matchStart, &matchEnd)) {
-					addMarker(CScrollBarMarkerModel::Kind::Search, GetTypeColor(this, COLORIDX_SEARCH, RGB(255, 220, 0)), L"検索", lineDetail);
+					addMarker(CScrollBarMarkerModel::Kind::Search, GetTypeColor(this, COLORIDX_SEARCH, RGB(255, 220, 0)),
+						L"検索", m_strCurSearchKey + L" / " + lineDetail);
 				}
 			}
 			if (syntaxActive) {
@@ -323,9 +359,17 @@ void CEditView::UpdateScrollBarMarkerScan()
 					[](const curlsyntax::Diagnostic& item, int value) { return item.line < value; });
 				for (auto it = first; it != diagnostics.end() && it->line == oneBasedLine; ++it) {
 					const bool isError = it->severity == curlsyntax::Severity::Error;
+					std::wstring detail;
+					if (!it->code.empty()) detail.assign(it->code.begin(), it->code.end());
+					if (!it->message.empty()) {
+						if (!detail.empty()) detail += L": ";
+						detail += it->message;
+					}
+					if (!detail.empty()) detail += L" / ";
+					detail += lineDetail;
 					addMarker(isError ? CScrollBarMarkerModel::Kind::SyntaxError : CScrollBarMarkerModel::Kind::SyntaxWarning,
 						isError ? RGB(210, 55, 55) : RGB(225, 155, 35), isError ? L"Curl Error" : L"Curl Warning",
-						it->code.empty() ? lineDetail : std::wstring(it->code.begin(), it->code.end()) + L" / " + lineDetail);
+						std::move(detail));
 				}
 			}
 			if (CBookmarkGetter(docLine).IsBookmarked()) {
@@ -406,7 +450,7 @@ void CEditView::DrawScrollBarMarkers(HDC hdc)
 	const int saved = ::SaveDC(hdc);
 	::IntersectClipRect(hdc, 0, trackTop, width, trackTop + trackHeight);
 	for (const auto& tick : ticks) {
-		if (tick.lane < 0 || tick.lane >= laneCount || !(m_uScrollBarMarkerVisibility & (1u << tick.lane))) continue;
+		if (tick.lane < 0 || tick.lane >= laneCount || !(GetScrollBarMarkerVisibility() & (1u << tick.lane))) continue;
 		const int y = trackTop + tick.y;
 		if (thumbTop >= 0 && y >= thumbTop - 1 && y <= thumbBottom) continue;
 		auto found = brushes.find(static_cast<COLORREF>(tick.color));
@@ -436,8 +480,17 @@ bool CEditView::NavigateScrollBarMarker(int x, int y)
 	auto found = lane >= 0 && lane < static_cast<int>(SCROLLBAR_MARKER_KIND_COUNT)
 		? CScrollBarMarkerModel::HitTestLane(ticks, lane, localY, 3)
 		: CScrollBarMarkerModel::HitTest(ticks, localY, 3);
-	if (found == ticks.size() || !(m_uScrollBarMarkerVisibility & (1u << ticks[found].lane))) return false;
-	ScrollAtV(CLayoutInt(ticks[found].firstLine));
+	if (found == ticks.size() || !(GetScrollBarMarkerVisibility() & (1u << ticks[found].lane))) return false;
+	const auto& tick = ticks[found];
+	if (m_pcEditDoc && tick.firstLogicalLine >= 0
+		&& CLogicInt(tick.firstLogicalLine) < m_pcEditDoc->m_cDocLineMgr.GetLineCount()) {
+		CLayoutPoint target;
+		m_pcEditDoc->m_cLayoutMgr.LogicToLayout(
+			CLogicPoint(CLogicInt(0), CLogicInt(tick.firstLogicalLine)), &target);
+		ScrollAtV(target.GetY2());
+	} else {
+		ScrollAtV(CLayoutInt(tick.firstLine));
+	}
 	return true;
 }
 
@@ -462,7 +515,7 @@ void CEditView::UpdateScrollBarMarkerTooltip(int x, int y)
 	const auto hit = lane >= 0 && lane < static_cast<int>(SCROLLBAR_MARKER_KIND_COUNT)
 		? CScrollBarMarkerModel::HitTestLane(ticks, lane, y - trackTop, 3)
 		: CScrollBarMarkerModel::HitTest(ticks, y - trackTop, 3);
-	if (hit == ticks.size() || !(m_uScrollBarMarkerVisibility & (1u << ticks[hit].lane))) {
+	if (hit == ticks.size() || !(GetScrollBarMarkerVisibility() & (1u << ticks[hit].lane))) {
 		TOOLINFOW tool{};
 		tool.cbSize = sizeof(tool);
 		tool.hwnd = GetHwnd();
@@ -471,9 +524,7 @@ void CEditView::UpdateScrollBarMarkerTooltip(int x, int y)
 		return;
 	}
 	const auto& tick = ticks[hit];
-	m_strScrollBarMarkerTooltip = ScrollBarMarkerKindName(tick.kind);
-	if (tick.count > 1) m_strScrollBarMarkerTooltip += L" / " + std::to_wstring(tick.count) + L"件";
-	if (!tick.tooltip.empty()) m_strScrollBarMarkerTooltip += L"\n" + tick.tooltip;
+	m_strScrollBarMarkerTooltip = CScrollBarMarkerModel::FormatTooltip(tick);
 	TOOLINFOW tool{};
 	tool.cbSize = sizeof(tool);
 	tool.hwnd = GetHwnd();
@@ -516,29 +567,57 @@ LRESULT CALLBACK CEditView::ScrollBarMarkerSubclassProc(HWND hwnd, UINT message,
 		break;
 	case WM_RBUTTONUP: {
 		HMENU menu = ::CreatePopupMenu();
+		HMENU colorsMenu = ::CreatePopupMenu();
 		if (menu) {
+			const unsigned visibility = CEditView::GetScrollBarMarkerVisibility();
 			for (UINT kind = 0; kind < SCROLLBAR_MARKER_KIND_COUNT; ++kind) {
 				const auto markerKind = static_cast<CScrollBarMarkerModel::Kind>(kind);
-				::AppendMenuW(menu, MF_STRING | ((view->m_uScrollBarMarkerVisibility & (1u << kind)) ? MF_CHECKED : 0),
+				::AppendMenuW(menu, MF_STRING | ((visibility & (1u << kind)) ? MF_CHECKED : 0),
 					SCROLLBAR_MARKER_MENU_BASE + kind, ScrollBarMarkerKindName(markerKind));
 			}
 			::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 			::AppendMenuW(menu, MF_STRING, SCROLLBAR_MARKER_MENU_BASE + 20, L"すべて表示");
 			::AppendMenuW(menu, MF_STRING, SCROLLBAR_MARKER_MENU_BASE + 21, L"すべて非表示");
+			if (colorsMenu) {
+				static const wchar_t* colorNames[] = { L"検索", L"", L"構文エラー", L"構文警告", L"ブックマーク", L"変更行" };
+				for (UINT kind = 0; kind < SCROLLBAR_MARKER_KIND_COUNT; ++kind) {
+					if (kind == static_cast<UINT>(CScrollBarMarkerModel::Kind::WordMarker)) continue;
+					::AppendMenuW(colorsMenu, MF_STRING, SCROLLBAR_MARKER_MENU_BASE + 30 + kind,
+						(std::wstring(colorNames[kind]) + L"...").c_str());
+				}
+				::AppendMenuW(colorsMenu, MF_SEPARATOR, 0, nullptr);
+				::AppendMenuW(colorsMenu, MF_STRING, SCROLLBAR_MARKER_MENU_BASE + 36, L"既定色に戻す");
+				::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(colorsMenu), L"色を設定");
+			}
 			POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 			::ClientToScreen(hwnd, &point);
 			const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, view->GetHwnd(), nullptr);
 			::DestroyMenu(menu);
 			if (command >= SCROLLBAR_MARKER_MENU_BASE && command < SCROLLBAR_MARKER_MENU_BASE + SCROLLBAR_MARKER_KIND_COUNT) {
-				view->m_uScrollBarMarkerVisibility ^= 1u << (command - SCROLLBAR_MARKER_MENU_BASE);
-				::InvalidateRect(hwnd, nullptr, FALSE);
+				CEditView::SetScrollBarMarkerVisibility(visibility ^ (1u << (command - SCROLLBAR_MARKER_MENU_BASE)));
 			} else if (command == SCROLLBAR_MARKER_MENU_BASE + 20) {
-				view->m_uScrollBarMarkerVisibility = 0x3fu;
-				::InvalidateRect(hwnd, nullptr, FALSE);
+				CEditView::SetScrollBarMarkerVisibility(CScrollBarMarkerModel::VISIBILITY_MASK);
 			} else if (command == SCROLLBAR_MARKER_MENU_BASE + 21) {
-				view->m_uScrollBarMarkerVisibility = 0;
-				::InvalidateRect(hwnd, nullptr, FALSE);
+				CEditView::SetScrollBarMarkerVisibility(0);
+			} else if (command >= SCROLLBAR_MARKER_MENU_BASE + 30 && command < SCROLLBAR_MARKER_MENU_BASE + 36) {
+				const unsigned kind = command - SCROLLBAR_MARKER_MENU_BASE - 30;
+				COLORREF custom = CEditView::GetScrollBarMarkerColor(kind);
+				if (custom == 0xffffffffu) custom = RGB(255, 220, 0);
+				CHOOSECOLORW dialog{};
+				dialog.lStructSize = sizeof(dialog);
+				dialog.hwndOwner = view->GetHwnd();
+				dialog.rgbResult = custom;
+				COLORREF customColors[16]{};
+				dialog.lpCustColors = customColors;
+				dialog.Flags = CC_FULLOPEN | CC_RGBINIT;
+				if (::ChooseColorW(&dialog)) CEditView::SetScrollBarMarkerColor(kind, dialog.rgbResult);
+			} else if (command == SCROLLBAR_MARKER_MENU_BASE + 36) {
+				for (unsigned kind = 0; kind < SCROLLBAR_MARKER_KIND_COUNT; ++kind)
+					CEditView::SetScrollBarMarkerColor(kind, 0xffffffffu);
+			} else {
+				break;
 			}
+			InvalidateAllScrollBarMarkers();
 		}
 		return 0;
 	}

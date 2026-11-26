@@ -27,6 +27,121 @@
 #include "util/os.h"
 #include "apiwrap/CommonControl.h"
 #include "_os/CClipboard.h"
+#include <algorithm>
+#include <vector>
+
+namespace {
+struct SMultiCursorClipboardRange {
+	CLogicPoint start;
+	CLogicPoint end;
+};
+
+std::vector<SMultiCursorClipboardRange> GetMultiCursorClipboardRanges(CEditView& view)
+{
+	std::vector<SMultiCursorClipboardRange> ranges;
+	auto& layoutMgr = view.GetDocument()->m_cLayoutMgr;
+	if (view.GetSelectionInfo().IsTextSelected()) {
+		SMultiCursorClipboardRange range;
+		layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &range.start);
+		range.end = view.GetCaret().GetCaretLogicPos();
+		if (PointCompare(range.end, range.start) < 0) std::swap(range.start, range.end);
+		if (range.start != range.end) ranges.push_back(range);
+	}
+	for (const auto& extra : view.m_vExtraCursors) {
+		if (!extra.bHasSelection) continue;
+		CLayoutPoint caretLayout;
+		CLayoutPoint anchorLayout;
+		if (!view.ResolveExtraCursor(extra, &caretLayout) || !view.ResolveExtraCursorAnchor(extra, &anchorLayout)) continue;
+		SMultiCursorClipboardRange range;
+		layoutMgr.LayoutToLogic(anchorLayout, &range.start);
+		layoutMgr.LayoutToLogic(caretLayout, &range.end);
+		if (PointCompare(range.end, range.start) < 0) std::swap(range.start, range.end);
+		if (range.start != range.end) ranges.push_back(range);
+	}
+	std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+		return PointCompare(a.start, b.start) < 0;
+	});
+	ranges.erase(std::unique(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) {
+		return a.start == b.start && a.end == b.end;
+	}), ranges.end());
+	return ranges;
+}
+
+bool IsMultiCursorCutSafe(CEditView& view)
+{
+	std::vector<SMultiCursorClipboardRange> states;
+	auto& layoutMgr = view.GetDocument()->m_cLayoutMgr;
+	SMultiCursorClipboardRange primary;
+	primary.end = view.GetCaret().GetCaretLogicPos();
+	primary.start = primary.end;
+	if (view.GetSelectionInfo().IsTextSelected()) {
+		layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &primary.start);
+	}
+	if (PointCompare(primary.end, primary.start) < 0) std::swap(primary.start, primary.end);
+	states.push_back(primary);
+	for (const auto& extra : view.m_vExtraCursors) {
+		CLayoutPoint caretLayout;
+		if (!view.ResolveExtraCursor(extra, &caretLayout)) continue;
+		SMultiCursorClipboardRange state;
+		layoutMgr.LayoutToLogic(caretLayout, &state.end);
+		state.start = state.end;
+		if (extra.bHasSelection) {
+			CLayoutPoint anchorLayout;
+			if (view.ResolveExtraCursorAnchor(extra, &anchorLayout)) layoutMgr.LayoutToLogic(anchorLayout, &state.start);
+		}
+		if (PointCompare(state.end, state.start) < 0) std::swap(state.start, state.end);
+		states.push_back(state);
+	}
+	for (size_t i = 0; i < states.size(); ++i) {
+		const bool iEmpty = states[i].start == states[i].end;
+		for (size_t j = i + 1; j < states.size(); ++j) {
+			const bool jEmpty = states[j].start == states[j].end;
+			const bool overlaps = iEmpty && jEmpty
+				? states[i].start == states[j].start
+				: iEmpty ? PointCompare(states[j].start, states[i].start) <= 0 && PointCompare(states[i].start, states[j].end) < 0
+				: jEmpty ? PointCompare(states[i].start, states[j].start) <= 0 && PointCompare(states[j].start, states[i].end) < 0
+				: PointCompare(states[i].start, states[j].end) < 0 && PointCompare(states[j].start, states[i].end) < 0;
+			if (overlaps) return false;
+		}
+	}
+	return true;
+}
+
+bool AppendMultiCursorRangeText(CEditDoc& document, const SMultiCursorClipboardRange& range,
+	EEolType newEol, std::wstring* output)
+{
+	if (!output) return false;
+	for (CLogicInt lineNo = range.start.y; lineNo <= range.end.y; ++lineNo) {
+		const CDocLine* line = document.m_cDocLineMgr.GetLine(lineNo);
+		if (!line) return false;
+		const CLogicInt length = line->GetLengthWithoutEOL();
+		const CLogicInt from = lineNo == range.start.y ? std::clamp(range.start.x, CLogicInt(0), length) : CLogicInt(0);
+		const CLogicInt to = lineNo == range.end.y ? std::clamp(range.end.x, CLogicInt(0), length) : length;
+		if (to < from) return false;
+		if (to > from) output->append(line->GetPtr() + static_cast<int>(from), static_cast<size_t>(to - from));
+		if (lineNo < range.end.y) {
+			const CEol eol = newEol == EEolType::none ? line->GetEol() : CEol(newEol);
+			if (eol.IsValid()) output->append(eol.GetValue2(), static_cast<size_t>(eol.GetLen()));
+		}
+	}
+	return true;
+}
+
+bool BuildMultiCursorClipboardText(CEditView& view, const std::vector<SMultiCursorClipboardRange>& ranges,
+	EEolType newEol, std::wstring* output)
+{
+	if (!output || ranges.empty()) return false;
+	output->clear();
+	CEditDoc& document = *view.GetDocument();
+	const CEol separator(newEol == EEolType::none
+		? document.m_cDocEditor.GetNewLineCode().GetType() : newEol);
+	for (size_t i = 0; i < ranges.size(); ++i) {
+		if (i > 0 && separator.IsValid()) output->append(separator.GetValue2(), static_cast<size_t>(separator.GetLen()));
+		if (!AppendMultiCursorRangeText(document, ranges[i], newEol, output)) return false;
+	}
+	return true;
+}
+}
 
 /** 切り取り(選択範囲をクリップボードにコピーして削除)
 
@@ -36,6 +151,20 @@ void CViewCommander::Command_CUT( void )
 {
 	if( m_pCommanderView->GetSelectionInfo().IsMouseSelecting() ){	/* マウスによる範囲選択中 */
 		ErrorBeep();
+		return;
+	}
+
+	if (!m_pCommanderView->m_vExtraCursors.empty()) {
+		if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) { ErrorBeep(); return; }
+		const auto ranges = GetMultiCursorClipboardRanges(*m_pCommanderView);
+		if (ranges.empty() || !IsMultiCursorCutSafe(*m_pCommanderView)) { ErrorBeep(); return; }
+		std::wstring text;
+		if (!BuildMultiCursorClipboardText(*m_pCommanderView, ranges, EEolType::none, &text)
+			|| !m_pCommanderView->MySetClipboardData(text.data(), text.size(), false)) {
+			ErrorBeep();
+			return;
+		}
+		ApplyToAllCursors([&]() { Command_DELETE(); }, EMultiCursorEditKind::SelectedOnly);
 		return;
 	}
 
@@ -86,9 +215,26 @@ void CViewCommander::Command_COPY(
 )
 {
 	bool		bBeginBoxSelect = false;
+	bool bCopiedMultiCursorSelections = false;
+	if (!m_pCommanderView->m_vExtraCursors.empty()) {
+		if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) { ErrorBeep(); return; }
+		const auto ranges = GetMultiCursorClipboardRanges(*m_pCommanderView);
+		if (!ranges.empty()) {
+			std::wstring text;
+			if (!BuildMultiCursorClipboardText(*m_pCommanderView, ranges, neweol, &text)
+				|| !m_pCommanderView->MySetClipboardData(text.data(), text.size(), false, FALSE)) {
+				ErrorBeep();
+				return;
+			}
+			bCopiedMultiCursorSelections = true;
+		}
+	}
 
 	/* クリップボードに入れるべきテキストデータを、cmemBufに格納する */
-	if( !m_pCommanderView->GetSelectionInfo().IsTextSelected() ){
+	if( bCopiedMultiCursorSelections ){
+		// All selected ranges were copied above in document order.
+	}
+	else if( !m_pCommanderView->GetSelectionInfo().IsTextSelected() ){
 		/* 非選択時は、カーソル行をコピーする */
 		if( !GetDllShareData().m_Common.m_sEdit.m_bEnableNoSelectCopy ){	// 2007.11.18 ryoji
 			return;	// 何もしない（音も鳴らさない）
@@ -137,6 +283,7 @@ void CViewCommander::Command_COPY(
 			/* 現在の選択範囲を非選択状態に戻す */
 			m_pCommanderView->GetSelectionInfo().DisableSelectArea( true );
 		}
+		for (auto& extra : m_pCommanderView->m_vExtraCursors) extra.bHasSelection = false;
 	}
 	return;
 }
@@ -727,9 +874,11 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 	  || GetSelect().GetFrom() == GetSelect().GetTo() ){
 		return;
 	}
+	CLayoutMgr& layoutMgr = GetDocument()->m_cLayoutMgr;
+	const bool bBoxSelecting = m_pCommanderView->GetSelectionInfo().IsBoxSelecting();
 	const STypeConfig& type = GetDocument()->m_cDocType.GetDocumentAttribute();
 	bool bLineNumLayout = GetDllShareData().m_Common.m_sEdit.m_bAddCRLFWhenCopy
-		|| m_pCommanderView->GetSelectionInfo().IsBoxSelecting();
+		|| bBoxSelecting;
 	CLayoutRect rcSel;
 	TwoPointToRect(
 		&rcSel,
@@ -741,20 +890,35 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 	sSelectLogic.Clear(-1);
 	int nBuffSize = 0;
 	const CLayout* pcLayoutTop = nullptr;
+	const CLayout* pcLayoutBottom = nullptr;
+	CLayoutInt firstCopyLayoutLine = rcSel.top;
+	CLayoutInt lastCopyLayoutLine = rcSel.bottom;
 	{
 		const CLayout* pcLayout;
 		{
 			CLogicInt nLineLenTmp;
-			GetDocument()->m_cLayoutMgr.GetLineStr(rcSel.top, &nLineLenTmp, &pcLayout);
+			layoutMgr.GetLineStr(rcSel.top, &nLineLenTmp, &pcLayout);
+			layoutMgr.GetLineStr(rcSel.bottom, &nLineLenTmp, &pcLayoutBottom);
 		}
 		pcLayoutTop = pcLayout;
-		CLayoutInt i = rcSel.top;
-		for(; pcLayout != nullptr && i <= rcSel.bottom; i++, pcLayout = pcLayout->GetNextLayout())
+		if (pcLayoutTop == nullptr) return;
+		// The linked list contains folded rows too. Only a rectangular copy
+		// uses visible rows; a regular selection includes all intervening text.
+		if (!bBoxSelecting && bLineNumber && layoutMgr.IsCodeFoldActive()) {
+			firstCopyLayoutLine = CLayoutInt(0);
+			for (const CLayout* row = layoutMgr.GetTopLayout(); row != pcLayoutTop; row = row->GetNextLayout()) {
+				++firstCopyLayoutLine;
+			}
+		}
+		CLayoutInt copyLayoutLine = firstCopyLayoutLine;
+		for (; pcLayout != nullptr; pcLayout = pcLayout->GetNextLayout())
 		{
+			if (bBoxSelecting && layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo())) continue;
+			lastCopyLayoutLine = copyLayoutLine++;
 			/* 指定された桁に対応する行のデータ内の位置を調べる */
 			CLogicInt nIdxFrom;
 			CLogicInt nIdxTo;
-			if( m_pCommanderView->GetSelectionInfo().IsBoxSelecting() ){
+			if( bBoxSelecting ){
 				nIdxFrom = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.left );
 				nIdxTo   = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.right);
 				// 改行は除く
@@ -764,23 +928,23 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 						--nIdxTo;
 					}
 				}
-				if( i == rcSel.top ){
+				if( pcLayout == pcLayoutTop ){
 					sSelectLogic.SetFromY(pcLayout->GetLogicLineNo());
 					sSelectLogic.SetFromX(nIdxFrom);
 				}
-				if( i == rcSel.bottom ){
+				if( pcLayout == pcLayoutBottom ){
 					sSelectLogic.SetToY(pcLayout->GetLogicLineNo());
 					sSelectLogic.SetToX(nIdxTo);
 				}
 			}else{
-				if( i == rcSel.top ){
+				if( pcLayout == pcLayoutTop ){
 					nIdxFrom = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.left);
 					sSelectLogic.SetFromY(pcLayout->GetLogicLineNo());
 					sSelectLogic.SetFromX(nIdxFrom);
 				}else{
 					nIdxFrom = CLogicInt(0);
 				}
-				if( i == rcSel.bottom ){
+				if( pcLayout == pcLayoutBottom ){
 					nIdxTo = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.right);
 					sSelectLogic.SetToY(pcLayout->GetLogicLineNo());
 					sSelectLogic.SetToX(nIdxTo);
@@ -794,6 +958,7 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 			}else{
 				nBuffSize += pcLayout->GetLayoutEol().GetLen();
 			}
+			if (pcLayout == pcLayoutBottom) break;
 		}
 		if( sSelectLogic.GetTo().x == -1 ){
 			sSelectLogic.SetToY(GetDocument()->m_cDocLineMgr.GetLineCount());
@@ -808,9 +973,9 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 	if( bLineNumber ){
 		int nLineNumberMax;
 		if( type.m_bLineNumIsCRLF ){
-			nLineNumberMax = sSelectLogic.GetTo().GetY();
+			nLineNumberMax = sSelectLogic.GetTo().GetY() + 1;
 		}else{
-			nLineNumberMax = (Int)rcSel.bottom;
+			nLineNumberMax = (Int)lastCopyLayoutLine + 1;
 		}
 		int nWork = 10;
 		int i;
@@ -840,12 +1005,13 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 		_swprintf(szBuf, L"<pre style=\"background-color:#%06x\">", dwBACKColor);
 		cmemClip.AppendString( szBuf );
 	}
-	CLayoutInt nLayoutLineNum = rcSel.top;
+	CLayoutInt nLayoutLineNum = firstCopyLayoutLine;
 	const CLogicInt nLineNumLast = sSelectLogic.GetTo().y;
 	const CDocLine* pcDocLine = pcLayoutTop->GetDocLineRef();
 	const CLayout* pcLayout = pcLayoutTop;
 	while( pcLayout && pcLayout->GetLogicOffset() ){
 		pcLayout = pcLayout->GetPrevLayout();
+		--nLayoutLineNum;
 	}
 	SColorAttr sColorAttr = { (COLORREF)-1, (COLORREF)-1 };
 	SColorAttr sColorAttrNext = { (COLORREF)-1, (COLORREF)-1 };
@@ -858,7 +1024,7 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 	CColorStrategyPool* pool = CColorStrategyPool::getInstance();
 	pool->SetCurrentView(m_pCommanderView);
 	for(CLogicInt nLineNum = sSelectLogic.GetFrom().y; nLineNum <= nLineNumLast; nLineNum++, pcDocLine = pcDocLine->GetNextLine()){
-		if( pcDocLine == nullptr ){
+		if( pcDocLine == nullptr || pcLayout == nullptr ){
 			break;
 		}
 		pool->NotifyOnStartScanLogic();
@@ -880,15 +1046,20 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 			}
 		}
 		const WCHAR* pLine = pcDocLine->GetPtr();
-		for(;pcLayout->GetLogicLineNo() == nLineNum; nLayoutLineNum++, pcLayout = pcLayout->GetNextLayout() )
+		for (; pcLayout && pcLayout->GetLogicLineNo() == nLineNum;
+			nLayoutLineNum += CLayoutInt(!bBoxSelecting || !layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo())),
+			pcLayout = pcLayout->GetNextLayout())
 		{
 			CLogicInt nIdxFrom;
 			CLogicInt nIdxTo;
 			const int nLineLen = pcLayout->GetLengthWithoutEOL() + pcLayout->GetLayoutEol().GetLen();
-			if( nLayoutLineNum < rcSel.top ){
+			if( nLayoutLineNum < firstCopyLayoutLine
+			  || (bBoxSelecting && layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo()))
+			  || (pcLayoutBottom && nLineNum == nLineNumLast
+			      && pcLayout->GetLogicOffset() > pcLayoutBottom->GetLogicOffset()) ){
 				nIdxTo = nIdxFrom = CLogicInt(-1);
 			}else{
-				if( m_pCommanderView->GetSelectionInfo().IsBoxSelecting() ){
+				if( bBoxSelecting ){
 					nIdxFrom = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.left );
 					nIdxTo   = m_pCommanderView->LineColumnToIndex(pcLayout, rcSel.right);
 					// 改行は除く
@@ -899,12 +1070,12 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 						}
 					}
 				}else{
-					if( nLayoutLineNum == rcSel.top ){
+					if( pcLayout == pcLayoutTop ){
 						nIdxFrom = sSelectLogic.GetFrom().x;
 					}else{
 						nIdxFrom = CLogicInt(0);
 					}
-					if( nLayoutLineNum == rcSel.bottom ){
+					if( pcLayout == pcLayoutBottom ){
 						nIdxTo = sSelectLogic.GetTo().x;
 					}else{
 						nIdxTo = nLineLen;
@@ -912,10 +1083,10 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 				}
 			}
 			// 最後の改行の次の行番号を表示しないように
-			if( nIdxTo == 0 && nLayoutLineNum == rcSel.bottom ){
+			if( nIdxTo == 0 && pcLayout == pcLayoutBottom ){
 				break;
 			}
-			if( bLineNumber ){
+			if( bLineNumber && nIdxFrom != -1 ){
 				WCHAR szLineNum[14];
 				if( type.m_bLineNumIsCRLF ){
 					if( pcLayout->GetLogicOffset() != 0 ){
@@ -995,7 +1166,7 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 					sColorAttrLast.m_cBACK = sColorAttrLast2.m_cBACK = (COLORREF)-1;
 				}
 			}
-			if( bLineNumLayout && !bAddCRLF ){
+			if( bLineNumLayout && nIdxFrom != -1 && !bAddCRLF ){
 				cmemClip.AppendString(WCODE::CRLF, 2);
 			}
 			// 2014.06.25 バッファ拡張

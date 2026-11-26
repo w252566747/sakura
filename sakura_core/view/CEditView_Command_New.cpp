@@ -453,6 +453,15 @@ void CEditView::DeleteData(
 	CLayoutRect		rcSel;
 	const CLayout*	pcLayout;
 
+	// A rectangular delete applies one displayed row at a time. The first
+	// edit unfolds the document, invalidating the remaining displayed row
+	// numbers; stop before changing any data until the user unfolds it.
+	if (GetSelectionInfo().IsTextSelected() && GetSelectionInfo().IsBoxSelecting()
+		&& m_pcEditDoc->m_cLayoutMgr.IsCodeFoldActive()) {
+		GetEditWnd().SendStatusMessage(L"矩形選択を削除する前に、折りたたみをすべて展開してください。");
+		return;
+	}
+
 	// テキストの存在しないエリアの削除は、選択範囲のキャンセルとカーソル移動のみとする	// 2008.08.05 ryoji
 	if( GetSelectionInfo().IsTextSelected() ){		// テキストが選択されているか
 		if( IsEmptyArea( GetSelectionInfo().m_sSelect.GetFrom(), GetSelectionInfo().m_sSelect.GetTo(), true, GetSelectionInfo().IsBoxSelecting() ) ){

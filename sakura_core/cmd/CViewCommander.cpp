@@ -37,6 +37,65 @@
 #include "apiwrap/StdApi.h"
 #include "CSelectLang.h"
 #include "config/app_constants.h"
+#include "doc/layout/CLayoutMgr.h"
+#include "window/CEditWnd.h"
+
+namespace {
+void KeepCaretVisibleAfterCodeFold(CEditView* view, CLayoutMgr& layoutMgr, CLogicInt logicLine)
+{
+	if (!layoutMgr.IsCodeFoldHiddenLine(logicLine)) return;
+	const auto* collapsed = layoutMgr.FindCollapsedCodeFoldContainingLine(logicLine);
+	if (!collapsed) return;
+	CLayoutPoint header;
+	layoutMgr.LogicToLayout(CLogicPoint(CLogicInt(0), CLogicInt(static_cast<Int>(collapsed->firstLine))), &header);
+	view->GetCaret().MoveCursor(header, true);
+}
+
+void RefreshCodeFoldViews(CEditWnd* editWnd, CLayoutMgr& layoutMgr)
+{
+	for (int index = 0; index < editWnd->GetAllViewCount(); ++index) {
+		auto& view = editWnd->GetView(index);
+		const auto maxTop = t_max(CLayoutInt(0), layoutMgr.GetLineCount() + CLayoutInt(2) - view.GetTextArea().m_nViewRowNum);
+		if (view.GetTextArea().GetViewTopLine() > maxTop) view.ScrollAtV(maxTop);
+	}
+	editWnd->Views_RedrawAll();
+}
+
+bool IsRealtimeFilterSafeCommand(EFunctionCode command)
+{
+	switch (command) {
+	case F_FILENEW:
+	case F_FILENEW_NEWWINDOW:
+	case F_FILEOPEN:
+	case F_FILEOPEN2:
+	case F_FILEOPEN_DROPDOWN:
+	case F_FILESAVE:
+	case F_FILESAVEAS_DIALOG:
+	case F_FILESAVEAS:
+	case F_FILESAVEALL:
+	case F_FILESAVE_QUIET:
+	case F_FILESAVECLOSE:
+	case F_FILECLOSE:
+	case F_FILECLOSE_OPEN:
+	case F_FILE_REOPEN:
+	case F_FILE_REOPEN_SJIS:
+	case F_FILE_REOPEN_JIS:
+	case F_FILE_REOPEN_EUC:
+	case F_FILE_REOPEN_LATIN1:
+	case F_FILE_REOPEN_UNICODE:
+	case F_FILE_REOPEN_UNICODEBE:
+	case F_FILE_REOPEN_UTF8:
+	case F_FILE_REOPEN_UTF7:
+	case F_FILE_REOPEN_CESU8:
+	case F_WINCLOSE:
+	case F_EXITALL:
+	case F_EXITALLEDITORS:
+		return true;
+	default:
+		return false;
+	}
+}
+}
 
 CViewCommander::CViewCommander(CEditView* pEditView) : m_pCommanderView(pEditView)
 {
@@ -70,6 +129,10 @@ BOOL CViewCommander::HandleCommand(
 	//	Jul.  7, 2007 genta 定数と比較するためにシフトしないで使う
 	int nCommandFrom = nCommand & ~0xffff;
 	nCommand = (EFunctionCode)LOWORD( nCommand );
+	if (GetEditWindow()->IsRealtimeFilterEnabled() && !IsRealtimeFilterSafeCommand(nCommand)) {
+		GetEditWindow()->SendStatusMessage(L"フィルター表示中は編集できません。編集するにはフィルターを閉じてください。");
+		return TRUE;
+	}
 
 	if( m_pCommanderView->m_nAutoScrollMode && F_AUTOSCROLL != nCommand ){
 		m_pCommanderView->AutoScrollExit();
@@ -176,7 +239,12 @@ BOOL CViewCommander::HandleCommand(
 	switch( nCommand ){
 	case F_WCHAR:	/* 文字入力 */
 		{
-			Command_WCHAR( (wchar_t)lparam1 );
+			if (m_pCommanderView->m_vExtraCursors.empty()) {
+				Command_WCHAR((wchar_t)lparam1);
+			} else {
+				ApplyToAllCursors([&]() { Command_WCHAR((wchar_t)lparam1); },
+					m_pCommanderView->IsInsMode() ? EMultiCursorEditKind::Normal : EMultiCursorEditKind::Overwrite);
+			}
 		}
 		break;
 
@@ -246,10 +314,34 @@ BOOL CViewCommander::HandleCommand(
 	case F_INSFILE:				Command_INSFILE((LPCWSTR)lparam1, (ECodeType)lparam2, (int)lparam3);break;	/* キャレット位置にファイル挿入 */ //maru 2006.12.10
 
 	/* 編集系 */
-	case F_UNDO:				Command_UNDO();break;				/* 元に戻す(Undo) */
-	case F_REDO:				Command_REDO();break;				/* やり直し(Redo) */
-	case F_DELETE:				Command_DELETE(); break;			//削除
-	case F_DELETE_BACK:			Command_DELETE_BACK(); break;		//カーソル前を削除
+	case F_UNDO:
+		{
+			const bool hadUndo = GetDocument()->m_cDocEditor.IsEnableUndo();
+		Command_UNDO();
+			if (hadUndo && !m_pCommanderView->m_vExtraCursors.empty()) Command_ClearExtraCursors();
+		}
+		break;				/* 元に戻す(Undo) */
+	case F_REDO:
+		{
+			const bool hadRedo = GetDocument()->m_cDocEditor.IsEnableRedo();
+		Command_REDO();
+			if (hadRedo && !m_pCommanderView->m_vExtraCursors.empty()) Command_ClearExtraCursors();
+		}
+		break;				/* やり直し(Redo) */
+	case F_DELETE:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_DELETE();
+		else ApplyToAllCursors([&]() { Command_DELETE(); }, EMultiCursorEditKind::DeleteForward);
+		break;			//削除
+	case F_DELETE_BACK:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_DELETE_BACK();
+		else ApplyToAllCursors([&]() { Command_DELETE_BACK(); }, EMultiCursorEditKind::DeleteBackward);
+		break;		//カーソル前を削除
+	case F_MULTICURSOR_ADD_UP: Command_AddCursorUp(); break;
+	case F_MULTICURSOR_ADD_DOWN: Command_AddCursorDown(); break;
+	case F_MULTICURSOR_REMOVE_LAST: Command_RemoveLastCursor(); break;
+	case F_MULTICURSOR_CLEAR: Command_ClearExtraCursors(); break;
+	case F_MULTICURSOR_SELECT_NEXT: Command_SelectNextOccurrence(); break;
+	case F_MULTICURSOR_SELECT_ALL: Command_SelectAllOccurrences(); break;
 	case F_WordDeleteToStart:	Command_WordDeleteToStart(); break;	//単語の左端まで削除
 	case F_WordDeleteToEnd:		Command_WordDeleteToEnd(); break;	//単語の右端まで削除
 	case F_WordDelete:			Command_WordDelete(); break;		//単語削除
@@ -261,8 +353,15 @@ BOOL CViewCommander::HandleCommand(
 	case F_CUT_LINE:			Command_CUT_LINE();break;			//行切り取り(折り返し単位)
 	case F_DELETE_LINE:			Command_DELETE_LINE();break;		//行削除(折り返し単位)
 	case F_DUPLICATELINE:		Command_DUPLICATELINE();break;		//行の二重化(折り返し単位)
-	case F_INDENT_TAB:			Command_INDENT( WCODE::TAB, INDENT_TAB );break;	//TABインデント
-	case F_UNINDENT_TAB:		Command_UNINDENT( WCODE::TAB );break;		//逆TABインデント
+	case F_INDENT_TAB:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_INDENT(WCODE::TAB, INDENT_TAB);
+		else ApplyToAllCursors([&]() { Command_INDENT(WCODE::TAB, INDENT_TAB); },
+			EMultiCursorEditKind::Normal);
+		break;	//TABインデント
+	case F_UNINDENT_TAB:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_UNINDENT(WCODE::TAB);
+		else ApplyToAllCursors([&]() { Command_UNINDENT(WCODE::TAB); }, EMultiCursorEditKind::SelectedOnly);
+		break;	//逆TABインデント
 	case F_INDENT_SPACE:		Command_INDENT( WCODE::SPACE, INDENT_SPACE );break;	//SPACEインデント
 	case F_UNINDENT_SPACE:			Command_UNINDENT( WCODE::SPACE );break;	//逆SPACEインデント
 //	case F_WORDSREFERENCE:			Command_WORDSREFERENCE();break;		/* 単語リファレンス */
@@ -274,28 +373,32 @@ BOOL CViewCommander::HandleCommand(
 	case F_RECONVERT:				Command_Reconvert();break;			/* メニューからの再変換対応 minfu 2002.04.09 */ 
 
 	/* カーソル移動系 */
-	case F_IME_CHAR:		Command_IME_CHAR( (WORD)lparam1 ); break;					//全角文字入力
+	case F_IME_CHAR:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_IME_CHAR((WORD)lparam1);
+		else ApplyToAllCursors([&]() { Command_IME_CHAR((WORD)lparam1); },
+			m_pCommanderView->IsInsMode() ? EMultiCursorEditKind::Normal : EMultiCursorEditKind::Overwrite);
+		break;					//全角文字入力
 	case F_MOVECURSOR:			Command_MOVECURSOR(CLogicPoint(CLogicInt((int)lparam2), CLogicInt((int)lparam1)), (int)lparam3); break;
 	case F_MOVECURSORLAYOUT:	Command_MOVECURSORLAYOUT(CLayoutPoint(CLayoutInt((int)lparam2), CLayoutInt((int)lparam1)), (int)lparam3); break;
-	case F_UP:				Command_UP( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat ); break;				//カーソル上移動
-	case F_DOWN:			Command_DOWN( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat ); break;			//カーソル下移動
-	case F_LEFT:			Command_LEFT( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat ); break;			//カーソル左移動
-	case F_RIGHT:			Command_RIGHT( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, false, bRepeat ); break;	//カーソル右移動
-	case F_UP2:				Command_UP2( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;						//カーソル上移動(２行づつ)
-	case F_DOWN2:			Command_DOWN2( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;					//カーソル下移動(２行づつ)
-	case F_WORDLEFT:		Command_WORDLEFT( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;				/* 単語の左端に移動 */
-	case F_WORDRIGHT:		Command_WORDRIGHT( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;				/* 単語の右端に移動 */
+	case F_UP: ApplyMovementToAllCursors([&]() { Command_UP(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat); }); break;	//カーソル上移動
+	case F_DOWN: ApplyMovementToAllCursors([&]() { Command_DOWN(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat); }); break;	//カーソル下移動
+	case F_LEFT: ApplyMovementToAllCursors([&]() { Command_LEFT(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, bRepeat); }); break;	//カーソル左移動
+	case F_RIGHT: ApplyMovementToAllCursors([&]() { Command_RIGHT(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, false, bRepeat); }); break;	//カーソル右移動
+	case F_UP2: ApplyMovementToAllCursors([&]() { Command_UP2(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//カーソル上移動(２行づつ)
+	case F_DOWN2: ApplyMovementToAllCursors([&]() { Command_DOWN2(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//カーソル下移動(２行づつ)
+	case F_WORDLEFT: ApplyMovementToAllCursors([&]() { Command_WORDLEFT(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	/* 単語の左端に移動 */
+	case F_WORDRIGHT: ApplyMovementToAllCursors([&]() { Command_WORDRIGHT(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	/* 単語の右端に移動 */
 	//	0ct. 29, 2001 genta マクロ向け機能拡張
-	case F_GOLINETOP:		Command_GOLINETOP( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, lparam1  ); break;		//行頭に移動(折り返し単位/改行単位)
-	case F_GOLINEEND:		Command_GOLINEEND( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, 0, lparam1 ); break;		//行末に移動(折り返し単位)
+	case F_GOLINETOP: ApplyMovementToAllCursors([&]() { Command_GOLINETOP(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, lparam1); }); break;	//行頭に移動(折り返し単位/改行単位)
+	case F_GOLINEEND: ApplyMovementToAllCursors([&]() { Command_GOLINEEND(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, 0, lparam1); }); break;	//行末に移動(折り返し単位)
 //	case F_ROLLDOWN:		Command_ROLLDOWN( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;				//スクロールダウン
 //	case F_ROLLUP:			Command_ROLLUP( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;					//スクロールアップ
-	case F_HalfPageUp:		Command_HalfPageUp( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1) ); break;				//半ページアップ	//Oct. 6, 2000 JEPRO 名称をPC-AT互換機系に変更(ROLL→PAGE) //Oct. 10, 2000 JEPRO 名称変更
-	case F_HalfPageDown:	Command_HalfPageDown( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1) ); break;			//半ページダウン	//Oct. 6, 2000 JEPRO 名称をPC-AT互換機系に変更(ROLL→PAGE) //Oct. 10, 2000 JEPRO 名称変更
-	case F_1PageUp:			Command_1PageUp( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1) ); break;					//１ページアップ	//Oct. 10, 2000 JEPRO 従来のページアップを半ページアップと名称変更し１ページアップを追加
-	case F_1PageDown:		Command_1PageDown( m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1) ); break;				//１ページダウン	//Oct. 10, 2000 JEPRO 従来のページダウンを半ページダウンと名称変更し１ページダウンを追加
-	case F_GOFILETOP:		Command_GOFILETOP( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;				//ファイルの先頭に移動
-	case F_GOFILEEND:		Command_GOFILEEND( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;				//ファイルの最後に移動
+	case F_HalfPageUp: ApplyMovementToAllCursors([&]() { Command_HalfPageUp(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1)); }); break;	//半ページアップ
+	case F_HalfPageDown: ApplyMovementToAllCursors([&]() { Command_HalfPageDown(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1)); }); break;	//半ページダウン
+	case F_1PageUp: ApplyMovementToAllCursors([&]() { Command_1PageUp(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1)); }); break;	//１ページアップ
+	case F_1PageDown: ApplyMovementToAllCursors([&]() { Command_1PageDown(m_pCommanderView->GetSelectionInfo().m_bSelectingLock, CLayoutYInt(lparam1)); }); break;	//１ページダウン
+	case F_GOFILETOP: ApplyMovementToAllCursors([&]() { Command_GOFILETOP(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//ファイルの先頭へ
+	case F_GOFILEEND: ApplyMovementToAllCursors([&]() { Command_GOFILEEND(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//ファイルの最後へ
 	case F_CURLINECENTER:	Command_CURLINECENTER(); break;								/* カーソル行をウィンドウ中央へ */
 	case F_CURLINETOP:		Command_CURLINETOP(); break;								/* カーソル行をウィンドウ上部へ */
 	case F_CURLINEBOTTOM:	Command_CURLINEBOTTOM(); break;								/* カーソル行をウィンドウ下部へ */
@@ -304,8 +407,8 @@ BOOL CViewCommander::HandleCommand(
 	case F_JUMPHIST_SET:	Command_JUMPHIST_SET(); break;								//現在位置を移動履歴に登録
 	case F_WndScrollDown:	Command_WndScrollDown(); break;								//テキストを１行下へスクロール	// 2001/06/20 asa-o
 	case F_WndScrollUp:		Command_WndScrollUp(); break;								//テキストを１行上へスクロール	// 2001/06/20 asa-o
-	case F_GONEXTPARAGRAPH:	Command_GONEXTPARAGRAPH( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;			//次の段落へ進む
-	case F_GOPREVPARAGRAPH:	Command_GOPREVPARAGRAPH( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;			//前の段落へ戻る
+	case F_GONEXTPARAGRAPH: ApplyMovementToAllCursors([&]() { Command_GONEXTPARAGRAPH(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//次の段落へ進む
+	case F_GOPREVPARAGRAPH: ApplyMovementToAllCursors([&]() { Command_GOPREVPARAGRAPH(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	//前の段落へ戻る
 	case F_AUTOSCROLL:	Command_AUTOSCROLL(); break;	//オートスクロール
 	case F_WHEELUP:			Command_WHEELUP(lparam1); break;
 	case F_WHEELDOWN:		Command_WHEELDOWN(lparam1); break;
@@ -315,32 +418,32 @@ BOOL CViewCommander::HandleCommand(
 	case F_WHEELPAGEDOWN:	Command_WHEELPAGEDOWN(lparam1); break;
 	case F_WHEELPAGELEFT:	Command_WHEELPAGELEFT(lparam1); break;
 	case F_WHEELPAGERIGHT:	Command_WHEELPAGERIGHT(lparam1); break;
-	case F_MODIFYLINE_NEXT:	Command_MODIFYLINE_NEXT( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;	// 次の変更行へ
-	case F_MODIFYLINE_PREV:	Command_MODIFYLINE_PREV( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;	// 前の変更行へ
+	case F_MODIFYLINE_NEXT: ApplyMovementToAllCursors([&]() { Command_MODIFYLINE_NEXT(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	// 次の変更行へ
+	case F_MODIFYLINE_PREV: ApplyMovementToAllCursors([&]() { Command_MODIFYLINE_PREV(m_pCommanderView->GetSelectionInfo().m_bSelectingLock); }); break;	// 前の変更行へ
 
 	/* 選択系 */
-	case F_SELECTWORD:		Command_SELECTWORD(nullptr, m_pCommanderView->m_bExpandAddedWordCharactersForMouse);break;						//現在位置の単語選択
+	case F_SELECTWORD: ApplyMovementToAllCursors([&]() { Command_SELECTWORD(nullptr, m_pCommanderView->m_bExpandAddedWordCharactersForMouse); }); break;	//現在位置の単語選択
 	case F_SELECTALL:		Command_SELECTALL();break;						//すべて選択
-	case F_SELECTLINE:		Command_SELECTLINE( lparam1 );break;			//1行選択	// 2007.10.13 nasukoji
+	case F_SELECTLINE: ApplyMovementToAllCursors([&]() { Command_SELECTLINE(lparam1); }); break;	//1行選択
 	case F_BEGIN_SEL:		Command_BEGIN_SELECT();break;					/* 範囲選択開始 */
-	case F_UP_SEL:			Command_UP( true, bRepeat, lparam1 ); break;	//(範囲選択)カーソル上移動
-	case F_DOWN_SEL:		Command_DOWN( true, bRepeat ); break;			//(範囲選択)カーソル下移動
-	case F_LEFT_SEL:		Command_LEFT( true, bRepeat ); break;			//(範囲選択)カーソル左移動
-	case F_RIGHT_SEL:		Command_RIGHT( true, false, bRepeat ); break;	//(範囲選択)カーソル右移動
-	case F_UP2_SEL:			Command_UP2( true ); break;						//(範囲選択)カーソル上移動(２行ごと)
-	case F_DOWN2_SEL:		Command_DOWN2( true );break;					//(範囲選択)カーソル下移動(２行ごと)
-	case F_WORDLEFT_SEL:	Command_WORDLEFT( true );break;					//(範囲選択)単語の左端に移動
-	case F_WORDRIGHT_SEL:	Command_WORDRIGHT( true );break;				//(範囲選択)単語の右端に移動
-	case F_GOLINETOP_SEL:	Command_GOLINETOP( true, lparam1 );break;		//(範囲選択)行頭に移動(折り返し単位/改行単位)
-	case F_GOLINEEND_SEL:	Command_GOLINEEND( true, 0, lparam1 );break;	//(範囲選択)行末に移動(折り返し単位)
+	case F_UP_SEL: ApplyMovementToAllCursors([&]() { Command_UP(true, bRepeat, lparam1); }); break;	//(範囲選択)カーソル上移動
+	case F_DOWN_SEL: ApplyMovementToAllCursors([&]() { Command_DOWN(true, bRepeat); }); break;	//(範囲選択)カーソル下移動
+	case F_LEFT_SEL: ApplyMovementToAllCursors([&]() { Command_LEFT(true, bRepeat); }); break;	//(範囲選択)カーソル左移動
+	case F_RIGHT_SEL: ApplyMovementToAllCursors([&]() { Command_RIGHT(true, false, bRepeat); }); break;	//(範囲選択)カーソル右移動
+	case F_UP2_SEL: ApplyMovementToAllCursors([&]() { Command_UP2(true); }); break;	//(範囲選択)カーソル上移動(２行ごと)
+	case F_DOWN2_SEL: ApplyMovementToAllCursors([&]() { Command_DOWN2(true); }); break;	//(範囲選択)カーソル下移動(２行ごと)
+	case F_WORDLEFT_SEL: ApplyMovementToAllCursors([&]() { Command_WORDLEFT(true); }); break;	//(範囲選択)単語の左端に移動
+	case F_WORDRIGHT_SEL: ApplyMovementToAllCursors([&]() { Command_WORDRIGHT(true); }); break;	//(範囲選択)単語の右端に移動
+	case F_GOLINETOP_SEL: ApplyMovementToAllCursors([&]() { Command_GOLINETOP(true, lparam1); }); break;	//(範囲選択)行頭に移動
+	case F_GOLINEEND_SEL: ApplyMovementToAllCursors([&]() { Command_GOLINEEND(true, 0, lparam1); }); break;	//(範囲選択)行末に移動
 //	case F_ROLLDOWN_SEL:	Command_ROLLDOWN( TRUE ); break;				//(範囲選択)スクロールダウン
 //	case F_ROLLUP_SEL:		Command_ROLLUP( TRUE ); break;					//(範囲選択)スクロールアップ
-	case F_HalfPageUp_Sel:	Command_HalfPageUp( true, CLayoutYInt(lparam1) ); break;				//(範囲選択)半ページアップ
-	case F_HalfPageDown_Sel:Command_HalfPageDown( true, CLayoutYInt(lparam1) ); break;			//(範囲選択)半ページダウン
-	case F_1PageUp_Sel:		Command_1PageUp( true, CLayoutYInt(lparam1) ); break;					//(範囲選択)１ページアップ
-	case F_1PageDown_Sel:	Command_1PageDown( true, CLayoutYInt(lparam1) ); break;				//(範囲選択)１ページダウン
-	case F_GOFILETOP_SEL:	Command_GOFILETOP( true );break;				//(範囲選択)ファイルの先頭に移動
-	case F_GOFILEEND_SEL:	Command_GOFILEEND( true );break;				//(範囲選択)ファイルの最後に移動
+	case F_HalfPageUp_Sel: ApplyMovementToAllCursors([&]() { Command_HalfPageUp(true, CLayoutYInt(lparam1)); }); break;	//(範囲選択)半ページアップ
+	case F_HalfPageDown_Sel: ApplyMovementToAllCursors([&]() { Command_HalfPageDown(true, CLayoutYInt(lparam1)); }); break;	//(範囲選択)半ページダウン
+	case F_1PageUp_Sel: ApplyMovementToAllCursors([&]() { Command_1PageUp(true, CLayoutYInt(lparam1)); }); break;	//(範囲選択)１ページアップ
+	case F_1PageDown_Sel: ApplyMovementToAllCursors([&]() { Command_1PageDown(true, CLayoutYInt(lparam1)); }); break;	//(範囲選択)１ページダウン
+	case F_GOFILETOP_SEL: ApplyMovementToAllCursors([&]() { Command_GOFILETOP(true); }); break;	//(範囲選択)先頭へ
+	case F_GOFILEEND_SEL: ApplyMovementToAllCursors([&]() { Command_GOFILEEND(true); }); break;	//(範囲選択)末尾へ
 	case F_GONEXTPARAGRAPH_SEL:	Command_GONEXTPARAGRAPH( true ); break;			//次の段落へ進む
 	case F_GOPREVPARAGRAPH_SEL:	Command_GOPREVPARAGRAPH( true ); break;			//前の段落へ戻る
 	case F_MODIFYLINE_NEXT_SEL:	Command_MODIFYLINE_NEXT( true ); break;			//(範囲選択)次の変更行へ
@@ -365,18 +468,27 @@ BOOL CViewCommander::HandleCommand(
 	case F_HalfPageDown_BOX:Sub_BoxSelectLock(lparam2); this->Command_HalfPageDown( true, CLayoutYInt(lparam1) ); break;		//(矩形選択)半ページダウン
 	case F_1PageUp_BOX:		Sub_BoxSelectLock(lparam2); this->Command_1PageUp( true, CLayoutYInt(lparam1) ); break;			//(矩形選択)１ページアップ
 	case F_1PageDown_BOX:	Sub_BoxSelectLock(lparam2); this->Command_1PageDown( true, CLayoutYInt(lparam1) ); break;			//(矩形選択)１ページダウン
-	case F_GOFILETOP_BOX:	Sub_BoxSelectLock(lparam1); this->Command_GOFILETOP( true );break;			//(矩形選択)ファイルの先頭に移動
-	case F_GOFILEEND_BOX:	Sub_BoxSelectLock(lparam1); this->Command_GOFILEEND( true );break;			//(矩形選択)ファイルの最後に移動
+	case F_GOFILETOP_BOX: Sub_BoxSelectLock(lparam1); this->Command_GOFILETOP(true); break;	//(矩形選択)ファイル先頭へ
+	case F_GOFILEEND_BOX: Sub_BoxSelectLock(lparam1); this->Command_GOFILEEND(true); break;	//(矩形選択)ファイル末尾へ
 
 	/* クリップボード系 */
 	case F_CUT:						Command_CUT();break;					//切り取り(選択範囲をクリップボードにコピーして削除)
 	case F_COPY:					Command_COPY( false, GetDllShareData().m_Common.m_sEdit.m_bAddCRLFWhenCopy );break;			//コピー(選択範囲をクリップボードにコピー)
 	case F_COPY_ADDCRLF:			Command_COPY( false, true );break;		//折り返し位置に改行をつけてコピー(選択範囲をクリップボードにコピー)
 	case F_COPY_CRLF:				Command_COPY( false, GetDllShareData().m_Common.m_sEdit.m_bAddCRLFWhenCopy, EEolType::cr_and_lf );break;	//CRLF改行でコピー(選択範囲をクリップボードにコピー)
-	case F_PASTE:					Command_PASTE( (int)lparam1 );break;				//貼り付け(クリップボードから貼り付け)
+	case F_PASTE:
+		if (m_pCommanderView->m_vExtraCursors.empty()) Command_PASTE((int)lparam1);
+		else ApplyToAllCursors([&]() { Command_PASTE((int)lparam1); });
+		break;				//貼り付け(クリップボードから貼り付け)
 	case F_PASTEBOX:				Command_PASTEBOX( (int)lparam1 );break;				//矩形貼り付け(クリップボードから矩形貼り付け)
 	case F_INSBOXTEXT:				Command_INSBOXTEXT((const wchar_t*)lparam1, (int)lparam2 );break;				//矩形テキスト挿入
-	case F_INSTEXT_W:				Command_INSTEXT( bRedraw, (const wchar_t*)lparam1, (CLogicInt)lparam2, lparam3!=FALSE );break;/* テキストを貼り付け */ // 2004.05.14 Moca 長さを示す引数追加
+	case F_INSTEXT_W:
+		if (m_pCommanderView->m_vExtraCursors.empty()) {
+			Command_INSTEXT(bRedraw, (const wchar_t*)lparam1, (CLogicInt)lparam2, lparam3 != FALSE);
+		} else {
+			ApplyToAllCursors([&]() { Command_INSTEXT(bRedraw, (const wchar_t*)lparam1, (CLogicInt)lparam2, lparam3 != FALSE); });
+		}
+		break;/* テキストを貼り付け */ // 2004.05.14 Moca 長さを示す引数追加
 	case F_ADDTAIL_W:				Command_ADDTAIL( (const wchar_t*)lparam1, (int)lparam2 );break;	/* 最後にテキストを追加 */
 	case F_COPYFNAME:				Command_COPYFILENAME();break;			//このファイル名をクリップボードにコピー / /2002/2/3 aroka
 	case F_COPYPATH:				Command_COPYPATH();break;				//このファイルのパス名をクリップボードにコピー
@@ -394,7 +506,14 @@ BOOL CViewCommander::HandleCommand(
 	case F_INS_DATE:				Command_INS_DATE();break;	//日付挿入
 	case F_INS_TIME:				Command_INS_TIME();break;	//時刻挿入
     case F_CTRL_CODE_DIALOG:		Command_CtrlCode_Dialog();break;	/* コントロールコードの入力(ダイアログ) */	//@@@ 2002.06.02 MIK
-    case F_CTRL_CODE:				Command_WCHAR( (wchar_t)lparam1, false );break;
+    case F_CTRL_CODE:
+		if (m_pCommanderView->m_vExtraCursors.empty()) {
+			Command_WCHAR((wchar_t)lparam1, false);
+		} else {
+			ApplyToAllCursors([&]() { Command_WCHAR((wchar_t)lparam1, false); },
+				m_pCommanderView->IsInsMode() ? EMultiCursorEditKind::Normal : EMultiCursorEditKind::Overwrite);
+		}
+		break;
 	case F_INS_FILE_USED_RECENTLY:	Command_INS_FILE_USED_RECENTLY();break;		//最近使ったファイル挿入
 	case F_INS_FOLDER_USED_RECENTLY:Command_INS_FOLDER_USED_RECENTLY();break;	//最近使ったフォルダー挿入
 
@@ -489,7 +608,10 @@ BOOL CViewCommander::HandleCommand(
 	// 2006.09.03 Moca F_CHGMOD_EOLで break 忘れの修正
 	case F_CHGMOD_EOL:		Command_CHGMOD_EOL( (EEolType)lparam1 );break;	//入力する改行コードを設定
 	// To Here 2003.06.23 Moca
-	case F_CANCEL_MODE:		Command_CANCEL_MODE();break;	//各種モードの取り消し
+	case F_CANCEL_MODE:
+		if (!m_pCommanderView->m_vExtraCursors.empty()) Command_ClearExtraCursors();
+		else Command_CANCEL_MODE();
+		break;	//各種モードの取り消し
 
 	/* 設定系 */
 	case F_SHOWTOOLBAR:		Command_SHOWTOOLBAR();break;	/* ツールバーの表示/非表示 */
@@ -508,6 +630,55 @@ BOOL CViewCommander::HandleCommand(
 	case F_CURL_SYNTAX_PREV:
 		GetEditWindow()->NavigateCurlSyntaxError(false);
 		break;
+	case F_CODEFOLD_TOGGLE: {
+		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
+		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
+		const auto* regionPtr = layoutMgr.FindCodeFoldContainingLine(caretLine);
+		if (regionPtr) {
+			const auto region = *regionPtr;
+			const CLogicInt headerLine(static_cast<Int>(region.firstLine));
+			const bool wasCollapsed = layoutMgr.IsCodeFoldCollapsedAtLine(headerLine);
+			if (layoutMgr.ToggleCodeFoldAtLine(headerLine)) {
+				if (!wasCollapsed) KeepCaretVisibleAfterCodeFold(m_pCommanderView, layoutMgr, caretLine);
+				RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
+			}
+		}
+		break;
+	}
+	case F_CODEFOLD_ALL: {
+		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
+		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
+		if (layoutMgr.FoldAllCodeBlocks()) {
+			KeepCaretVisibleAfterCodeFold(m_pCommanderView, layoutMgr, caretLine);
+			RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
+		}
+		break;
+	}
+	case F_CODEFOLD_EXPAND_ALL: {
+		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
+		if (layoutMgr.UnfoldAllCodeBlocks()) RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
+		break;
+	}
+	case F_CODEFOLD_CURRENT_DEPTH: {
+		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
+		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
+		const auto* regionPtr = layoutMgr.FindCodeFoldContainingLine(caretLine);
+		if (regionPtr && layoutMgr.FoldCodeBlocksAtDepth(regionPtr->depth)) {
+			KeepCaretVisibleAfterCodeFold(m_pCommanderView, layoutMgr, caretLine);
+			RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
+		}
+		break;
+	}
+	case F_CODEFOLD_TO_DEPTH: {
+		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
+		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
+		const size_t depth = lparam1 > 0 ? static_cast<size_t>(lparam1) : 1u;
+		if (layoutMgr.FoldCodeBlocksToDepth(depth)) {
+			KeepCaretVisibleAfterCodeFold(m_pCommanderView, layoutMgr, caretLine);
+			RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
+		}
+		break;
+	}
 	case F_SHOWFUNCKEY:		Command_SHOWFUNCKEY();break;	/* ファンクションキーの表示/非表示 */
 	case F_SHOWTAB:			Command_SHOWTAB();break;		/* タブの表示/非表示 */	//@@@ 2003.06.10 MIK
 	case F_SHOWSTATUSBAR:	Command_SHOWSTATUSBAR();break;	/* ステータスバーの表示/非表示 */

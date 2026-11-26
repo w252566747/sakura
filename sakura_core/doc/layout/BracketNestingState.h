@@ -94,6 +94,39 @@ private:
 	std::shared_ptr<const Node> m_top;
 };
 
+//! Resolves closing and EOF status for bracket marks in document order.
+class CBracketMatchResolver final {
+public:
+	void Consume(wchar_t bracket, SRainbowBracketMark* mark)
+	{
+		if (!mark) return;
+		mark->unmatched = false;
+		if (bracket == L'(' || bracket == L'[' || bracket == L'{') {
+			m_openings.push_back({ bracket, mark });
+			return;
+		}
+		if (bracket != L')' && bracket != L']' && bracket != L'}') return;
+		if (m_openings.empty() || !Matches(m_openings.back().bracket, bracket)) {
+			mark->unmatched = true;
+			return;
+		}
+		m_openings.pop_back();
+	}
+	void Finish() noexcept
+	{
+		for (const auto& opening : m_openings) opening.mark->unmatched = true;
+		m_openings.clear();
+	}
+private:
+	struct Opening { wchar_t bracket; SRainbowBracketMark* mark; };
+	static bool Matches(wchar_t open, wchar_t close) noexcept
+	{
+		return (open == L'(' && close == L')') || (open == L'[' && close == L']') ||
+			(open == L'{' && close == L'}');
+	}
+	std::vector<Opening> m_openings;
+};
+
 struct SRainbowBracketCache {
 	CBracketNestingState begin;
 	CBracketNestingState end;

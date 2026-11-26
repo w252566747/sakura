@@ -55,6 +55,22 @@ void CLayoutMgr::ReplaceData_CLayoutMgr(
 	CLogicPoint ptTo;
 	LayoutToLogic( pArg->sDelRange.GetFrom(), &ptFrom );
 	LayoutToLogic( pArg->sDelRange.GetTo(), &ptTo );
+	// 編集座標を論理位置へ変換し終えたので、文書変更時はいったん折りたたみを解除する。
+	// 行の挿入・削除後に古い折りたたみ行番号を残して、別の内容を隠すことを防ぐ。
+	if (IsCodeFoldActive()) {
+		UnfoldAllCodeBlocks();
+		// pLayoutWork was found by its visible row before unfolding. Recompute its
+		// physical row index so the layout search cache remains correct after edits.
+		if (pLayoutWork) {
+			CLayoutInt physicalLine(0);
+			for (CLayout* layout = m_pLayoutTop; layout && layout != pLayoutWork; layout = layout->GetNextLayout()) {
+				++physicalLine;
+			}
+			if (pLayoutWork == m_pLayoutTop || physicalLine > CLayoutInt(0)) nLineWork = physicalLine;
+		}
+	}
+	m_bCodeFoldRegionsValid = false;
+	m_vCodeFoldRegions.clear();
 
 	/* 指定範囲のデータを置換(削除 & データを挿入)
 	  Fromを含む位置からToの直前を含むデータを削除する

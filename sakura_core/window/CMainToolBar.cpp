@@ -11,6 +11,7 @@
 #include "StdAfx.h"
 #include "window/CMainToolBar.h"
 #include "window/CEditWnd.h"
+#include "dlg/CDlgInput1.h"
 #include "CEditApp.h"
 #include "util/os.h"
 #include "util/window.h"
@@ -43,7 +44,23 @@ constexpr UINT WORDMARKER_MENU_NEXT = WORDMARKER_MENU_REMOVE_BASE + 34;
 constexpr UINT WORDMARKER_MENU_CLEAR = WORDMARKER_MENU_REMOVE_BASE + 35;
 constexpr UINT CURL_SYNTAX_BUTTON = 0x7CFF;
 constexpr UINT RAINBOW_BRACKET_BUTTON = 0x7CFD;
+constexpr UINT RAINBOW_UNMATCHED_MENU = 0x7CDE;
+constexpr UINT CSV_TABLE_BUTTON = 0x7CFC;
+constexpr UINT CSV_CHECK_BUTTON = 0x7CFB;
+constexpr UINT CSV_OPTIONS_BUTTON = 0x7CFA;
+constexpr UINT CSV_FILTER_BUTTON = 0x7CF9;
+constexpr UINT CSV_SORT_BUTTON = 0x7CF8;
+constexpr UINT CSV_EDIT_BUTTON = 0x7CF7;
+constexpr UINT REALTIME_FILTER_BUTTON = 0x7CF6;
 constexpr UINT ENHANCEMENT_TOOLBAR_ID = 0x7CFE;
+constexpr UINT CSV_MENU_AUTO = 1;
+constexpr UINT CSV_MENU_COMMA = 2;
+constexpr UINT CSV_MENU_TAB = 3;
+constexpr UINT CSV_MENU_SEMICOLON = 4;
+constexpr UINT CSV_MENU_PIPE = 5;
+constexpr UINT CSV_MENU_HEADER = 6;
+constexpr UINT CSV_MENU_CUSTOM = 7;
+constexpr UINT CSV_MENU_AUTOSIZE = 8;
 
 HBITMAP CreateNativeNavigationIconBitmap(const CImageListMgr* icons, int imageNo, int width, int height)
 {
@@ -186,6 +203,33 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc(HWND hWnd, UINT msg, WPARAM wParam
 				}
 				return 0;
 			}
+			if (command == CSV_TABLE_BUTTON) {
+				self->m_pOwner->ToggleCSVTableMode();
+				self->RefreshCurlSyntaxControl();
+				return 0;
+			}
+			if (command == REALTIME_FILTER_BUTTON) {
+				self->m_pOwner->ToggleRealtimeFilter();
+				self->RefreshCurlSyntaxControl();
+				return 0;
+			}
+			if (command == CSV_CHECK_BUTTON) {
+				self->m_pOwner->RunCSVCheck();
+				self->RefreshCurlSyntaxControl();
+				return 0;
+			}
+			if (command == CSV_OPTIONS_BUTTON) {
+				self->ShowCSVOptionsMenu();
+				return 0;
+			}
+			if (command == CSV_FILTER_BUTTON || command == CSV_SORT_BUTTON) {
+				self->m_pOwner->ShowCSVColumnMenuForCurrentColumn();
+				return 0;
+			}
+			if (command == CSV_EDIT_BUTTON) {
+				self->m_pOwner->ShowCSVTableEditMenu();
+				return 0;
+			}
 			if ((command >= WORDMARKER_BUTTON_BASE && command <= WORDMARKER_NEXT_BUTTON) ||
 				command == WORDMARKER_CLEAR_BUTTON || command == WORDMARKER_OVERFLOW_BUTTON || command == WORDMARKER_AUTO_BUTTON) {
 				self->HandleMarkerControl(command);
@@ -198,6 +242,26 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc(HWND hWnd, UINT msg, WPARAM wParam
 			POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 			const int index = static_cast<int>(::SendMessage(hWnd, TB_HITTEST, 0, reinterpret_cast<LPARAM>(&point)));
 			TBBUTTON button{};
+			if (index >= 0 && ::SendMessage(hWnd, TB_GETBUTTON, index, reinterpret_cast<LPARAM>(&button)) &&
+				button.idCommand == RAINBOW_BRACKET_BUTTON) {
+				HMENU menu = ::CreatePopupMenu();
+				if (menu) {
+					const bool enabled = CEditView::IsRainbowUnmatchedHighlightEnabled();
+					::AppendMenuW(menu, MF_STRING | (enabled ? MF_CHECKED : 0), RAINBOW_UNMATCHED_MENU,
+						L"対応しない括弧を強調");
+					::ClientToScreen(hWnd, &point);
+					const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+						point.x, point.y, 0, self->m_pOwner->GetHwnd(), nullptr);
+					::DestroyMenu(menu);
+					if (command == RAINBOW_UNMATCHED_MENU) {
+						CEditView::SetRainbowUnmatchedHighlightEnabled(!enabled);
+						auto* document = self->m_pOwner->GetActiveView().GetDocument();
+						if (document) document->OnChangeSetting(true);
+						self->RefreshCurlSyntaxControl();
+					}
+				}
+				return 0L;
+			}
 			if (index >= 0 && ::SendMessage(hWnd, TB_GETBUTTON, index, reinterpret_cast<LPARAM>(&button)) &&
 				button.idCommand >= WORDMARKER_BUTTON_BASE && button.idCommand < WORDMARKER_AUTO_BUTTON) {
 				self->HandleMarkerColorChange(button.idCommand);
@@ -991,10 +1055,24 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		labels.push_back(L'\0');
 		labels.append(L"次へ");
 		labels.push_back(L'\0');
+		labels.append(L"フィルター");
+		labels.push_back(L'\0');
+		labels.append(L"CSVテーブル");
+		labels.push_back(L'\0');
+		labels.append(L"CSV設定");
+		labels.push_back(L'\0');
+		labels.append(L"CSVチェック");
+		labels.push_back(L'\0');
+		labels.append(L"絞り込み");
+		labels.push_back(L'\0');
+		labels.append(L"並べ替え");
+		labels.push_back(L'\0');
+		labels.append(L"行・列編集");
+		labels.push_back(L'\0');
 		labels.push_back(L'\0');
 		const int stringBase = static_cast<int>(::SendMessageW(m_hwndEnhancementToolBar,
 			TB_ADDSTRINGW, 0, reinterpret_cast<LPARAM>(labels.c_str())));
-		TBBUTTON buttons[7]{};
+		TBBUTTON buttons[14]{};
 		buttons[0].iBitmap = DpiScaleX(3);
 		buttons[0].fsStyle = BTNS_SEP;
 		buttons[1].iBitmap = I_IMAGENONE;
@@ -1019,11 +1097,46 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		buttons[5].fsState = 0;
 		buttons[5].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
 		buttons[5].iString = stringBase + 3;
-		buttons[6].iBitmap = DpiScaleX(3);
-		buttons[6].idCommand = WORDMARKER_SPACER_BUTTON;
-		buttons[6].fsStyle = BTNS_SEP;
-		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 7, reinterpret_cast<LPARAM>(buttons));
-		m_nEnhancementMarkerStart = 7;
+		buttons[6].iBitmap = I_IMAGENONE;
+		buttons[6].idCommand = REALTIME_FILTER_BUTTON;
+		buttons[6].fsState = TBSTATE_ENABLED;
+		buttons[6].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[6].iString = stringBase + 4;
+		buttons[7].iBitmap = I_IMAGENONE;
+		buttons[7].idCommand = CSV_TABLE_BUTTON;
+		buttons[7].fsState = TBSTATE_ENABLED;
+		buttons[7].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[7].iString = stringBase + 5;
+		buttons[8].iBitmap = I_IMAGENONE;
+		buttons[8].fsState = TBSTATE_ENABLED;
+		buttons[8].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[8].idCommand = CSV_OPTIONS_BUTTON;
+		buttons[8].iString = stringBase + 6;
+		buttons[9].iBitmap = I_IMAGENONE;
+		buttons[9].idCommand = CSV_CHECK_BUTTON;
+		buttons[9].fsState = TBSTATE_ENABLED;
+		buttons[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[9].iString = stringBase + 7;
+		buttons[10].iBitmap = I_IMAGENONE;
+		buttons[10].idCommand = CSV_FILTER_BUTTON;
+		buttons[10].fsState = TBSTATE_ENABLED;
+		buttons[10].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[10].iString = stringBase + 8;
+		buttons[11].iBitmap = I_IMAGENONE;
+		buttons[11].idCommand = CSV_SORT_BUTTON;
+		buttons[11].fsState = TBSTATE_ENABLED;
+		buttons[11].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[11].iString = stringBase + 9;
+		buttons[12].iBitmap = I_IMAGENONE;
+		buttons[12].idCommand = CSV_EDIT_BUTTON;
+		buttons[12].fsState = TBSTATE_ENABLED;
+		buttons[12].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
+		buttons[12].iString = stringBase + 10;
+		buttons[13].iBitmap = DpiScaleX(3);
+		buttons[13].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[13].fsStyle = BTNS_SEP;
+		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 14, reinterpret_cast<LPARAM>(buttons));
+		m_nEnhancementMarkerStart = 14;
 		::SendMessage(m_hwndEnhancementToolBar, TB_AUTOSIZE, 0, 0);
 	}
 	if (!m_hwndEnhancementToolBar) return;
@@ -1040,7 +1153,88 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 	}
 	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, RAINBOW_BRACKET_BUTTON, TRUE);
 	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, RAINBOW_BRACKET_BUTTON, MAKELONG(rainbowEnabled, 0));
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, REALTIME_FILTER_BUTTON, TRUE);
+	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, REALTIME_FILTER_BUTTON,
+		MAKELONG(m_pOwner->IsRealtimeFilterEnabled(), 0));
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_TABLE_BUTTON, TRUE);
+	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, CSV_TABLE_BUTTON, MAKELONG(m_pOwner->IsCSVTableMode(), 0));
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_CHECK_BUTTON, m_pOwner->IsCSVTableMode());
+	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, CSV_CHECK_BUTTON,
+		MAKELONG(m_pOwner->IsCSVValidationPanelVisible(), 0));
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_OPTIONS_BUTTON, m_pOwner->IsCSVTableMode());
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_FILTER_BUTTON, m_pOwner->IsCSVTableMode());
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_SORT_BUTTON, m_pOwner->IsCSVTableMode());
+	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_EDIT_BUTTON, m_pOwner->IsCSVTableMode());
 	LayoutMarkerControls();
+}
+
+void CMainToolBar::ShowCSVOptionsMenu()
+{
+	if (!m_pOwner || !m_pOwner->IsCSVTableMode()) return;
+	HMENU menu = ::CreatePopupMenu();
+	if (!menu) return;
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_AUTO, L"区切り文字を自動判定");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_COMMA, L"カンマ (,)");
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_TAB, L"タブ");
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_SEMICOLON, L"セミコロン (;)");
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_PIPE, L"縦棒 (|)");
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_CUSTOM, L"その他の1文字...");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_HEADER, L"ヘッダーあり");
+	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+	::AppendMenuW(menu, MF_STRING, CSV_MENU_AUTOSIZE, L"列幅を自動調整（先頭 200 件）");
+	const wchar_t delimiter = m_pOwner->GetCSVDelimiter();
+	const bool autoDetect = m_pOwner->IsCSVAutoDelimiterEnabled();
+	::CheckMenuItem(menu, CSV_MENU_AUTO, MF_BYCOMMAND | (autoDetect ? MF_CHECKED : MF_UNCHECKED));
+	const UINT delimiterCommand = delimiter == L'\t' ? CSV_MENU_TAB
+		: delimiter == L';' ? CSV_MENU_SEMICOLON
+		: delimiter == L'|' ? CSV_MENU_PIPE : CSV_MENU_COMMA;
+	::CheckMenuRadioItem(menu, CSV_MENU_COMMA, CSV_MENU_PIPE, delimiterCommand, MF_BYCOMMAND);
+	if (!autoDetect && delimiter != L',' && delimiter != L'\t' &&
+		delimiter != L';' && delimiter != L'|') {
+		::CheckMenuItem(menu, CSV_MENU_CUSTOM, MF_BYCOMMAND | MF_CHECKED);
+	}
+	for (UINT item = CSV_MENU_COMMA; item <= CSV_MENU_PIPE; ++item) {
+		::EnableMenuItem(menu, item, MF_BYCOMMAND | (autoDetect ? MF_GRAYED : MF_ENABLED));
+	}
+	::CheckMenuItem(menu, CSV_MENU_HEADER,
+		MF_BYCOMMAND | (m_pOwner->IsCSVHeaderEnabled() ? MF_CHECKED : MF_UNCHECKED));
+
+	RECT rect{};
+	::SendMessageW(m_hwndEnhancementToolBar, TB_GETRECT, CSV_OPTIONS_BUTTON, reinterpret_cast<LPARAM>(&rect));
+	::MapWindowPoints(m_hwndEnhancementToolBar, nullptr, reinterpret_cast<POINT*>(&rect), 2);
+	::SetForegroundWindow(m_pOwner->GetHwnd());
+	const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+		rect.left, rect.bottom, 0, m_pOwner->GetHwnd(), nullptr);
+	::DestroyMenu(menu);
+	switch (command) {
+	case CSV_MENU_AUTO: m_pOwner->SetCSVDelimiter(delimiter, true); break;
+	case CSV_MENU_COMMA: m_pOwner->SetCSVDelimiter(L',', false); break;
+	case CSV_MENU_TAB: m_pOwner->SetCSVDelimiter(L'\t', false); break;
+	case CSV_MENU_SEMICOLON: m_pOwner->SetCSVDelimiter(L';', false); break;
+	case CSV_MENU_PIPE: m_pOwner->SetCSVDelimiter(L'|', false); break;
+	case CSV_MENU_CUSTOM: {
+		WCHAR value[16]{};
+		CDlgInput1 dialog;
+		if (dialog.DoModal(CEditApp::getInstance()->GetAppInstance(), m_pOwner->GetHwnd(),
+			L"CSV区切り文字", L"区切り文字を1文字入力してください（Tab は \\t）。",
+			_countof(value) - 1, value)) {
+			wchar_t delimiter = 0;
+			if (wcscmp(value, L"\\t") == 0) delimiter = L'\t';
+			else if (value[0] != L'\0' && value[1] == L'\0') delimiter = value[0];
+			if (delimiter == 0 || delimiter == L'"' || delimiter == L'\r' || delimiter == L'\n') {
+				m_pOwner->SendStatusMessage(L"CSV 区切り文字は引用符以外の1文字にしてください。");
+			} else {
+				m_pOwner->SetCSVDelimiter(delimiter, false);
+			}
+		}
+		break;
+	}
+	case CSV_MENU_HEADER: m_pOwner->ToggleCSVHeader(); break;
+	case CSV_MENU_AUTOSIZE: m_pOwner->AutoSizeCSVTableColumns(); break;
+	default: break;
+	}
 }
 
 bool CMainToolBar::GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, WCHAR* buffer, size_t bufferSize) const
@@ -1053,6 +1247,20 @@ bool CMainToolBar::GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, 
 		text = L"Curl 構文チェックの切替";
 	} else if (id == RAINBOW_BRACKET_BUTTON) {
 		text = L"括弧の色分けを切り替えます（タイプ別設定）";
+	} else if (id == CSV_TABLE_BUTTON) {
+		text = L"テキスト表示と CSV テーブル表示を切り替えます";
+	} else if (id == REALTIME_FILTER_BUTTON) {
+		text = L"文書を変更せず、条件に一致する行だけを表示します";
+	} else if (id == CSV_CHECK_BUTTON) {
+		text = L"CSV の形式エラーを一覧で確認します";
+	} else if (id == CSV_OPTIONS_BUTTON) {
+		text = L"区切り文字、ヘッダーの有無、列幅を設定します";
+	} else if (id == CSV_FILTER_BUTTON) {
+		text = L"現在の列にフィルター条件を設定します";
+	} else if (id == CSV_SORT_BUTTON) {
+		text = L"現在の列の並べ替え方式を選びます。Shift+列クリックで複数列";
+	} else if (id == CSV_EDIT_BUTTON) {
+		text = L"現在の行・列を追加／削除します";
 	} else if (id == WORDMARKER_PREVIOUS_BUTTON) {
 		text = L"前へ：前の自動 Marker に移動";
 	} else if (id == WORDMARKER_NEXT_BUTTON) {

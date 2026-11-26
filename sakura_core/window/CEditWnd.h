@@ -53,14 +53,21 @@
 
 #include "print/CPrintPreview.h"
 #include "curl/CurlSyntaxCheckService.h"
+#include "parse/CSVTableParseService.h"
+#include "parse/CSVTableQueryService.h"
+#include "parse/CSVValidationService.h"
+#include "parse/RealtimeTextFilter.h"
 
 #include <mutex>
 #include <optional>
+#include <cstdint>
+#include <vector>
 
 static const int MENUBAR_MESSAGE_MAX_LEN = 30;
 
 class CPlug;
 class CEditDoc;
+class CDocLine;
 struct DLLSHAREDATA;
 
 //メインウィンドウ内コントロールID
@@ -69,6 +76,9 @@ struct DLLSHAREDATA;
 #define IDT_CAPTION		457
 #define IDT_FIRST_IDLE	458
 #define IDT_CURL_SYNTAX	459
+#define IDT_CSV_SELECTION_STATS 460
+#define IDT_REALTIME_FILTER_DEBOUNCE 461
+#define IDT_REALTIME_FILTER_SCAN 462
 #define IDT_SYSMENU		1357
 #define ID_TOOLBAR		100
 
@@ -166,7 +176,7 @@ public:
 	void NavigateAutomaticMarker(bool forward);
 	void ToggleCurlSyntaxErrorList();
 	void GoToCurlSyntaxDiagnostic(size_t index);
-	void UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition);
+	void UpdateCurlSyntaxHover(const CLayoutPoint& layoutPosition, POINT screenPosition, bool foldGutterHover = false);
 	void HideCurlSyntaxTooltip();
 	void CreateCurlSyntaxErrorList();
 	void RefreshCurlSyntaxErrorList();
@@ -290,6 +300,32 @@ public:
 	void OnCurlSyntaxDocumentTypeChanged();
 	void SetCurlSyntaxRealtime(bool enabled);
 	void RunCurlSyntaxCheckNow();
+	void ToggleCSVTableMode();
+	void ToggleRealtimeFilter();
+	void NotifyRealtimeFilterDocumentLoading(CEditDoc* document);
+	void NotifyRealtimeFilterDocumentLoadFinished(CEditDoc* document);
+	void AcceptRealtimeFilterResult();
+	void ScheduleRealtimeFilter(bool keepAppendCache = false);
+	void StartRealtimeFilterScan();
+	void ContinueRealtimeFilterScan();
+	void UpdateRealtimeFilterLayout();
+	void CloseRealtimeFilter(bool refreshLayout = true);
+	void ExportRealtimeFilter(bool toNewDocument, bool showSaveAs = false);
+	void RunCSVCheck();
+	void SetCSVDelimiter(wchar_t delimiter, bool autoDetect);
+	void ToggleCSVHeader();
+	void AutoSizeCSVTableColumns();
+	void ShowCSVColumnMenuForCurrentColumn();
+	void ShowCSVTableEditMenu();
+	void UpdateCSVSelectionStatistics();
+	void ShowCSVTableContextMenu(POINT screenPoint, int displayRow, int subItem);
+	bool ApplyCSVEditBatch(csvtable::TextEditBatch patches, int pendingEditRow = -1, int pendingEditColumn = -1);
+	bool IsCSVHeaderEnabled() const noexcept { return m_bCSVHasHeader; }
+	bool IsCSVAutoDelimiterEnabled() const noexcept { return m_bCSVAutoDetectDelimiter; }
+	bool IsCSVValidationPanelVisible() const noexcept { return m_bCSVValidationListActive && m_bCurlSyntaxErrorListVisible; }
+	wchar_t GetCSVDelimiter() const noexcept { return m_chCSVDelimiter; }
+	bool IsCSVTableMode() const noexcept { return m_bCSVTableMode; }
+	bool IsRealtimeFilterEnabled() const noexcept { return m_bRealtimeFilterMode; }
 
 	//ビュー
 	const CEditView&	GetActiveView() const { return *m_pcEditView; }
@@ -368,6 +404,22 @@ public:
 	double GetFontZoom();
 
 	void ClearViewCaretPosInfo();
+	void ScheduleCSVTableParse();
+	void AcceptCSVTableParseResult();
+	void ScheduleCSVTableQuery();
+	void AcceptCSVTableQueryResult();
+	void ShowCSVFilterMenu(std::size_t column, POINT screenPoint);
+	void AcceptCSVValidationResult();
+	std::size_t CSVSourceRow(std::size_t displayRow) const noexcept;
+	void UpdateCSVSortIndicator();
+	void GoToCSVValidationDiagnostic(std::size_t textOffset);
+	void UpdateCSVTableLayout();
+	void PopulateCSVTableColumns();
+	void BeginCSVCellEdit(int row, int column);
+	void FinishCSVCellEdit(bool commit);
+	bool CSVOffsetToLogicPoint(std::size_t offset, CLogicPoint* point) const;
+	static LRESULT CALLBACK CSVCellEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
+		UINT_PTR subclassId, DWORD_PTR referenceData);
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 	//                        メンバ変数                           //
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
@@ -457,6 +509,78 @@ private:
 	bool m_bCurlSyntaxErrorListDragging = false;
 	HWND m_hwndCurlSyntaxTooltip = nullptr;
 	std::wstring m_strCurlSyntaxTooltip;
+	std::mutex m_csvTableMailboxMutex;
+	std::optional<csvtable::TableParseResult> m_csvTableMailbox;
+	std::unique_ptr<csvtable::CSVTableParseService> m_pCSVTableParseService;
+	std::mutex m_csvTableQueryMailboxMutex;
+	std::optional<csvtable::TableQueryResult> m_csvTableQueryMailbox;
+	std::unique_ptr<csvtable::CSVTableQueryService> m_pCSVTableQueryService;
+	std::mutex m_csvValidationMailboxMutex;
+	std::optional<csvtable::ValidationResult> m_csvValidationMailbox;
+	std::unique_ptr<csvtable::CSVValidationService> m_pCSVValidationService;
+	std::vector<csvtable::Diagnostic> m_vCSVValidationDiagnostics;
+	std::uint64_t m_uCSVValidationVersion = 0;
+	bool m_bCSVValidationListActive = false;
+	bool m_bCSVValidationStale = false;
+	bool m_bCSVValidationHasResult = false;
+	std::shared_ptr<const csvtable::CSVTableSnapshot> m_csvTableSnapshot;
+	std::unique_ptr<csvtable::CSVTableModel> m_csvTableModel;
+	std::vector<std::size_t> m_vCSVTableViewRows;
+	std::vector<csvtable::Filter> m_vCSVFilters;
+	std::vector<csvtable::SortKey> m_vCSVSortKeys;
+	csvtable::FilterLogic m_csvFilterLogic = csvtable::FilterLogic::And;
+	bool m_bCSVTableViewOrderIdentity = true;
+	std::uint64_t m_uCSVQueryGeneration = 0;
+	HWND m_hwndCSVTable = nullptr;
+	HWND m_hwndCSVCellEdit = nullptr;
+	std::wstring m_csvTableDisplayText;
+	int m_nCSVEditingRow = -1;
+	int m_nCSVEditingColumn = -1;
+	int m_nCSVCurrentColumn = 1;
+	int m_nCSVSortPendingSourceRow = -1;
+	std::size_t m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+	int m_nCSVPendingEditRow = -1;
+	int m_nCSVPendingEditColumn = -1;
+	bool m_bCSVFinishingCellEdit = false;
+	bool m_bCSVTableMode = false;
+	bool m_bCSVHasHeader = false;
+	bool m_bCSVAutoDetectDelimiter = true;
+	wchar_t m_chCSVDelimiter = L',';
+	std::mutex m_realtimeFilterMailboxMutex;
+	std::optional<textfilter::BatchResult> m_realtimeFilterMailbox;
+	std::unique_ptr<textfilter::Service> m_pRealtimeFilterService;
+	std::vector<const CDocLine*> m_vRealtimeFilterLineIndex;
+	std::vector<std::uint64_t> m_vRealtimeFilterLineFingerprints;
+	std::vector<std::size_t> m_vRealtimeFilterMatches;
+	std::vector<std::uint64_t> m_vRealtimeFilterAppendCacheFingerprints;
+	std::vector<std::size_t> m_vRealtimeFilterAppendCacheMatches;
+	std::vector<textfilter::Line> m_vRealtimeFilterPendingBatch;
+	std::vector<textfilter::Range> m_vRealtimeFilterVisibleRanges;
+	const CDocLine* m_pRealtimeFilterScanLine = nullptr;
+	std::uint64_t m_uRealtimeFilterToken = 0;
+	std::uint64_t m_uRealtimeFilterDocumentVersion = 0;
+	std::size_t m_nRealtimeFilterScannedLines = 0;
+	std::size_t m_nRealtimeFilterTotalLines = 0;
+	bool m_bRealtimeFilterMode = false;
+	bool m_bRealtimeFilterDocumentLoading = false;
+	bool m_bRealtimeFilterBatchInFlight = false;
+	bool m_bRealtimeFilterHasPendingBatch = false;
+	bool m_bRealtimeFilterPendingBatchFinal = false;
+	bool m_bRealtimeFilterScanComplete = false;
+	bool m_bRealtimeFilterAppendCachePending = false;
+	bool m_bRealtimeFilterAppendCacheActive = false;
+	HWND m_hwndRealtimeFilterBar = nullptr;
+	HWND m_hwndRealtimeFilterInclude = nullptr;
+	HWND m_hwndRealtimeFilterExclude = nullptr;
+	HWND m_hwndRealtimeFilterLogic = nullptr;
+	HWND m_hwndRealtimeFilterCase = nullptr;
+	HWND m_hwndRealtimeFilterRegex = nullptr;
+	HWND m_hwndRealtimeFilterContext = nullptr;
+	HWND m_hwndRealtimeFilterStats = nullptr;
+	HWND m_hwndRealtimeFilterAutoScroll = nullptr;
+	HWND m_hwndRealtimeFilterList = nullptr;
+	bool m_bRealtimeFilterAutoScroll = false;
+	std::wstring m_strRealtimeFilterDisplayText;
 };
 
 CEditWnd* GetEditWndPtr() noexcept;

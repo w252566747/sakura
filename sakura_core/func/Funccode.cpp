@@ -123,6 +123,8 @@ const EFunctionCode pnFuncList_Edit[] = {	//Oct. 16, 2000 JEPRO 変数名変更(
 	F_WordDeleteToEnd	,	//単語の右端まで削除
 	F_WordCut			,	//単語切り取り
 	F_WordDelete		,	//単語削除
+	F_MULTICURSOR_SELECT_NEXT,	//次の同一単語を選択
+	F_MULTICURSOR_SELECT_ALL,	//同一単語をすべて選択
 	F_LineCutToStart	,	//行頭まで切り取り(改行単位)
 	F_LineCutToEnd		,	//行末まで切り取り(改行単位)
 	F_LineDeleteToStart	,	//行頭まで削除(改行単位)
@@ -152,6 +154,8 @@ const EFunctionCode pnFuncList_Move[] = {	//Oct. 16, 2000 JEPRO 変数名変更(
 	F_RIGHT				,	//カーソル右移動
 	F_UP2				,	//カーソル上移動(２行ごと)
 	F_DOWN2				,	//カーソル下移動(２行ごと)
+	F_MULTICURSOR_ADD_UP	,	//マルチカーソル: 上にカーソルを追加
+	F_MULTICURSOR_ADD_DOWN	,	//マルチカーソル: 下にカーソルを追加
 	F_WORDLEFT			,	//単語の左端に移動
 	F_WORDRIGHT			,	//単語の右端に移動
 	F_GOLINETOP			,	//行頭に移動(折り返し単位)
@@ -378,6 +382,11 @@ const EFunctionCode pnFuncList_Set[] = {	//Oct. 16, 2000 JEPRO 変数名変更(L
 	F_CURL_SYNTAX_ERRORS,	/* Curl syntax error list */
 	F_CURL_SYNTAX_NEXT,	/* Curl next syntax error */
 	F_CURL_SYNTAX_PREV,	/* Curl previous syntax error */
+	F_CODEFOLD_TOGGLE,	/* Toggle code folding at current line */
+	F_CODEFOLD_ALL,	/* Fold all code blocks */
+	F_CODEFOLD_EXPAND_ALL,	/* Expand all code blocks */
+	F_CODEFOLD_CURRENT_DEPTH,	/* Fold blocks at the current depth */
+	F_CODEFOLD_TO_DEPTH,	/* Fold blocks to a requested depth */
 	F_TYPE_LIST			,	/* タイプ別設定一覧 */			//Sept. 17, 2000 JEPRO 設定系に入ってなかったので追加
 	F_OPTION_TYPE		,	/* タイプ別設定 */
 	F_OPTION			,	/* 共通設定 */
@@ -481,6 +490,8 @@ constexpr auto nFincList_Win_Num = int(std::size(pnFuncList_Win));	//Oct. 16, 20
 const EFunctionCode pnFuncList_Support[] = {	//Oct. 16, 2000 JEPRO 変数名変更(List11→List_Support)
 	F_HOKAN						,	/* 入力補完 */
 	F_TOGGLE_KEY_SEARCH			,	/* キャレット位置の単語を辞書検索する機能ON/OFF */	// 2006.03.24 fon
+	F_MULTICURSOR_REMOVE_LAST	,	/* 直近に追加した追加カーソルを削除 */
+	F_MULTICURSOR_CLEAR			,	/* 追加カーソルをすべて解除 */
 //Sept. 15, 2000→Nov. 25, 2000 JEPRO //ショートカットキーがうまく働かないので殺してあった下の2行を修正・復活
 	F_HELP_CONTENTS				,	/* ヘルプ目次 */			//Nov. 25, 2000 JEPRO 追加
 	F_HELP_SEARCH				,	/* ヘルプキーワード検索 */	//Nov. 25, 2000 JEPRO 追加
@@ -970,6 +981,35 @@ int FuncID_To_HelpContextID( EFunctionCode nFuncID )
 /* 機能が利用可能か調べる */
 bool IsFuncEnable( const CEditDoc* pcEditDoc, const DLLSHAREDATA* pShareData, EFunctionCode nId )
 {
+	if (nId == F_MULTICURSOR_SELECT_NEXT || nId == F_MULTICURSOR_SELECT_ALL) {
+		return pcEditDoc != nullptr;
+	}
+	if (nId == F_MULTICURSOR_ADD_UP || nId == F_MULTICURSOR_ADD_DOWN
+		|| nId == F_MULTICURSOR_REMOVE_LAST || nId == F_MULTICURSOR_CLEAR) {
+		if (!pcEditDoc) return false;
+		auto* editWnd = CEditWnd::getInstance();
+		if (!editWnd) return false;
+		auto& view = editWnd->GetActiveView();
+		if (view.GetDocument() != pcEditDoc) return false;
+		if (nId == F_MULTICURSOR_REMOVE_LAST || nId == F_MULTICURSOR_CLEAR) {
+			return !view.m_vExtraCursors.empty();
+		}
+		if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) return false;
+		int topLine = static_cast<int>(view.GetCaret().GetCaretLayoutPos().GetY2());
+		int bottomLine = topLine;
+		for (const auto& extra : view.m_vExtraCursors) {
+			CLayoutPoint point;
+			if (!view.ResolveExtraCursor(extra, &point)) continue;
+			topLine = t_min(topLine, static_cast<int>(point.GetY2()));
+			bottomLine = t_max(bottomLine, static_cast<int>(point.GetY2()));
+		}
+		return nId == F_MULTICURSOR_ADD_UP
+			? topLine > 0
+			: bottomLine + 1 < static_cast<int>(pcEditDoc->m_cLayoutMgr.GetLineCount());
+	}
+	if (nId >= F_CODEFOLD_TOGGLE && nId <= F_CODEFOLD_TO_DEPTH) {
+		return pcEditDoc && pcEditDoc->m_cLayoutMgr.IsCodeFoldSupported();
+	}
 	if (nId == F_CURL_SYNTAX_TOGGLE || nId == F_CURL_SYNTAX_RUN || nId == F_CURL_SYNTAX_ERRORS) return CEditWnd::getInstance()->IsCurlSyntaxDocument();
 	if (nId == F_CURL_SYNTAX_NEXT || nId == F_CURL_SYNTAX_PREV) {
 		return CEditWnd::getInstance()->IsCurlSyntaxDocument() && !pcEditDoc->m_bCurlSyntaxResultStale && !pcEditDoc->m_vCurlSyntaxDiagnostics.empty();

@@ -105,7 +105,7 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 	if (const CLayout* layout = GetLayout()) {
 		SRainbowBracketMark bracketMark;
 		if (layout->GetRainbowBracketMark(static_cast<int>(m_nPosInLogic), &bracketMark)) {
-			m_rainbowBracketColor = bracketMark.unmatched
+			m_rainbowBracketColor = bracketMark.unmatched && CEditView::IsRainbowUnmatchedHighlightEnabled()
 				? COLORIDX_BRACKET_PAIR
 				: static_cast<EColorIndexType>(COLORIDX_RAINBOW_BRACKET1 + bracketMark.level % CBracketNestingState::COLOR_COUNT);
 			m_hasRainbowBracketColor = true;

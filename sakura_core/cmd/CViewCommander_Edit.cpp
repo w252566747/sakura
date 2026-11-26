@@ -27,6 +27,10 @@
 #include "plugin/CJackManager.h"
 #include "plugin/CSmartIndentIfObj.h"
 #include "debug/CRunningTimer.h"
+#include "view/MultiCursorPointTransform.h"
+#include <algorithm>
+#include <string_view>
+#include <vector>
 #include "apiwrap/CommonControl.h"
 
 /* wchar_t1個分の文字を入力 */
@@ -872,6 +876,603 @@ void CViewCommander::Command_DELETE_BACK( void )
 		}
 	}
 	m_pCommanderView->PostprocessCommand_hokan();	//	Jan. 10, 2005 genta 関数化
+}
+
+namespace {
+struct SMultiCursorState {
+	CLogicPoint caret;
+	CLogicPoint anchor;
+	bool hasSelection = false;
+	bool primary = false;
+	size_t extraIndex = 0;
+};
+
+bool GetMultiCursorNextCharacter(const CEditDoc& document, const CLogicPoint& point, CLogicPoint* next)
+{
+	const CDocLine* line = document.m_cDocLineMgr.GetLine(point.y);
+	if (!line || point.x < CLogicInt(0)) return false;
+	const CLogicInt length = line->GetLengthWithoutEOL();
+	if (point.x < length) {
+		const int characterLength = CNativeW::GetSizeOfChar(line->GetPtr(), length, point.x);
+		if (characterLength <= 0) return false;
+		*next = CLogicPoint(CLogicInt(static_cast<int>(point.x) + characterLength), point.y);
+		return true;
+	}
+	if (point.x == length && line->GetEol().IsValid() && point.y + CLogicInt(1) < document.m_cDocLineMgr.GetLineCount()) {
+		*next = CLogicPoint(CLogicInt(0), point.y + CLogicInt(1));
+		return true;
+	}
+	return false;
+}
+
+bool GetMultiCursorPreviousCharacter(const CEditDoc& document, const CLogicPoint& point, CLogicPoint* previous)
+{
+	if (point.x > CLogicInt(0)) {
+		const CDocLine* line = document.m_cDocLineMgr.GetLine(point.y);
+		if (!line) return false;
+		const CLogicInt length = line->GetLengthWithoutEOL();
+		CLogicInt index(0);
+		CLogicInt prior(0);
+		while (index < point.x && index < length) {
+			prior = index;
+			const int characterLength = CNativeW::GetSizeOfChar(line->GetPtr(), length, index);
+			if (characterLength <= 0) return false;
+			index += CLogicInt(characterLength);
+		}
+		if (index != point.x) return false;
+		*previous = CLogicPoint(prior, point.y);
+		return true;
+	}
+	if (point.y > CLogicInt(0)) {
+		const CDocLine* priorLine = document.m_cDocLineMgr.GetLine(point.y - CLogicInt(1));
+		if (!priorLine || !priorLine->GetEol().IsValid()) return false;
+		*previous = CLogicPoint(priorLine->GetLengthWithoutEOL(), point.y - CLogicInt(1));
+		return true;
+	}
+	return false;
+}
+
+void SetMultiCursorSelection(CEditView& view, const CLogicPoint& caret, const CLogicPoint& anchor, bool selected)
+{
+	CLayoutPoint caretLayout;
+	view.GetDocument()->m_cLayoutMgr.LogicToLayout(caret, &caretLayout, CLayoutInt(0), false);
+	view.GetCaret().MoveCursor(caretLayout, false);
+	view.GetSelectionInfo().DisableSelectArea(false);
+	if (!selected) {
+		view.GetSelectionInfo().m_sSelectBgn.Set(caretLayout);
+		return;
+	}
+	CLayoutPoint anchorLayout;
+	view.GetDocument()->m_cLayoutMgr.LogicToLayout(anchor, &anchorLayout, CLayoutInt(0), false);
+	CLayoutPoint from = anchorLayout;
+	CLayoutPoint to = caretLayout;
+	if (PointCompare(to, from) < 0) std::swap(from, to);
+	view.GetSelectionInfo().m_sSelectBgn.Set(anchorLayout);
+	view.GetSelectionInfo().m_sSelect = CLayoutRange(from, to);
+}
+
+struct SMultiCursorWordRange {
+	CLogicPoint start;
+	CLogicPoint end;
+	std::wstring text;
+};
+
+bool GetMultiCursorWordAt(CEditView& view, const CLogicPoint& point, SMultiCursorWordRange* result)
+{
+	if (!result) return false;
+	auto& layoutMgr = view.GetDocument()->m_cLayoutMgr;
+	CLayoutPoint layoutPoint;
+	layoutMgr.LogicToLayout(point, &layoutPoint, CLayoutInt(0), false);
+	const CLayout* layout = layoutMgr.SearchLineByLayoutY(layoutPoint.GetY2());
+	if (!layout) return false;
+	CLayoutRange wordLayout;
+	CNativeW word;
+	const CLogicInt localIndex = view.LineColumnToIndex(layout, layoutPoint.GetX2());
+	if (!layoutMgr.WhereCurrentWord(layoutPoint.GetY2(), localIndex, &wordLayout, &word, nullptr, true)
+		|| word.GetStringLength() <= CLogicInt(0)) return false;
+	layoutMgr.LayoutToLogic(wordLayout.GetFrom(), &result->start);
+	layoutMgr.LayoutToLogic(wordLayout.GetTo(), &result->end);
+	if (PointCompare(result->end, result->start) < 0) std::swap(result->start, result->end);
+	result->text.assign(word.GetStringPtr(), static_cast<size_t>(word.GetStringLength()));
+	return result->start != result->end;
+}
+
+bool GetMultiCursorRangeText(CEditDoc& document, CLogicPoint start, CLogicPoint end, std::wstring* text)
+{
+	if (!text) return false;
+	if (PointCompare(end, start) < 0) std::swap(start, end);
+	text->clear();
+	for (CLogicInt lineNo = start.y; lineNo <= end.y; ++lineNo) {
+		const CDocLine* line = document.m_cDocLineMgr.GetLine(lineNo);
+		if (!line) return false;
+		const CLogicInt length = line->GetLengthWithoutEOL();
+		const CLogicInt from = lineNo == start.y ? std::clamp(start.x, CLogicInt(0), length) : CLogicInt(0);
+		const CLogicInt to = lineNo == end.y ? std::clamp(end.x, CLogicInt(0), length) : length;
+		if (to < from) return false;
+		text->append(line->GetPtr() + static_cast<int>(from), static_cast<size_t>(to - from));
+		if (lineNo < end.y) {
+			const CEol& eol = line->GetEol();
+			if (eol.IsValid()) text->append(eol.GetValue2(), static_cast<size_t>(eol.GetLen()));
+			else text->append(document.m_cDocEditor.GetNewLineCode().GetValue2(),
+				static_cast<size_t>(document.m_cDocEditor.GetNewLineCode().GetLen()));
+		}
+	}
+	return true;
+}
+
+bool MultiCursorRangeAlreadySelected(CEditView& view, const CLogicPoint& start, const CLogicPoint& end)
+{
+	if (view.GetSelectionInfo().IsTextSelected()) {
+		CLogicPoint anchor;
+		view.GetDocument()->m_cLayoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &anchor);
+		CLogicPoint caret = view.GetCaret().GetCaretLogicPos();
+		if (PointCompare(caret, anchor) < 0) std::swap(caret, anchor);
+		if (caret == end && anchor == start) return true;
+	}
+	for (const auto& extra : view.m_vExtraCursors) {
+		CLayoutPoint extraCaretLayout;
+		CLayoutPoint extraAnchorLayout;
+		if (!view.ResolveExtraCursor(extra, &extraCaretLayout)
+			|| !view.ResolveExtraCursorAnchor(extra, &extraAnchorLayout)) continue;
+		CLogicPoint extraCaret;
+		CLogicPoint extraAnchor;
+		view.GetDocument()->m_cLayoutMgr.LayoutToLogic(extraCaretLayout, &extraCaret);
+		view.GetDocument()->m_cLayoutMgr.LayoutToLogic(extraAnchorLayout, &extraAnchor);
+		if (PointCompare(extraCaret, extraAnchor) < 0) std::swap(extraCaret, extraAnchor);
+		if (extraAnchor == start && extraCaret == end) return true;
+	}
+	return false;
+}
+
+bool AddMultiCursorWordSelection(CEditView& view, const CLogicPoint& start, const CLogicPoint& end)
+{
+	if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()
+		|| MultiCursorRangeAlreadySelected(view, start, end)) return false;
+	CEditView::SExtraCursor extra;
+	extra.caret = end;
+	extra.bHasSelection = true;
+	extra.anchor = start;
+	view.m_vExtraCursors.push_back(extra);
+	return true;
+}
+
+template <class Visitor>
+void ForEachMultiCursorWordOccurrence(CEditView& view, std::wstring_view word, bool matchWholeWord, Visitor visitor)
+{
+	if (word.empty()) return;
+	const auto lineCount = view.GetDocument()->m_cDocLineMgr.GetLineCount();
+	for (CLogicInt lineNo(0); lineNo < lineCount; ++lineNo) {
+		if (view.GetDocument()->m_cLayoutMgr.IsCodeFoldHiddenLine(lineNo)) continue;
+		const CDocLine* line = view.GetDocument()->m_cDocLineMgr.GetLine(lineNo);
+		if (!line) continue;
+		const std::wstring_view text(line->GetPtr(), static_cast<size_t>(line->GetLengthWithoutEOL()));
+		size_t offset = 0;
+		while (offset <= text.size()) {
+			const size_t found = text.find(word, offset);
+			if (found == std::wstring_view::npos) break;
+			const CLogicPoint rawStart(CLogicInt(static_cast<int>(found)), lineNo);
+			const CLogicPoint rawEnd(CLogicInt(static_cast<int>(found + word.size())), lineNo);
+			SMultiCursorWordRange candidate;
+			CLogicPoint occurrenceStart = rawStart;
+			CLogicPoint occurrenceEnd = rawEnd;
+			bool exactOccurrence = true;
+			if (matchWholeWord) {
+				exactOccurrence = GetMultiCursorWordAt(view, rawStart, &candidate)
+					&& candidate.start == rawStart
+					&& candidate.end.y == lineNo
+					&& static_cast<int>(candidate.end.x) - static_cast<int>(candidate.start.x) == static_cast<int>(word.size())
+					&& candidate.text == word;
+				if (exactOccurrence) {
+					occurrenceStart = candidate.start;
+					occurrenceEnd = candidate.end;
+				}
+			}
+			if (exactOccurrence) {
+				if (!visitor(occurrenceStart, occurrenceEnd)) return;
+				offset = found + word.size();
+			} else {
+				offset = found + 1;
+			}
+		}
+	}
+}
+
+bool AddExtraCursorAt(CEditView& view, const CLayoutPoint& point)
+{
+	CEditDoc* document = view.GetDocument();
+	if (!document) return false;
+	CLogicPoint logical;
+	document->m_cLayoutMgr.LayoutToLogic(point, &logical);
+	CEditView::SExtraCursor candidate;
+	candidate.caret = logical;
+	CLayoutPoint normalizedLayout;
+	if (!view.ResolveExtraCursor(candidate, &normalizedLayout)) return false;
+	document->m_cLayoutMgr.LayoutToLogic(normalizedLayout, &logical);
+	if (logical == view.GetCaret().GetCaretLogicPos()) return false;
+	for (const auto& extra : view.m_vExtraCursors) {
+		CLayoutPoint existingLayout;
+		CLogicPoint existing;
+		if (view.ResolveExtraCursor(extra, &existingLayout)) {
+			document->m_cLayoutMgr.LayoutToLogic(existingLayout, &existing);
+			if (existing == logical) return false;
+		}
+	}
+	if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) return false;
+	candidate.caret = logical;
+	view.m_vExtraCursors.push_back(candidate);
+	return true;
+}
+
+bool RemoveUnresolvableExtraCursors(CEditView& view)
+{
+	auto& cursors = view.m_vExtraCursors;
+	const size_t originalSize = cursors.size();
+	cursors.erase(std::remove_if(cursors.begin(), cursors.end(), [&](const CEditView::SExtraCursor& extra) {
+		CLayoutPoint caret;
+		CLayoutPoint anchor;
+		return !view.ResolveExtraCursor(extra, &caret)
+			|| (extra.bHasSelection && !view.ResolveExtraCursorAnchor(extra, &anchor));
+	}), cursors.end());
+	return cursors.size() != originalSize;
+}
+}
+
+void CViewCommander::Command_AddCursorUp(void)
+{
+	if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) m_pCommanderView->GetSelectionInfo().DisableSelectArea(true);
+	if (m_pCommanderView->m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) { ErrorBeep(); return; }
+	CLayoutPoint top = GetCaret().GetCaretLayoutPos();
+	for (const auto& extra : m_pCommanderView->m_vExtraCursors) {
+		CLayoutPoint point;
+		if (m_pCommanderView->ResolveExtraCursor(extra, &point) && point.GetY2() < top.GetY2()) top = point;
+	}
+	const int targetLine = static_cast<int>(top.GetY2()) - 1;
+	if (targetLine < 0) return;
+	CLayoutPoint target;
+	target.Set(top.GetX2(), CLayoutInt(targetLine));
+	if (AddExtraCursorAt(*m_pCommanderView, target)) m_pCommanderView->Redraw();
+}
+
+void CViewCommander::Command_AddCursorDown(void)
+{
+	if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) m_pCommanderView->GetSelectionInfo().DisableSelectArea(true);
+	if (m_pCommanderView->m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) { ErrorBeep(); return; }
+	CLayoutPoint bottom = GetCaret().GetCaretLayoutPos();
+	for (const auto& extra : m_pCommanderView->m_vExtraCursors) {
+		CLayoutPoint point;
+		if (m_pCommanderView->ResolveExtraCursor(extra, &point) && point.GetY2() > bottom.GetY2()) bottom = point;
+	}
+	const int targetLine = static_cast<int>(bottom.GetY2()) + 1;
+	if (targetLine >= static_cast<int>(GetDocument()->m_cLayoutMgr.GetLineCount())) return;
+	CLayoutPoint target;
+	target.Set(bottom.GetX2(), CLayoutInt(targetLine));
+	if (AddExtraCursorAt(*m_pCommanderView, target)) m_pCommanderView->Redraw();
+}
+
+void CViewCommander::Command_SelectNextOccurrence(void)
+{
+	auto& view = *m_pCommanderView;
+	auto& selection = view.GetSelectionInfo();
+	if (selection.IsBoxSelecting() || selection.IsMouseSelecting()) { ErrorBeep(); return; }
+	const bool selectedTextMode = selection.IsTextSelected();
+	bool matchWholeWord = !selectedTextMode;
+	SMultiCursorWordRange seed;
+	if (selectedTextMode) {
+		CNativeW selected;
+		if (!view.GetSelectedDataSimple(selected) || selected.GetStringLength() <= CLogicInt(0)) { ErrorBeep(); return; }
+		selection.GetEditView()->GetDocument()->m_cLayoutMgr.LayoutToLogic(selection.m_sSelectBgn.GetFrom(), &seed.start);
+		seed.end = GetCaret().GetCaretLogicPos();
+		if (PointCompare(seed.end, seed.start) < 0) std::swap(seed.start, seed.end);
+		seed.text.assign(selected.GetStringPtr(), static_cast<size_t>(selected.GetStringLength()));
+		SMultiCursorWordRange wordAtSelection;
+		matchWholeWord = GetMultiCursorWordAt(view, seed.start, &wordAtSelection)
+			&& wordAtSelection.start == seed.start && wordAtSelection.end == seed.end
+			&& wordAtSelection.text == seed.text;
+	} else if (!GetMultiCursorWordAt(view, GetCaret().GetCaretLogicPos(), &seed)) {
+		ErrorBeep(); return;
+	}
+	SetMultiCursorSelection(view, seed.end, seed.start, true);
+	GetCaret().m_nCaretPosX_Prev = GetCaret().GetCaretLayoutPos().GetX2();
+
+	bool reusable = true;
+	for (const auto& extra : view.m_vExtraCursors) {
+		CLayoutPoint extraCaret;
+		CLayoutPoint extraAnchor;
+		CLogicPoint caret;
+		CLogicPoint anchor;
+		if (!extra.bHasSelection || !view.ResolveExtraCursor(extra, &extraCaret)
+			|| !view.ResolveExtraCursorAnchor(extra, &extraAnchor)) { reusable = false; break; }
+		GetDocument()->m_cLayoutMgr.LayoutToLogic(extraCaret, &caret);
+		GetDocument()->m_cLayoutMgr.LayoutToLogic(extraAnchor, &anchor);
+		if (PointCompare(caret, anchor) < 0) std::swap(caret, anchor);
+		std::wstring extraText;
+		if (caret.y != seed.end.y || anchor.y != seed.start.y
+			|| !GetMultiCursorRangeText(*GetDocument(), anchor, caret, &extraText)
+			|| extraText != seed.text) { reusable = false; break; }
+	}
+	if (!reusable) view.m_vExtraCursors.clear();
+		if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) { ErrorBeep(); return; }
+
+	CLogicPoint lastSelectedEnd = seed.end;
+	for (const auto& extra : view.m_vExtraCursors) {
+		CLayoutPoint extraCaret;
+		if (view.ResolveExtraCursor(extra, &extraCaret)) {
+			CLogicPoint caret;
+			GetDocument()->m_cLayoutMgr.LayoutToLogic(extraCaret, &caret);
+			if (PointCompare(lastSelectedEnd, caret) < 0) lastSelectedEnd = caret;
+		}
+	}
+	CLogicPoint wrappedCandidateStart;
+	CLogicPoint wrappedCandidateEnd;
+	bool haveWrappedCandidate = false;
+	bool foundAfter = false;
+	ForEachMultiCursorWordOccurrence(view, seed.text, matchWholeWord, [&](const CLogicPoint& start, const CLogicPoint& end) {
+		if (MultiCursorRangeAlreadySelected(view, start, end)) return true;
+		if (PointCompare(start, lastSelectedEnd) > 0) {
+			wrappedCandidateStart = start;
+			wrappedCandidateEnd = end;
+			foundAfter = true;
+			return false;
+		}
+		if (!haveWrappedCandidate) {
+			wrappedCandidateStart = start;
+			wrappedCandidateEnd = end;
+			haveWrappedCandidate = true;
+		}
+		return true;
+	});
+	if (!foundAfter && !haveWrappedCandidate) { ErrorBeep(); return; }
+	const auto nextStart = wrappedCandidateStart;
+	const auto nextEnd = wrappedCandidateEnd;
+	if (!AddMultiCursorWordSelection(view, nextStart, nextEnd)) { ErrorBeep(); return; }
+	view.Redraw();
+}
+
+void CViewCommander::Command_SelectAllOccurrences(void)
+{
+	auto& view = *m_pCommanderView;
+	auto& selection = view.GetSelectionInfo();
+	if (selection.IsBoxSelecting() || selection.IsMouseSelecting()) { ErrorBeep(); return; }
+	const bool selectedTextMode = selection.IsTextSelected();
+	bool matchWholeWord = !selectedTextMode;
+	SMultiCursorWordRange seed;
+	if (selectedTextMode) {
+		CNativeW selected;
+		if (!view.GetSelectedDataSimple(selected) || selected.GetStringLength() <= CLogicInt(0)) { ErrorBeep(); return; }
+		GetDocument()->m_cLayoutMgr.LayoutToLogic(selection.m_sSelectBgn.GetFrom(), &seed.start);
+		seed.end = GetCaret().GetCaretLogicPos();
+		if (PointCompare(seed.end, seed.start) < 0) std::swap(seed.start, seed.end);
+		seed.text.assign(selected.GetStringPtr(), static_cast<size_t>(selected.GetStringLength()));
+		SMultiCursorWordRange wordAtSelection;
+		matchWholeWord = GetMultiCursorWordAt(view, seed.start, &wordAtSelection)
+			&& wordAtSelection.start == seed.start && wordAtSelection.end == seed.end
+			&& wordAtSelection.text == seed.text;
+	} else if (!GetMultiCursorWordAt(view, GetCaret().GetCaretLogicPos(), &seed)) {
+		ErrorBeep(); return;
+	}
+	view.m_vExtraCursors.clear();
+	SetMultiCursorSelection(view, seed.end, seed.start, true);
+	GetCaret().m_nCaretPosX_Prev = GetCaret().GetCaretLayoutPos().GetX2();
+	bool limitReached = false;
+	ForEachMultiCursorWordOccurrence(view, seed.text, matchWholeWord, [&](const CLogicPoint& start, const CLogicPoint& end) {
+		if (start == seed.start && end == seed.end) return true;
+		if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) {
+			limitReached = true;
+			return false;
+		}
+		AddMultiCursorWordSelection(view, start, end);
+		return true;
+	});
+	if (view.m_vExtraCursors.empty()) ErrorBeep();
+	if (limitReached) ErrorBeep();
+	view.Redraw();
+}
+
+void CViewCommander::Command_RemoveLastCursor(void)
+{
+	if (m_pCommanderView->m_vExtraCursors.empty()) return;
+	m_pCommanderView->m_vExtraCursors.pop_back();
+	m_pCommanderView->Redraw();
+}
+
+void CViewCommander::Command_ClearExtraCursors(void)
+{
+	m_pCommanderView->ClearExtraCursors();
+}
+
+void CViewCommander::ApplyMovementToAllCursors(const std::function<void()>& command)
+{
+	auto& view = *m_pCommanderView;
+	const bool removedInvalidCursors = RemoveUnresolvableExtraCursors(view);
+	if (view.m_vExtraCursors.empty()) {
+		command();
+		if (removedInvalidCursors) view.Redraw();
+		return;
+	}
+	auto& layoutMgr = GetDocument()->m_cLayoutMgr;
+	std::vector<SMultiCursorState> states;
+	states.reserve(view.m_vExtraCursors.size() + 1);
+	SMultiCursorState primary;
+	primary.caret = GetCaret().GetCaretLogicPos();
+	primary.anchor = primary.caret;
+	primary.primary = true;
+	primary.hasSelection = view.GetSelectionInfo().IsTextSelected();
+	if (primary.hasSelection) layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &primary.anchor);
+	states.push_back(primary);
+	for (size_t i = 0; i < view.m_vExtraCursors.size(); ++i) {
+		const auto& extra = view.m_vExtraCursors[i];
+		CLayoutPoint caretLayout;
+		if (!view.ResolveExtraCursor(extra, &caretLayout)) continue;
+		SMultiCursorState state;
+		layoutMgr.LayoutToLogic(caretLayout, &state.caret);
+		state.anchor = state.caret;
+		state.extraIndex = i;
+		CLayoutPoint anchorLayout;
+		if (view.ResolveExtraCursorAnchor(extra, &anchorLayout)) {
+			layoutMgr.LayoutToLogic(anchorLayout, &state.anchor);
+			state.hasSelection = true;
+		}
+		states.push_back(state);
+	}
+	for (auto& state : states) {
+		SetMultiCursorSelection(view, state.caret, state.anchor, state.hasSelection);
+		GetCaret().m_nCaretPosX_Prev = GetCaret().GetCaretLayoutPos().GetX2();
+		command();
+		state.caret = GetCaret().GetCaretLogicPos();
+		state.anchor = state.caret;
+		state.hasSelection = view.GetSelectionInfo().IsTextSelected();
+		if (state.hasSelection) layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &state.anchor);
+	}
+	const auto primaryState = std::find_if(states.begin(), states.end(), [](const SMultiCursorState& state) { return state.primary; });
+	if (primaryState == states.end()) return;
+	SetMultiCursorSelection(view, primaryState->caret, primaryState->anchor, primaryState->hasSelection);
+	GetCaret().m_nCaretPosX_Prev = GetCaret().GetCaretLayoutPos().GetX2();
+	for (const auto& state : states) {
+		if (state.primary) continue;
+		auto& extra = view.m_vExtraCursors[state.extraIndex];
+		extra.caret = state.caret;
+		extra.bHasSelection = state.hasSelection;
+		if (state.hasSelection) extra.anchor = state.anchor;
+	}
+	std::vector<CLayoutPoint> occupied{ GetCaret().GetCaretLayoutPos() };
+	for (auto it = view.m_vExtraCursors.begin(); it != view.m_vExtraCursors.end();) {
+		CLayoutPoint point;
+		const bool resolved = view.ResolveExtraCursor(*it, &point);
+		const bool duplicate = resolved && std::find(occupied.begin(), occupied.end(), point) != occupied.end();
+		if (!resolved || duplicate) it = view.m_vExtraCursors.erase(it);
+		else { occupied.push_back(point); ++it; }
+	}
+	view.Redraw();
+}
+
+void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMultiCursorEditKind editKind)
+{
+	auto& view = *m_pCommanderView;
+	RemoveUnresolvableExtraCursors(view);
+	auto& layoutMgr = GetDocument()->m_cLayoutMgr;
+	std::vector<SMultiCursorState> states;
+	states.reserve(view.m_vExtraCursors.size() + 1);
+
+	SMultiCursorState primary;
+	primary.caret = GetCaret().GetCaretLogicPos();
+	primary.anchor = primary.caret;
+	primary.primary = true;
+	primary.hasSelection = view.GetSelectionInfo().IsTextSelected();
+	if (primary.hasSelection) layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &primary.anchor);
+	states.push_back(primary);
+
+	for (size_t i = 0; i < view.m_vExtraCursors.size(); ++i) {
+		CLayoutPoint caretLayout;
+		if (!view.ResolveExtraCursor(view.m_vExtraCursors[i], &caretLayout)) continue;
+		SMultiCursorState state;
+		layoutMgr.LayoutToLogic(caretLayout, &state.caret);
+		state.anchor = state.caret;
+		state.extraIndex = i;
+		CLayoutPoint anchorLayout;
+		if (view.ResolveExtraCursorAnchor(view.m_vExtraCursors[i], &anchorLayout)) {
+			layoutMgr.LayoutToLogic(anchorLayout, &state.anchor);
+			state.hasSelection = true;
+		}
+		states.push_back(state);
+	}
+	if (editKind == EMultiCursorEditKind::Overwrite
+		&& GetDllShareData().m_Common.m_sEdit.m_bOverWriteFixMode
+		&& std::any_of(states.begin(), states.end(), [](const SMultiCursorState& state) { return !state.hasSelection; })) {
+		// Fixed-width overwrite may replace several characters and insert padding; reject the
+		// mixed positional edit instead of risking stale offsets for the remaining cursors.
+		ErrorBeep();
+		return;
+	}
+
+	std::sort(states.begin(), states.end(), [](const SMultiCursorState& a, const SMultiCursorState& b) {
+		const CLogicPoint aStart = PointCompare(a.caret, a.anchor) < 0 ? a.caret : a.anchor;
+		const CLogicPoint bStart = PointCompare(b.caret, b.anchor) < 0 ? b.caret : b.anchor;
+		const int cmp = PointCompare(aStart, bStart);
+		if (cmp != 0) return cmp > 0;
+		return PointCompare(a.caret, b.caret) > 0;
+	});
+
+	// Refuse intersecting selection ranges rather than applying an ambiguous edit twice.
+	for (size_t i = 0; i < states.size(); ++i) {
+		const CLogicPoint iStart = PointCompare(states[i].caret, states[i].anchor) < 0 ? states[i].caret : states[i].anchor;
+		const CLogicPoint iEnd = PointCompare(states[i].caret, states[i].anchor) < 0 ? states[i].anchor : states[i].caret;
+		for (size_t j = i + 1; j < states.size(); ++j) {
+			const CLogicPoint jStart = PointCompare(states[j].caret, states[j].anchor) < 0 ? states[j].caret : states[j].anchor;
+			const CLogicPoint jEnd = PointCompare(states[j].caret, states[j].anchor) < 0 ? states[j].anchor : states[j].caret;
+			const bool iEmpty = iStart == iEnd;
+			const bool jEmpty = jStart == jEnd;
+			const bool overlaps = iEmpty && jEmpty
+				? iStart == jStart
+				: iEmpty ? PointCompare(jStart, iStart) <= 0 && PointCompare(iStart, jEnd) < 0
+				: jEmpty ? PointCompare(iStart, jStart) <= 0 && PointCompare(jStart, iEnd) < 0
+				: PointCompare(iStart, jEnd) < 0 && PointCompare(jStart, iEnd) < 0;
+			if (overlaps) { ErrorBeep(); return; }
+		}
+	}
+
+	for (size_t i = 0; i < states.size(); ++i) {
+		auto& state = states[i];
+		if (editKind == EMultiCursorEditKind::SelectedOnly && !state.hasSelection) continue;
+		CLogicPoint oldStart = PointCompare(state.caret, state.anchor) < 0 ? state.caret : state.anchor;
+		CLogicPoint oldEnd = PointCompare(state.caret, state.anchor) < 0 ? state.anchor : state.caret;
+		if (!state.hasSelection && (editKind == EMultiCursorEditKind::DeleteForward || editKind == EMultiCursorEditKind::Overwrite)) {
+			CLogicPoint next;
+			const CDocLine* line = GetDocument()->m_cDocLineMgr.GetLine(state.caret.y);
+			const bool protectedEol = editKind == EMultiCursorEditKind::Overwrite
+				&& line && state.caret.x == line->GetLengthWithoutEOL()
+				&& line->GetEol().IsValid()
+				&& GetDllShareData().m_Common.m_sEdit.m_bNotOverWriteCRLF;
+			if (!protectedEol && GetMultiCursorNextCharacter(*GetDocument(), state.caret, &next)) oldEnd = next;
+		}
+		if (!state.hasSelection && editKind == EMultiCursorEditKind::DeleteBackward) {
+			CLogicPoint previous;
+			if (GetMultiCursorPreviousCharacter(*GetDocument(), state.caret, &previous)) oldStart = previous;
+		}
+		SetMultiCursorSelection(view, state.caret, state.anchor, state.hasSelection);
+		command();
+		const CLogicPoint newEnd = GetCaret().GetCaretLogicPos();
+
+		// Edits are executed from the document end towards the start. Only already processed
+		// (higher) cursors need their logical positions transformed by this edit.
+		for (size_t processed = 0; processed < i; ++processed) {
+			states[processed].caret = multicursor::TransformPointAfterReplace(states[processed].caret, oldStart, oldEnd, newEnd);
+			states[processed].anchor = multicursor::TransformPointAfterReplace(states[processed].anchor, oldStart, oldEnd, newEnd);
+		}
+		state.caret = newEnd;
+		state.anchor = newEnd;
+		state.hasSelection = false;
+		if (view.GetSelectionInfo().IsTextSelected()) {
+			layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &state.anchor);
+			state.hasSelection = true;
+		}
+	}
+
+	const auto primaryState = *std::find_if(states.begin(), states.end(), [](const SMultiCursorState& state) { return state.primary; });
+	SetMultiCursorSelection(view, primaryState.caret, primaryState.anchor, primaryState.hasSelection);
+	GetCaret().m_nCaretPosX_Prev = GetCaret().GetCaretLayoutPos().GetX2();
+
+	for (const auto& state : states) {
+		if (state.primary) continue;
+		auto& extra = view.m_vExtraCursors[state.extraIndex];
+		extra.caret = state.caret;
+		extra.bHasSelection = state.hasSelection;
+		if (state.hasSelection) extra.anchor = state.anchor;
+	}
+
+	// Remove cursors that collapsed onto an existing caret after an edit.
+	std::vector<CLayoutPoint> occupied{ GetCaret().GetCaretLayoutPos() };
+	for (auto it = view.m_vExtraCursors.begin(); it != view.m_vExtraCursors.end();) {
+		CLayoutPoint point;
+		const bool resolved = view.ResolveExtraCursor(*it, &point);
+		const bool duplicate = resolved && std::find(occupied.begin(), occupied.end(), point) != occupied.end();
+		if (!resolved || duplicate) {
+			it = view.m_vExtraCursors.erase(it);
+		} else {
+			occupied.push_back(point);
+			++it;
+		}
+	}
+	view.Redraw();
 }
 
 /* 	上書き用の一文字削除	2009.04.11 ryoji */

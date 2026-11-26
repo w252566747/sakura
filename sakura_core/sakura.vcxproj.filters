@@ -766,6 +766,36 @@
     <ClInclude Include="..\sakura_core\doc\layout\CLayoutMgr.h">
       <Filter>Cpp Source Files\doc\layout</Filter>
     </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVParser.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVTableModel.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVValidator.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVStatistics.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVTableParseService.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVTableQueryService.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVValidationService.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVTableSettings.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CodeFoldParser.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\RealtimeTextFilter.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
     <ClInclude Include="..\sakura_core\doc\layout\CTsvModeInfo.h">
       <Filter>Cpp Source Files\doc\layout</Filter>
     </ClInclude>
@@ -1938,6 +1968,33 @@
     </ClCompile>
     <ClCompile Include="..\sakura_core\doc\layout\CLayoutMgr_New2.cpp">
       <Filter>Cpp Source Files\doc\layout</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVParser.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVTableModel.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVValidator.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVStatistics.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVTableParseService.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVTableQueryService.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CSVValidationService.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\CodeFoldParser.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\sakura_core\parse\RealtimeTextFilter.cpp">
+      <Filter>Cpp Source Files\parse</Filter>
     </ClCompile>
     <ClCompile Include="..\sakura_core\doc\layout\CTsvModeInfo.cpp">
       <Filter>Cpp Source Files\doc\layout</Filter>

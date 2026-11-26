@@ -103,3 +103,16 @@ TEST(CScrollBarMarkerModel, OverviewKeepsDifferentSourcesInSeparateLanes)
 	EXPECT_NE(CScrollBarMarkerModel::HitTestLane(ticks, ticks[0].lane, ticks[0].y), ticks.size());
 	EXPECT_NE(CScrollBarMarkerModel::HitTestLane(ticks, ticks[1].lane, ticks[1].y), ticks.size());
 }
+
+TEST(CScrollBarMarkerModel, OverviewRetainsLogicalTargetsWhenVisibleLinesCollapse)
+{
+	CScrollBarMarkerModel model;
+	model.ResetOverview(20, 10);
+	model.AddOverviewMarker({ 4, CScrollBarMarkerModel::Kind::Search, 0x00FFA500, L"検索", L"行 21", 20 });
+	model.AddOverviewMarker({ 4, CScrollBarMarkerModel::Kind::Search, 0x00FFA500, L"検索", L"行 22", 21 });
+	const auto& ticks = model.OverviewTicks();
+	ASSERT_EQ(ticks.size(), 1u);
+	EXPECT_EQ(ticks[0].firstLine, 4);
+	EXPECT_EQ(ticks[0].firstLogicalLine, 20);
+	EXPECT_EQ(ticks[0].lastLogicalLine, 21);
+}

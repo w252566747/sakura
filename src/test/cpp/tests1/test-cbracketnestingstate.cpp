@@ -79,3 +79,36 @@ TEST(CBracketNestingState, MatchingPairRequiresSameKindLevelAndMatchedEndpoints)
 	EXPECT_FALSE(IsMatchingRainbowBracketPair(open, L'{', SRainbowBracketMark{ 8, 2, false }, L'}'));
 	EXPECT_FALSE(IsMatchingRainbowBracketPair(open, L'{', SRainbowBracketMark{ 8, 1, true }, L'}'));
 }
+
+TEST(CBracketMatchResolver, MarksUnmatchedOpenersAtEndOfDocument)
+{
+	SRainbowBracketMark outer{ 0, 0, false };
+	SRainbowBracketMark inner{ 1, 1, false };
+	SRainbowBracketMark closeInner{ 2, 1, false };
+	CBracketMatchResolver resolver;
+	resolver.Consume(L'(', &outer);
+	resolver.Consume(L'[', &inner);
+	resolver.Consume(L']', &closeInner);
+	resolver.Finish();
+	EXPECT_TRUE(outer.unmatched);
+	EXPECT_FALSE(inner.unmatched);
+	EXPECT_FALSE(closeInner.unmatched);
+}
+
+TEST(CBracketMatchResolver, KeepsMismatchedCloseFromCorruptingTheRemainingStack)
+{
+	SRainbowBracketMark outer{ 0, 0, false };
+	SRainbowBracketMark inner{ 1, 1, false };
+	SRainbowBracketMark wrongClose{ 2, 1, false };
+	SRainbowBracketMark closeInner{ 3, 1, false };
+	CBracketMatchResolver resolver;
+	resolver.Consume(L'(', &outer);
+	resolver.Consume(L'[', &inner);
+	resolver.Consume(L')', &wrongClose);
+	resolver.Consume(L']', &closeInner);
+	resolver.Finish();
+	EXPECT_TRUE(outer.unmatched);
+	EXPECT_FALSE(inner.unmatched);
+	EXPECT_TRUE(wrongClose.unmatched);
+	EXPECT_FALSE(closeInner.unmatched);
+}

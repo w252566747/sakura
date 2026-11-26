@@ -17,6 +17,7 @@
 #include "view/colors/CColorStrategy.h"
 #include "view/colors/CWordMarker.h"
 #include "curl/CurlSyntaxCheckService.h"
+#include "parse/CSVTableSettings.h"
 #include "plugin/CPlugin.h"
 #include "uiparts/CMenuDrawer.h"
 #include "_main/CCommandLine.h"
@@ -98,6 +99,11 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 //	MYTRACE( L"Iniファイル処理-1 所要時間(ミリ秒) = %d\n", cRunningTimer.Read() );
 
 	if( bRead ){
+		CEditView::SetMaxMultiCursors(CEditView::MAX_MULTI_CURSORS);
+		CEditView::SetRainbowUnmatchedHighlightEnabled(true);
+		CEditView::SetScrollBarMarkerVisibility(CScrollBarMarkerModel::VISIBILITY_MASK);
+		for (unsigned kind = 0; kind < CScrollBarMarkerModel::KIND_COUNT; ++kind)
+			CEditView::SetScrollBarMarkerColor(kind, 0xffffffffu);
 		if( !cProfile.ReadProfile( szIniFileName ) ){
 			/* 設定ファイルが存在しない */
 			LANGID langId = GetUserDefaultUILanguage();
@@ -113,6 +119,47 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 				pcShare->RefreshString();
 			}
 			return false;
+		}
+		std::wstring maxMultiCursorCount;
+		if (cProfile.GetProfileData(L"MultiCursor", L"MaxCount", maxMultiCursorCount)) {
+			try {
+				std::size_t parsedLength = 0;
+				const auto parsedCount = std::stoul(maxMultiCursorCount, &parsedLength);
+				if (parsedLength == maxMultiCursorCount.size()) {
+					CEditView::SetMaxMultiCursors(static_cast<std::size_t>(parsedCount));
+				}
+			} catch (...) { }
+		}
+		std::wstring scrollBarMarkerVisibility;
+		if (cProfile.GetProfileData(L"ScrollBarMarker", L"VisibilityMask", scrollBarMarkerVisibility)) {
+			try {
+				std::size_t parsedLength = 0;
+				const auto parsedMask = std::stoul(scrollBarMarkerVisibility, &parsedLength);
+				if (parsedLength == scrollBarMarkerVisibility.size()) {
+					CEditView::SetScrollBarMarkerVisibility(static_cast<unsigned>(parsedMask));
+				}
+			} catch (...) { }
+		}
+		std::wstring rainbowUnmatchedHighlight;
+		if (cProfile.GetProfileData(L"RainbowBracket", L"HighlightUnmatched", rainbowUnmatchedHighlight)) {
+			CEditView::SetRainbowUnmatchedHighlightEnabled(
+				rainbowUnmatchedHighlight == L"1" || rainbowUnmatchedHighlight == L"true");
+		}
+		std::wstring scrollBarMarkerColors;
+		if (cProfile.GetProfileData(L"ScrollBarMarker", L"Colors", scrollBarMarkerColors)) {
+			size_t begin = 0;
+			for (unsigned kind = 0; kind < CScrollBarMarkerModel::KIND_COUNT && begin <= scrollBarMarkerColors.size(); ++kind) {
+				const size_t end = scrollBarMarkerColors.find(L',', begin);
+				const auto value = scrollBarMarkerColors.substr(begin,
+					end == std::wstring::npos ? std::wstring::npos : end - begin);
+				try {
+					size_t parsedLength = 0;
+					const auto parsedColor = std::stoul(value, &parsedLength, 16);
+					if (parsedLength == value.size()) CEditView::SetScrollBarMarkerColor(kind, static_cast<unsigned>(parsedColor));
+				} catch (...) { }
+				if (end == std::wstring::npos) break;
+				begin = end + 1;
+			}
 		}
 		std::vector<CWordMarker::Entry> markerEntries;
 		CWordMarker::Instance().SetAutomaticEnabled(true);
@@ -149,6 +196,37 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		std::wstring curlSyntaxErrorListHeight;
 		if (cProfile.GetProfileData(L"CurlSyntaxCheck", L"ErrorListHeight", curlSyntaxErrorListHeight)) {
 			try { curlsyntax::SetErrorListHeight(std::stoi(curlSyntaxErrorListHeight)); } catch (...) { }
+		}
+		auto& csvSettings = csvtable::GetUserSettings();
+		csvSettings = {};
+		std::wstring csvDelimiter;
+		if (cProfile.GetProfileData(L"CSVTable", L"Delimiter", csvDelimiter)) {
+			try {
+				const auto value = static_cast<unsigned long>(std::stoul(csvDelimiter));
+				if (value <= 0xffff && value != L'"' && value != L'\r' && value != L'\n' && value != 0)
+					csvSettings.delimiter = static_cast<wchar_t>(value);
+			} catch (...) { }
+		}
+		std::wstring csvAutoDelimiter;
+		if (cProfile.GetProfileData(L"CSVTable", L"AutoDetectDelimiter", csvAutoDelimiter)) {
+			csvSettings.autoDetectDelimiter = csvAutoDelimiter == L"1" || csvAutoDelimiter == L"true";
+		}
+		std::wstring csvHeader;
+		if (cProfile.GetProfileData(L"CSVTable", L"HasHeader", csvHeader)) {
+			csvSettings.hasHeader = csvHeader == L"1" || csvHeader == L"true";
+		}
+		std::wstring csvColumnWidths;
+		if (cProfile.GetProfileData(L"CSVTable", L"ColumnWidths", csvColumnWidths)) {
+			for (size_t begin = 0; begin <= csvColumnWidths.size() && csvSettings.columnWidths.size() < 512;) {
+				const size_t end = csvColumnWidths.find(L',', begin);
+				const std::wstring value = csvColumnWidths.substr(begin,
+					end == std::wstring::npos ? std::wstring::npos : end - begin);
+				int width = 0;
+				try { width = std::stoi(value); } catch (...) { }
+				csvSettings.columnWidths.push_back(width >= 24 && width <= 4000 ? width : 0);
+				if (end == std::wstring::npos) break;
+				begin = end + 1;
+			}
 		}
 
 		// バージョンアップ時はバックアップファイルを作成する	// 2011.01.28 ryoji
@@ -216,6 +294,30 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		cProfile.SetProfileData(L"WordMarker", L"ExtraWordChars", CWordMarker::Instance().AddedWordCharacters());
 		cProfile.SetProfileData(L"CurlSyntaxCheck", L"RealtimeEnabled", curlsyntax::IsRealtimeEnabled() ? L"1" : L"0");
 		cProfile.SetProfileData(L"CurlSyntaxCheck", L"ErrorListHeight", std::to_wstring(curlsyntax::GetErrorListHeight()));
+		const auto& csvSettings = csvtable::GetUserSettings();
+		cProfile.SetProfileData(L"CSVTable", L"Delimiter",
+			std::to_wstring(static_cast<unsigned int>(csvSettings.delimiter)));
+		cProfile.SetProfileData(L"CSVTable", L"AutoDetectDelimiter", csvSettings.autoDetectDelimiter ? L"1" : L"0");
+		cProfile.SetProfileData(L"CSVTable", L"HasHeader", csvSettings.hasHeader ? L"1" : L"0");
+		std::wstring csvColumnWidths;
+		for (const int width : csvSettings.columnWidths) {
+			if (!csvColumnWidths.empty()) csvColumnWidths.push_back(L',');
+			csvColumnWidths += std::to_wstring(width);
+		}
+		cProfile.SetProfileData(L"CSVTable", L"ColumnWidths", csvColumnWidths);
+		cProfile.SetProfileData(L"MultiCursor", L"MaxCount", std::to_wstring(CEditView::GetMaxMultiCursors()));
+		cProfile.SetProfileData(L"RainbowBracket", L"HighlightUnmatched",
+			CEditView::IsRainbowUnmatchedHighlightEnabled() ? L"1" : L"0");
+		cProfile.SetProfileData(L"ScrollBarMarker", L"VisibilityMask",
+			std::to_wstring(CEditView::GetScrollBarMarkerVisibility()));
+		std::wstring scrollBarMarkerColors;
+		for (unsigned kind = 0; kind < CScrollBarMarkerModel::KIND_COUNT; ++kind) {
+			if (!scrollBarMarkerColors.empty()) scrollBarMarkerColors.push_back(L',');
+			wchar_t color[9]{};
+			swprintf_s(color, L"%08X", CEditView::GetScrollBarMarkerColor(kind));
+			scrollBarMarkerColors += color;
+		}
+		cProfile.SetProfileData(L"ScrollBarMarker", L"Colors", scrollBarMarkerColors);
 		// 2014.12.08 sakura.iniの読み取り専用
 		if( !GetDllShareData().m_Common.m_sOthers.m_bIniReadOnly ){
 			cProfile.WriteProfile( szIniFileName, L" sakura.ini テキストエディタ設定ファイル" );

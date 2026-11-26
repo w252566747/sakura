@@ -33,6 +33,20 @@
 #include "apiwrap/CommonControl.h"
 #include "CSelectLang.h"
 
+namespace {
+
+void ExpandFoldedLayoutRange(CLayoutMgr& layoutMgr, CLayoutRange* layoutRange)
+{
+	if (!layoutMgr.IsCodeFoldActive() || layoutRange == nullptr) return;
+
+	CLogicRange logicRange;
+	layoutMgr.LayoutToLogic(*layoutRange, &logicRange);
+	if (!layoutMgr.UnfoldAllCodeBlocks()) return;
+	layoutMgr.LogicToLayout(logicRange, layoutRange);
+}
+
+} // namespace
+
 /* インデント ver1 */
 void CViewCommander::Command_INDENT( wchar_t wcChar, EIndentType eIndent )
 {
@@ -334,6 +348,7 @@ void CViewCommander::Command_INDENT( const wchar_t* const pData, const CLogicInt
 		if( GetSelect().GetTo().x > 0 ){
 			sSelectOld.GetToPointer()->y++;
 		}
+		ExpandFoldedLayoutRange(GetDocument()->m_cLayoutMgr, &sSelectOld);
 
 		// 現在の選択範囲を非選択状態に戻す
 		m_pCommanderView->GetSelectionInfo().DisableSelectArea( false );
@@ -447,6 +462,7 @@ void CViewCommander::Command_UNINDENT( wchar_t wcChar )
 		if( GetSelect().GetTo().x > 0 ){
 			sSelectOld.GetToPointer()->y++;
 		}
+		ExpandFoldedLayoutRange(GetDocument()->m_cLayoutMgr, &sSelectOld);
 
 		/* 現在の選択範囲を非選択状態に戻す */
 		m_pCommanderView->GetSelectionInfo().DisableSelectArea( false );
@@ -634,6 +650,7 @@ bool SortByKeyDesc(SORTDATA* pst1, SORTDATA* pst2) {return CStringRef_comp(pst1-
 void CViewCommander::Command_SORT(BOOL bAsc)	//bAsc:TRUE=昇順,FALSE=降順
 {
 	CLayoutRange sRangeA;
+	CLogicRange sRangeALogic;
 	CLogicRange sSelectOld;
 
 	int			nColumnFrom, nColumnTo;
@@ -644,6 +661,7 @@ void CViewCommander::Command_SORT(BOOL bAsc)	//bAsc:TRUE=昇順,FALSE=降順
 	CLogicInt		nLineLen;
 	int			j;
 	std::vector<SORTDATA*> sta;
+	const CLogicPoint ptCaretLogicOld = GetCaret().GetCaretLogicPos();
 
 	if( !m_pCommanderView->GetSelectionInfo().IsTextSelected() ){			/* テキストが選択されているか */
 		return;
@@ -662,6 +680,7 @@ void CViewCommander::Command_SORT(BOOL bAsc)	//bAsc:TRUE=昇順,FALSE=降順
 			nCF=m_pCommanderView->GetSelectionInfo().m_sSelect.GetTo().GetX2();
 			nCT=m_pCommanderView->GetSelectionInfo().m_sSelect.GetFrom().GetX2();
 		}
+		GetDocument()->m_cLayoutMgr.LayoutToLogic(sRangeA, &sRangeALogic);
 	}
 	bBeginBoxSelectOld=m_pCommanderView->GetSelectionInfo().IsBoxSelecting();
 	nCaretPosYOLD=GetCaret().GetCaretLayoutPos().GetY();
@@ -772,6 +791,20 @@ void CViewCommander::Command_SORT(BOOL bAsc)	//bAsc:TRUE=昇順,FALSE=降順
 	}
 
 	CLayoutRange sSelectOld_Layout;
+	if (GetDocument()->m_cLayoutMgr.IsCodeFoldActive()) {
+		GetDocument()->m_cLayoutMgr.UnfoldAllCodeBlocks();
+		CLayoutPoint ptCaretLayoutOld;
+		GetDocument()->m_cLayoutMgr.LogicToLayout(ptCaretLogicOld, &ptCaretLayoutOld);
+		nCaretPosYOLD = ptCaretLayoutOld.GetY();
+		if (bBeginBoxSelectOld) {
+			CLayoutPoint ptBoxFrom;
+			CLayoutPoint ptBoxTo;
+			GetDocument()->m_cLayoutMgr.LogicToLayout(CLogicPoint(CLogicInt(0), sRangeALogic.GetFrom().y), &ptBoxFrom);
+			GetDocument()->m_cLayoutMgr.LogicToLayout(CLogicPoint(CLogicInt(0), sRangeALogic.GetTo().y), &ptBoxTo);
+			sRangeA.GetFromPointer()->y = ptBoxFrom.y;
+			sRangeA.GetToPointer()->y = ptBoxTo.y;
+		}
+	}
 	GetDocument()->m_cLayoutMgr.LogicToLayout(sSelectOld, &sSelectOld_Layout);
 	m_pCommanderView->ReplaceData_CEditView3(
 		sSelectOld_Layout,
@@ -823,6 +856,7 @@ void CViewCommander::Command_SORT(BOOL bAsc)	//bAsc:TRUE=昇順,FALSE=降順
 void CViewCommander::Command_MERGE(void)
 {
 	CLayoutInt		nCaretPosYOLD;
+	const CLogicPoint ptCaretLogicOld = GetCaret().GetCaretLogicPos();
 	const wchar_t*	pLinew;
 	CLogicInt		nLineLen;
 	int			j;
@@ -869,11 +903,7 @@ void CViewCommander::Command_MERGE(void)
 		return;
 	}
 
-	j=GetDocument()->m_cDocLineMgr.GetLineCount();
-	nMergeLayoutLines = GetDocument()->m_cLayoutMgr.GetLineCount();
-
 	CLayoutRange sSelectOld_Layout;
-	GetDocument()->m_cLayoutMgr.LogicToLayout(sSelectOld, &sSelectOld_Layout);
 
 	// 2010.08.22 NUL対応修正
 	std::vector<CStringRef> lineArr;
@@ -892,6 +922,15 @@ void CViewCommander::Command_MERGE(void)
 		pLinew=pLine;
 		nLineLenw=nLineLen;
 	}
+	if (bMerge && GetDocument()->m_cLayoutMgr.IsCodeFoldActive()) {
+		GetDocument()->m_cLayoutMgr.UnfoldAllCodeBlocks();
+	}
+	GetDocument()->m_cLayoutMgr.LogicToLayout(sSelectOld, &sSelectOld_Layout);
+	CLayoutPoint ptCaretLayoutOld;
+	GetDocument()->m_cLayoutMgr.LogicToLayout(ptCaretLogicOld, &ptCaretLayoutOld);
+	nCaretPosYOLD = ptCaretLayoutOld.GetY();
+	j=GetDocument()->m_cDocLineMgr.GetLineCount();
+	nMergeLayoutLines = GetDocument()->m_cLayoutMgr.GetLineCount();
 	if( bMerge ){
 		COpeLineData repData;
 		int nSize = (int)lineArr.size();

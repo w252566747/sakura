@@ -28,6 +28,7 @@
 #include <vector>
 #include <memory_resource>
 #include <atomic>
+#include <string>
 #include "doc/CDocListener.h"
 #include "_main/global.h"// 2002/2/10 aroka
 #include "basis/SakuraBasis.h"
@@ -42,6 +43,7 @@
 #include "util/design_template.h"
 #include "charset/charcode.h"
 #include "env/DLLSHAREDATA.h"
+#include "parse/CodeFoldParser.h"
 
 class CBregexp;// 2002/2/10 aroka
 class CLayout;// 2002/2/10 aroka
@@ -127,7 +129,8 @@ public:
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 public:
 	//2007.10.09 kobake 関数名変更: Search → SearchLineByLayoutY
-	CLayoutInt		GetLineCount() const{ return m_nLines; }	/* 全物理行数を返す */
+	CLayoutInt		GetLineCount() const{ return m_nVisibleLines; }	/* 表示可能なレイアウト行数 */
+	CLayoutInt		GetPhysicalLayoutLineCount() const{ return m_nLines; }	/* 折りたたみを含むレイアウト行数 */
 	const wchar_t*	GetLineStr( CLayoutInt nLine, CLogicInt* pnLineLen ) const;	/* 指定された物理行のデータへのポインタとその長さを返す */
 	const wchar_t*	GetLineStr( CLayoutInt nLine, CLogicInt* pnLineLen, const CLayout** ppcLayoutDes ) const;	/* 指定された物理行のデータへのポインタとその長さを返す */
 
@@ -196,6 +199,23 @@ public:
 
 	CLayoutInt GetMaxTextWidth(void) const { return m_nTextWidth; }		// 2009.08.28 nasukoji	テキスト最大幅を返す
 
+	// 原文と全レイアウトノードを保持し、表示行だけを絞り込む。
+	bool IsCodeFoldSupported() const;
+	const codefold::Region* FindCodeFoldAtLine(CLogicInt logicLine) const;
+	const codefold::Region* FindCodeFoldContainingLine(CLogicInt logicLine, bool outermost = false) const;
+	const codefold::Region* FindCollapsedCodeFoldContainingLine(CLogicInt logicLine) const;
+	bool IsCodeFoldCollapsedAtLine(CLogicInt logicLine) const;
+	bool IsCodeFoldHiddenLine(CLogicInt logicLine) const;
+	size_t GetCodeFoldHiddenLineCount(CLogicInt logicLine) const;
+	bool ToggleCodeFoldAtLine(CLogicInt logicLine);
+	bool FoldAllCodeBlocks();
+	bool UnfoldAllCodeBlocks();
+	bool FoldCodeBlocksAtDepth(size_t depth);
+	bool FoldCodeBlocksToDepth(size_t oneBasedDepth);
+	bool IsCodeFoldActive() const { return !m_vCollapsedCodeFolds.empty(); }
+	CLayoutInt GetFirstCollapsedFoldDisplayLine() const;
+	void ResetCodeFolds();
+
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 	//                           検索                              //
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
@@ -221,7 +241,7 @@ public:
 			pptLayout->x += ext;
 		}
 	}
-	void LogicToLayout( const CLogicPoint& ptLogic, CLayoutPoint* pptLayout, CLayoutInt nLineHint = CLayoutInt(0) );
+	void LogicToLayout( const CLogicPoint& ptLogic, CLayoutPoint* pptLayout, CLayoutInt nLineHint = CLayoutInt(0), bool expandHiddenLine = true );
 	void LogicToLayout( const CLogicRange& rangeLogic, CLayoutRange* prangeLayout )
 	{
 		LogicToLayout(rangeLogic.GetFrom(), prangeLayout->GetFromPointer());
@@ -294,6 +314,7 @@ public:
 	// 2005.11.21 Moca 引用符の色分け情報を引数から除去
 public:
 	void _DoLayout(bool bBlockingHook);	/* 現在の折り返し文字数に合わせて全データのレイアウト情報を再生成します */
+	void RefreshUnmatchedRainbowBrackets();
 	void _DoLayoutSub(CDocLine* pDocLineBegin, const CDocLine* pDocLineEnd, int nLineIndexBegin, int nLineCount, std::atomic<bool>* pbCanceled);
 protected:
 	// 2005.11.21 Moca 引用符の色分け情報を引数から除去
@@ -385,6 +406,15 @@ public:
 	CTsvModeInfo			m_tsvInfo;
 
 protected:
+	bool EnsureCodeFoldRegions() const;
+	void RebuildFoldHiddenRanges();
+	void RebuildVisibleLineCount();
+	void ExpandCodeFoldsContaining(CLogicInt logicLine);
+	struct FoldLineRange {
+		CLogicInt first;
+		CLogicInt last;
+	};
+
 	// 2002.10.07 YAZAKI add m_nLineTypeBot
 	// 2007.09.07 kobake 変数名変更: m_nMaxLineSize→m_nMaxLineKetas
 	// 2007.10.08 kobake 変数名変更: getIndentOffset→m_getIndentOffset
@@ -412,6 +442,11 @@ protected:
 	EColorIndexType			m_nLineTypeBot;				//!< タイプ 0=通常 1=行コメント 2=ブロックコメント 3=シングルクォーテーション文字列 4=ダブルクォーテーション文字列
 	CLayoutExInfo			m_cLayoutExInfoBot;
 	CLayoutInt				m_nLines;					// 全レイアウト行数
+	CLayoutInt				m_nVisibleLines;				// 折りたたみを反映した表示行数
+	mutable bool			m_bCodeFoldRegionsValid = false;
+	mutable std::vector<codefold::Region> m_vCodeFoldRegions;
+	std::vector<codefold::Region> m_vCollapsedCodeFolds;
+	std::vector<FoldLineRange> m_vFoldHiddenLogicalLines;
 
 	mutable CLayoutInt		m_nPrevReferLine;
 	mutable CLayout*		m_pLayoutPrevRefer;

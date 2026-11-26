@@ -160,18 +160,21 @@ bool CTextArea::DetectWidthOfLineNumberArea( bool bRedraw )
 	CEditView* pView2=m_pEditView;
 
 	int				nViewAlignLeftNew;
+	const bool bFoldGutter = !pView->m_bMiniMap && pView->m_pcEditDoc
+		&& pView->m_pcEditDoc->m_cLayoutMgr.IsCodeFoldSupported();
+	const int nFoldGutterCols = bFoldGutter ? 1 : 0;
 
 	if( pView->m_pTypeData->m_ColorInfoArr[COLORIDX_GYOU].m_bDisp && !pView->m_bMiniMap ){
 		/* 行番号表示に必要な桁数を計算 */
 		int i = DetectWidthOfLineNumberArea_calculate(&pView->m_pcEditDoc->m_cLayoutMgr);
-		nViewAlignLeftNew = pView->GetTextMetrics().GetHankakuDx() * (i + 1);	/* 表示域の左端座標 */
-		m_nViewAlignLeftCols = i + 1;
+		nViewAlignLeftNew = pView->GetTextMetrics().GetHankakuDx() * (i + 1 + nFoldGutterCols);	/* 表示域の左端座標 */
+		m_nViewAlignLeftCols = i + 1 + nFoldGutterCols;
 	}else if( pView->m_bMiniMap ){
 		nViewAlignLeftNew = 4;
 		m_nViewAlignLeftCols = 0;
 	}else{
-		nViewAlignLeftNew = 8;
-		m_nViewAlignLeftCols = 0;
+		nViewAlignLeftNew = 8 + nFoldGutterCols * pView->GetTextMetrics().GetHankakuDx();
+		m_nViewAlignLeftCols = nFoldGutterCols;
 	}
 
 	//	Sep 18, 2002 genta

@@ -48,33 +48,30 @@ namespace {
 	SearchMatchPosition CountSearchMatches(CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutPoint& currentPosition)
 	{
 		SearchMatchPosition result;
-		CLayoutInt line(0);
-		CLogicInt index(0);
-		CLayoutRange match;
+		CLogicPoint currentLogic;
+		layoutMgr.LayoutToLogic(currentPosition, &currentLogic);
+		CLogicPoint scanPosition(CLogicInt(0), CLogicInt(0));
+		CLogicRange match;
 		int nearestBefore = 0;
 		int nearestAfter = 0;
-		while (layoutMgr.SearchWord(line, index, SEARCH_FORWARD, &match, pattern)) {
+		CSearchAgent searchAgent(layoutMgr.m_pcDocLineMgr);
+		while (searchAgent.SearchWord(scanPosition, SEARCH_FORWARD, &match, pattern)) {
 			++result.total;
-			const CLayoutPoint from = match.GetFrom();
-			if (from == currentPosition) {
+			const CLogicPoint from = match.GetFrom();
+			if (from == currentLogic) {
 				result.current = result.total;
-			} else if (from.GetY2() < currentPosition.GetY2()
-				|| (from.GetY2() == currentPosition.GetY2() && from.GetX2() < currentPosition.GetX2())) {
+			} else if (from.GetY2() < currentLogic.GetY2()
+				|| (from.GetY2() == currentLogic.GetY2() && from.GetX2() < currentLogic.GetX2())) {
 				nearestBefore = result.total;
 			} else if (nearestAfter == 0) {
 				nearestAfter = result.total;
 			}
 
-			const CLayoutPoint to = match.GetTo();
-			line = to.GetY2();
-			CLogicPoint logicEnd;
-			layoutMgr.LayoutToLogic(to, &logicEnd);
-			const CLayout* nextLayout = layoutMgr.SearchLineByLayoutY(line);
-			if (!nextLayout) break;
-			index = logicEnd.x - nextLayout->GetLogicOffset();
+			const CLogicPoint to = match.GetTo();
+			scanPosition = to;
 			if (from == to) {
 				// 幅0の正規表現一致でも走査を進め、無限ループを防ぐ。
-				++index;
+				++scanPosition.x;
 			}
 		}
 		if (result.current == 0) result.current = nearestBefore > 0 ? nearestBefore : nearestAfter;
@@ -521,7 +518,17 @@ end_of_func:;
 		if(!bFound	&&	// 見つからなかった
 			bRedo		// 最初の検索
 		){
-			nLineNum	= GetDocument()->m_cLayoutMgr.GetLineCount()-CLayoutInt(1);
+			const CLogicInt logicLineCount = GetDocument()->m_cDocLineMgr.GetLineCount();
+			if (logicLineCount > CLogicInt(0)) {
+				CLayoutPoint lastDocumentLine;
+				GetDocument()->m_cLayoutMgr.LogicToLayout(
+					CLogicPoint(CLogicInt(0), logicLineCount - CLogicInt(1)),
+					&lastDocumentLine
+				);
+				nLineNum = lastDocumentLine.GetY();
+			} else {
+				nLineNum = CLayoutInt(0);
+			}
 			nIdx		= CLogicInt(MAXLINEKETAS); // ロジック折り返し < レイアウト折り返しという前提
 			bRedo		= false;
 			goto re_do;	// 末尾から再検索
@@ -840,7 +847,8 @@ void CViewCommander::Command_REPLACE_ALL()
 	const bool bDrawSwitchOld = m_pCommanderView->SetDrawSwitch(bDisplayUpdate);
 
 	bool bFastMode = false;
-	if( ((Int)GetDocument()->m_cDocLineMgr.GetLineCount() * 10 < (Int)GetDocument()->m_cLayoutMgr.GetLineCount())
+	if( !GetDocument()->m_cLayoutMgr.IsCodeFoldActive()
+		&& ((Int)GetDocument()->m_cDocLineMgr.GetLineCount() * 10 < (Int)GetDocument()->m_cLayoutMgr.GetLineCount())
 		&& !(bSelectedArea || nPaste) ){
 		// 1行あたり10レイアウト行以上で、選択・ペーストでない場合
 		bFastMode = true;

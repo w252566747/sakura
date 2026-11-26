@@ -11,6 +11,7 @@
 
 #include "basis/CEol.h"
 #include "types/CType.h"
+#include <functional>
 
 class CEditView;
 enum EFunctionCode;
@@ -117,6 +118,15 @@ public:
 	void Command_REDO( void );				/* やり直し(Redo) */
 	void Command_DELETE( void );			/* カーソル位置または選択エリアを削除 */
 	void Command_DELETE_BACK( void );		/* カーソル前を削除 */
+	void Command_AddCursorUp(void);
+	void Command_AddCursorDown(void);
+	void Command_RemoveLastCursor(void);
+	void Command_ClearExtraCursors(void);
+	void Command_SelectNextOccurrence(void);
+	void Command_SelectAllOccurrences(void);
+	void ApplyMovementToAllCursors(const std::function<void()>& command);
+	enum class EMultiCursorEditKind { Normal, DeleteForward, DeleteBackward, Overwrite, SelectedOnly };
+	void ApplyToAllCursors(const std::function<void()>& command, EMultiCursorEditKind editKind = EMultiCursorEditKind::Normal);
 	void Command_WordDeleteToStart( void );	/* 単語の左端まで削除 */
 	void Command_WordDeleteToEnd( void );	/* 単語の右端まで削除 */
 	void Command_WordCut( void );			/* 単語切り取り */

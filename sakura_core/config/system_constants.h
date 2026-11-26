@@ -658,6 +658,12 @@ enum e_PM_CHANGESETTING_SELECT {
 //! Background Curl syntax result ready for UI-thread validation.
 #define MYWM_CURL_SYNTAX_RESULT (WM_APP+1522)
 
+//! Background CSV table snapshot ready for UI-thread publication.
+#define MYWM_CSV_TABLE_PARSE_RESULT (WM_APP+1523)
+#define MYWM_CSV_TABLE_QUERY_RESULT (WM_APP+1524)
+#define MYWM_CSV_VALIDATION_RESULT (WM_APP+1525)
+#define MYWM_REALTIME_FILTER_RESULT (WM_APP+1526)
+
 //! タスクトレイからの通知メッセージ
 #define MYWM_NOTIFYICON		(WM_APP+100)
 
