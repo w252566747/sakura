@@ -30,8 +30,8 @@ def main() -> int:
     sample = output / "gui-smoke.txt"
     original_text = "\r\n".join(
         [f"GUI_SMOKE_BASELINE line {line:02d}" for line in range(1, 9)]
-        + ["GUI_SMOKE_SELECTABLE_TOKEN line 09"]
-        + [f"GUI_SMOKE_BASELINE line {line:02d}" for line in range(10, 25)]
+        + ["GUI_SMOKE_SELECTABLE_TOKEN line 09", "GUI-SMOKE-HYPHEN line 10"]
+        + [f"GUI_SMOKE_BASELINE line {line:02d}" for line in range(11, 26)]
     ) + "\r\n"
     original = original_text.encode("ascii")
     sample.write_bytes(original)
@@ -177,6 +177,17 @@ def main() -> int:
         record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved))
 
         # Exercise actual mouse input against the editor's client area.
+        window.double_click_input(coords=(90, 223))
+        window.type_keys("^c")
+        hyphen_word = clipboard_text()
+        if hyphen_word != "GUI-SMOKE-HYPHEN":
+            raise AssertionError(f"custom hyphen boundary split a word: {hyphen_word!r}")
+
+        window.double_click_input(coords=(90, 260))
+        window.type_keys("^c")
+        underscore_word = clipboard_text()
+        if underscore_word != "GUI_SMOKE_BASELINE":
+            raise AssertionError(f"custom underscore boundary split a word: {underscore_word!r}")
         window.click_input(coords=(90, 260))
         window.right_click_input(coords=(90, 260))
         time.sleep(0.2)
@@ -186,10 +197,27 @@ def main() -> int:
         window.drag_mouse_input(src=(60, 260), dst=(160, 260))
         window.type_keys("^c")
         selected_text = clipboard_text()
-        window.capture_as_image().save(output / "07-mouse-selection.png")
-        if "SMOKE" not in selected_text:
-            raise AssertionError(f"mouse drag did not select the intended document text: {selected_text!r}")
-        record("mouse_left_right_double_click_and_drag", copied_text=selected_text)
+        selection_image = window.capture_as_image()
+        selection_image.save(output / "07-mouse-selection.png")
+        if selected_text != "GUI_SMOKE_BASELINE":
+            raise AssertionError(f"mouse drag did not select the intended full word: {selected_text!r}")
+        marker_crop = selection_image.convert("RGB").crop((32, 90, 210, 108))
+        warm_marker_pixels = sum(
+            1 for red, green, blue in marker_crop.getdata()
+            if red >= 180 and red - green >= 35 and green >= 45 and blue <= 110
+        )
+        if warm_marker_pixels < 12:
+            raise AssertionError(
+                "automatic same-word highlighting was not visible in the real editor screenshot: "
+                f"warm marker pixels={warm_marker_pixels}"
+            )
+        record(
+            "custom_word_boundaries_and_automatic_same_word_highlight",
+            hyphen_double_click=hyphen_word,
+            underscore_double_click=underscore_word,
+            dragged_text=selected_text,
+            warm_marker_pixels=warm_marker_pixels,
+        )
 
         window.set_focus()
         window.type_keys("^{END}")
