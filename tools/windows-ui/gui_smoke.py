@@ -123,8 +123,7 @@ def main() -> int:
 
         # Leave an unsaved edit in the original document before opening the filter.
         window.set_focus()
-        window.click_input(coords=(90, 120))
-        window.type_keys("^{END}")
+        window.click_input(coords=(100, 447))
         window.type_keys("GUI_SMOKE_FILTER_SAVE", with_spaces=True)
         filter_saved = original + b"GUI_SMOKE_FILTER_SAVE"
         if sample.read_bytes() != original:
