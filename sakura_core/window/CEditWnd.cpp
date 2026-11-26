@@ -3473,7 +3473,12 @@ void CEditWnd::MessageLoop( void )
 						continue;	// 補完ウィンドウが処理を実行した
 			}
 
-			if( m_hAccel && TranslateAccelerator( msg.hwnd, m_hAccel, &msg ) ){}
+			HWND acceleratorTarget = msg.hwnd;
+			if (m_bRealtimeFilterMode &&
+				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude)) {
+				acceleratorTarget = GetHwnd();
+			}
+			if( m_hAccel && TranslateAccelerator( acceleratorTarget, m_hAccel, &msg ) ){}
 			//通常メッセージ
 			else{
 				TranslateMessage( &msg );
@@ -4706,7 +4711,7 @@ int	CEditWnd::OnClose(HWND hWndActive, bool bGrepNoConfirm )
 */
 void CEditWnd::OnCommand( WORD wNotifyCode, WORD wID , HWND hwndCtl )
 {
-	if (m_bRealtimeFilterMode && wNotifyCode == 0 &&
+	if (m_bRealtimeFilterMode && (wNotifyCode == 0 || wNotifyCode == 1) &&
 		(wID == F_COPY || wID == F_CUT || wID == F_PASTE || wID == F_UNDO || wID == F_REDO || wID == F_SELECTALL)) {
 		const HWND focus = ::GetFocus();
 		if (focus == m_hwndRealtimeFilterInclude || focus == m_hwndRealtimeFilterExclude) {

@@ -905,7 +905,7 @@ inline int CMenuDrawer::ToolbarNoToIndex( int nToolbarNo ) const
 /*
 	ツールバー番号からアイコン番号を取得
 */
-inline int CMenuDrawer::GetIconIdByFuncId( int nFuncID ) const
+int CMenuDrawer::GetIconIdByFuncId( int nFuncID ) const
 {
 	int index = FindIndexFromCommandId( nFuncID, false );
 	if( index < 0 ){
