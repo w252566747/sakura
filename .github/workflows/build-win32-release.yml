@@ -108,7 +108,28 @@ jobs:
         run: build-sln.bat Win32 Release
         shell: cmd
 
+      - name: Set up Python for GUI tests
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.3'
+          architecture: x64
+
+      - name: Install Windows GUI test tools
+        run: python -m pip install --disable-pip-version-check pywinauto==0.6.9 Pillow==13.0.0
+
+      - name: Launch and exercise the Win32 editor
+        run: python tools/windows-ui/smoke_test.py --exe Win32/Release/sakura.exe --output test-output/windows-gui
+
+      - name: Upload Windows GUI evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SakuraEditor-Win32-GUI-Evidence
+          path: test-output/windows-gui/
+          if-no-files-found: warn
+
       - name: Upload sakura.exe
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: SakuraEditor-Win32-Release-EXE
