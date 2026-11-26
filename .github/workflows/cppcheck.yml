@@ -30,10 +30,10 @@ jobs:
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-x86_64-cppcheck
+            mingw-w64-ucrt-x86_64-cppcheck
 
       - name: Show environment variables for debug
         run: set
