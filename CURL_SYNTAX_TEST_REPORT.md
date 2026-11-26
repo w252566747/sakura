@@ -94,5 +94,6 @@
 - `CURL012` 的近似比较现在保留首字母大小写；同时，已列出的语言关键字会先判为合法词，不再继续和 API 词表中的其他近似名称比较。
 - 本机用 Clang 单独编译 Curl 检查器并运行冒烟程序：`Action`、`elseif` 作为类型名时不再产生 `CURL012`；`{some-proc , alpha}` 仍会报 `CURL014`。这不是 Windows 主程序编译或仓库 GoogleTest 结果。
 - `MPSBitikuGrid.scurl` 不在本工作区，无法据截图的第 57 行确认 `CURL014` 是真错还是上下文误报；需要该行前后代码才能判断。Curl 检查器仍是规则子集，不等同官方 RTE 编译器。
-- Win32 Release 构建和仓库 GoogleTest 尚未针对本轮完成。
-
+- Win32 Release Actions Run [#45748357656](https://github.com/w252566747/sakura/actions/runs/45748357656) 成功，源码提交 `0374441bfd032d318565a1d07ea93598b1f63247`。ZIP SHA-256：`70a92a8600dfe4dab67af7830820e4b0060387c9874ef88e8cb60a2d10f5b190`；其中 PE32 Intel 80386 `sakura.exe` 为 2,348,032 字节，SHA-256：`be2031c3f436b209e1ce92fd52d6db62648da887d40037193b8c6d3266283b77`。
+- 本轮 Release workflow 不运行 GoogleTest。Cppcheck Run `45748357616` 和 MinGW Run `45748357629` 分别在 `Set up MSYS2` 步骤失败；Doxygen Run `45748357618` 成功。
+- `CURL014` 在缺少 `MPSBitikuGrid.scurl` 第 57 行源码上下文时仍未判定。Windows GUI 回归尚未完成。

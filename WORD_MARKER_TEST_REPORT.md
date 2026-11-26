@@ -80,5 +80,5 @@ Marker 状态没有加入 `DLLSHAREDATA`、`CommonSetting` 或共享内存版本
 - 「前へ／次へ」改用 Sakura 菜单工具栏中相同命令的原生图标；Marker 超过原有检索色数量后，分配不重复的柔和自定义底色，并由文本绘制路径直接使用同一 `COLORREF`。自定义颜色写入既有 `[WordMarker]` 数值项，没有新增共享内存字段。
 - Curl 错误一览上方显示「エラー合計: N 件」，仅统计 Error，不放在「構文チェック」按钮旁。
 - 新增 Marker 颜色重复载入、颜色槽耗尽后分配自定义色等 C++ 单元测试。本机便携冒烟检查验证 32 种自定义色配置互不相同、重复旧颜色可拆分；`git diff --check` 通过。
-- 当前 Mac 没有 MSVC/Windows SDK；本轮 Win32 Release 编译、完整 GoogleTest 与 Windows 桌面 UI 回归尚未完成。自定义色绘制路径需由 Windows Release 构建继续验证。
-
+- Win32 Release Actions Run [#45748357656](https://github.com/w252566747/sakura/actions/runs/45748357656) 成功，源码提交 `0374441bfd032d318565a1d07ea93598b1f63247`。ZIP SHA-256：`70a92a8600dfe4dab67af7830820e4b0060387c9874ef88e8cb60a2d10f5b190`；其中 PE32 Intel 80386 `sakura.exe` 为 2,348,032 字节，SHA-256：`be2031c3f436b209e1ce92fd52d6db62648da887d40037193b8c6d3266283b77`。已替换 `结果文件/sakura.exe`，替换前文件备份于 `结果文件/历史版本/sakura-before-native-arrows-marker-colors-curl-error-count-20261126.exe`。
+- 该 Release workflow 不运行 GoogleTest；Cppcheck 与 MinGW 分别在 MSYS2 初始化步骤失败，Doxygen 成功。Windows 桌面上的 Marker 实际底色、工具栏重绘及错误列表布局尚未实机验收。
