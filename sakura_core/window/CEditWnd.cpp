@@ -100,6 +100,7 @@ static constexpr int IDC_REALTIME_FILTER_CLEAR = 0x7CEC;
 static constexpr int IDC_REALTIME_FILTER_CLOSE = 0x7CED;
 static constexpr int IDC_REALTIME_FILTER_CONTEXT_LABEL = 0x7CEE;
 static constexpr int IDC_REALTIME_FILTER_AUTOSCROLL = 0x7CEF;
+static constexpr int IDC_REALTIME_FILTER_CANCEL = 0x7CF0;
 
 static std::size_t GetRealtimeFilterContextRows(HWND combo)
 {
@@ -369,7 +370,7 @@ void CEditWnd::ToggleRealtimeFilter()
 	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
 	if (!m_hwndRealtimeFilterBar) {
 		auto destroyFilterControls = [this]() {
-			for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+			for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CANCEL; ++id) {
 				if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::DestroyWindow(control);
 			}
 			if (m_hwndRealtimeFilterBar) ::DestroyWindow(m_hwndRealtimeFilterBar);
@@ -415,6 +416,7 @@ void CEditWnd::ToggleRealtimeFilter()
 		createControl(0, L"BUTTON", L"新規文書へ出力", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_NEW);
 		createControl(0, L"BUTTON", L"別名保存", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_SAVEAS);
 		createControl(0, L"BUTTON", L"すべて解除", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLEAR);
+		createControl(0, L"BUTTON", L"処理を中止", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CANCEL);
 		createControl(0, L"BUTTON", L"閉じる", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLOSE);
 		if (!m_hwndRealtimeFilterBar || !m_hwndRealtimeFilterInclude ||
 			!m_hwndRealtimeFilterExclude || !m_hwndRealtimeFilterLogic ||
@@ -424,6 +426,7 @@ void CEditWnd::ToggleRealtimeFilter()
 			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_NEW) ||
 			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_SAVEAS) ||
 			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_CLEAR) ||
+			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_CANCEL) ||
 			!::GetDlgItem(GetHwnd(), IDC_REALTIME_FILTER_CLOSE)) {
 			destroyFilterControls();
 			SendStatusMessage(L"リアルタイムフィルターの画面を作成できませんでした。");
@@ -443,7 +446,7 @@ void CEditWnd::ToggleRealtimeFilter()
 		}
 		for (const int id : { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
 			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CLOSE,
-			IDC_REALTIME_FILTER_AUTOSCROLL }) {
+			IDC_REALTIME_FILTER_AUTOSCROLL, IDC_REALTIME_FILTER_CANCEL }) {
 			if (HWND control = ::GetDlgItem(GetHwnd(), id)) {
 				::SendMessageW(control, WM_SETFONT,
 					reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
@@ -472,7 +475,7 @@ void CEditWnd::ToggleRealtimeFilter()
 	m_bRealtimeFilterMode = true;
 	::ShowWindow(m_hwndRealtimeFilterBar, SW_SHOW);
 	::ShowWindow(m_hwndRealtimeFilterList, SW_SHOW);
-	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CANCEL; ++id) {
 		if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::ShowWindow(control, SW_SHOW);
 	}
 	::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_HIDE);
@@ -513,7 +516,7 @@ void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
 	m_vRealtimeFilterMatches.clear();
 	m_vRealtimeFilterVisibleRanges.clear();
 	if (m_hwndRealtimeFilterList) {
-		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 	}
 	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中です...");
@@ -548,11 +551,11 @@ void CEditWnd::CloseRealtimeFilter(bool refreshLayout)
 	m_bRealtimeFilterAppendCachePending = false;
 	m_bRealtimeFilterAppendCacheActive = false;
 	if (m_hwndRealtimeFilterBar) ::ShowWindow(m_hwndRealtimeFilterBar, SW_HIDE);
-	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_AUTOSCROLL; ++id) {
+	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CANCEL; ++id) {
 		if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::ShowWindow(control, SW_HIDE);
 	}
 	if (m_hwndRealtimeFilterList) {
-		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::ShowWindow(m_hwndRealtimeFilterList, SW_HIDE);
 	}
 	if (m_cSplitterWnd.GetHwnd()) ::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_SHOW);
@@ -588,7 +591,7 @@ void CEditWnd::ScheduleRealtimeFilter(bool keepAppendCache)
 	m_vRealtimeFilterMatches.clear();
 	m_vRealtimeFilterVisibleRanges.clear();
 	if (m_hwndRealtimeFilterList) {
-		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 	}
 	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"条件を解析しています...");
@@ -754,7 +757,7 @@ void CEditWnd::AcceptRealtimeFilterResult()
 		m_bRealtimeFilterScanComplete = false;
 		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
 		if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
-		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"表示範囲を作成できるメモリがありません。");
 		SendStatusMessage(L"表示範囲を作成できるメモリがありません。");
@@ -763,7 +766,7 @@ void CEditWnd::AcceptRealtimeFilterResult()
 	const std::size_t visible = textfilter::CountVisibleLines(m_vRealtimeFilterVisibleRanges);
 	ListView_SetItemCountEx(m_hwndRealtimeFilterList,
 		static_cast<int>(std::min<std::size_t>(visible, static_cast<std::size_t>(std::numeric_limits<int>::max()))),
-		LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 	::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 	if (m_bRealtimeFilterAutoScroll && !m_vRealtimeFilterMatches.empty() && visible > 0) {
 		const std::size_t targetLine = m_vRealtimeFilterMatches.back();
@@ -1165,13 +1168,13 @@ void CEditWnd::ScheduleCSVTableParse()
 	m_csvTableSnapshot.reset();
 	m_vCSVTableViewRows.clear();
 	m_bCSVTableViewOrderIdentity = true;
-	if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 	const auto clearTableProjection = [this]() {
 		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
 		m_csvTableModel.reset();
 		m_csvTableSnapshot.reset();
 		if (m_hwndCSVTable) {
-			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
 		}
 	};
@@ -1241,7 +1244,7 @@ void CEditWnd::AcceptCSVTableParseResult()
 	if (result->failed || !result->snapshot) {
 		m_csvTableModel.reset();
 		m_csvTableSnapshot.reset();
-		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		SendStatusMessage(L"CSV テーブルの解析に失敗しました。テキスト表示へ戻してください。");
 		return;
 	}
@@ -1262,7 +1265,7 @@ void CEditWnd::AcceptCSVTableParseResult()
 	} catch (...) {
 		m_csvTableModel.reset();
 		m_csvTableSnapshot.reset();
-		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		SendStatusMessage(L"CSV テーブルの表示用メモリを確保できませんでした。テキスト表示へ戻してください。");
 		return;
 	}
@@ -1290,7 +1293,7 @@ void CEditWnd::ScheduleCSVTableQuery()
 		m_vCSVTableViewRows.clear();
 		m_bCSVTableViewOrderIdentity = true;
 		ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(m_csvTableModel->RowCount()),
-			LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+			LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		UpdateCSVSortIndicator();
 		::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
 		SendStatusMessage((L"表示件数 " + std::to_wstring(m_csvTableModel->RowCount()) +
@@ -1387,7 +1390,7 @@ void CEditWnd::AcceptCSVTableQueryResult()
 	const std::size_t displayCount = m_bCSVTableViewOrderIdentity
 		? m_csvTableModel->RowCount() : m_vCSVTableViewRows.size();
 	ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(displayCount),
-		LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+		LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 	UpdateCSVSortIndicator();
 	::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
 	SendStatusMessage((L"表示件数 " + std::to_wstring(displayCount) + L" 件 / 全件数 " +
@@ -1798,7 +1801,7 @@ void CEditWnd::PopulateCSVTableColumns()
 		SendStatusMessage(L"行数または列数が多すぎるため CSV テーブル表示にできません。");
 		return;
 	}
-	ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 	HWND header = ListView_GetHeader(m_hwndCSVTable);
 	int count = header ? Header_GetItemCount(header) : 0;
 	while (count-- > 0) ListView_DeleteColumn(m_hwndCSVTable, count);
@@ -1819,7 +1822,7 @@ void CEditWnd::PopulateCSVTableColumns()
 		column.iSubItem = static_cast<int>(index + 1);
 		ListView_InsertColumn(m_hwndCSVTable, static_cast<int>(index + 1), &column);
 	}
-	ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(rows), LVSICF_NOININVALIDATEALL | LVSICF_NOSCROLL);
+	ListView_SetItemCountEx(m_hwndCSVTable, static_cast<int>(rows), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 	m_vCSVTableViewRows.clear();
 	m_bCSVTableViewOrderIdentity = true;
 	UpdateCSVSortIndicator();
@@ -1880,7 +1883,7 @@ void CEditWnd::AutoSizeCSVTableColumns()
 				}
 				widthPixels = std::max(widthPixels, cellWidth);
 			}
-			const int width = std::clamp(DpiUnscaleX(widthPixels + DpiScaleX(28)), 40, 600);
+			const int width = static_cast<int>(std::clamp<LONG>(DpiUnscaleX(widthPixels + DpiScaleX(28)), 40L, 600L));
 			widths[columnIndex] = width;
 			ListView_SetColumnWidth(m_hwndCSVTable, static_cast<int>(columnIndex + 1), DpiScaleX(width));
 		}
@@ -3780,10 +3783,17 @@ LRESULT CEditWnd::DispatchEvent(
 					m_vRealtimeFilterVisibleRanges, static_cast<std::size_t>(display->item.iItem));
 				if (sourceLine && *sourceLine < m_vRealtimeFilterLineIndex.size()) {
 					const CDocLine* line = m_vRealtimeFilterLineIndex[*sourceLine];
-					const std::size_t lineLength = static_cast<std::size_t>(line->GetLengthWithoutEOL());
-					m_strRealtimeFilterDisplayText = std::to_wstring(*sourceLine + 1) + L": ";
-					m_strRealtimeFilterDisplayText.append(line->GetPtr(), lineLength);
-					display->item.pszText = m_strRealtimeFilterDisplayText.data();
+					if (line) {
+						try {
+							const std::size_t lineLength = static_cast<std::size_t>(line->GetLengthWithoutEOL());
+							m_strRealtimeFilterDisplayText = std::to_wstring(*sourceLine + 1) + L": ";
+							m_strRealtimeFilterDisplayText.append(line->GetPtr(), lineLength);
+							display->item.pszText = m_strRealtimeFilterDisplayText.data();
+						} catch (...) {
+							m_strRealtimeFilterDisplayText.clear();
+							display->item.pszText = m_strRealtimeFilterDisplayText.data();
+						}
+					}
 				}
 			}
 			return 0;
@@ -3856,7 +3866,7 @@ LRESULT CEditWnd::DispatchEvent(
 			::ScreenToClient(header, &clientPoint);
 			HDHITTESTINFO hit{};
 			hit.pt = clientPoint;
-			Header_HitTest(header, &hit);
+			::SendMessageW(header, HDM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit));
 			if (hit.iItem > 0) {
 				ShowCSVFilterMenu(static_cast<std::size_t>(hit.iItem - 1), point);
 			}
@@ -3869,7 +3879,7 @@ LRESULT CEditWnd::DispatchEvent(
 				auto& widths = csvtable::GetUserSettings().columnWidths;
 				const std::size_t column = static_cast<std::size_t>(headerResize->iItem - 1);
 				if (widths.size() <= column) widths.resize(column + 1, 0);
-				widths[column] = std::clamp(DpiUnscaleX(headerResize->pitem->cxy), 24, 4000);
+				widths[column] = static_cast<int>(std::clamp<LONG>(DpiUnscaleX(headerResize->pitem->cxy), 24L, 4000L));
 			}
 			return 0;
 		}
@@ -4700,9 +4710,9 @@ void CEditWnd::OnCommand( WORD wNotifyCode, WORD wID , HWND hwndCtl )
 		(wID == F_COPY || wID == F_CUT || wID == F_PASTE || wID == F_UNDO || wID == F_REDO || wID == F_SELECTALL)) {
 		const HWND focus = ::GetFocus();
 		if (focus == m_hwndRealtimeFilterInclude || focus == m_hwndRealtimeFilterExclude) {
+			if (wID == F_REDO) return;
 			const UINT message = wID == F_COPY ? WM_COPY : wID == F_CUT ? WM_CUT :
-				wID == F_PASTE ? WM_PASTE : wID == F_UNDO ? WM_UNDO :
-				wID == F_REDO ? EM_REDO : EM_SETSEL;
+				wID == F_PASTE ? WM_PASTE : wID == F_UNDO ? WM_UNDO : EM_SETSEL;
 			if (wID == F_SELECTALL) ::SendMessageW(focus, EM_SETSEL, 0, -1);
 			else ::SendMessageW(focus, message, 0, 0);
 			return;
@@ -4735,6 +4745,25 @@ void CEditWnd::OnCommand( WORD wNotifyCode, WORD wID , HWND hwndCtl )
 			ScheduleRealtimeFilter();
 			return;
 		case IDC_REALTIME_FILTER_CLOSE: CloseRealtimeFilter(); return;
+		case IDC_REALTIME_FILTER_CANCEL:
+			::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
+			::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
+			++m_uRealtimeFilterToken;
+			if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();
+			m_bRealtimeFilterBatchInFlight = false;
+			m_bRealtimeFilterHasPendingBatch = false;
+			m_bRealtimeFilterScanComplete = false;
+			m_pRealtimeFilterScanLine = nullptr;
+			m_vRealtimeFilterPendingBatch.clear();
+			m_vRealtimeFilterAppendCacheFingerprints.clear();
+			m_vRealtimeFilterAppendCacheMatches.clear();
+			m_bRealtimeFilterAppendCachePending = false;
+			m_bRealtimeFilterAppendCacheActive = false;
+			if (m_hwndRealtimeFilterStats) {
+				const std::wstring status = L"中止しました（部分結果 " + std::to_wstring(m_vRealtimeFilterMatches.size()) + L" 行）";
+				::SetWindowTextW(m_hwndRealtimeFilterStats, status.c_str());
+			}
+			return;
 		case IDC_REALTIME_FILTER_AUTOSCROLL:
 			m_bRealtimeFilterAutoScroll = ::SendMessageW(m_hwndRealtimeFilterAutoScroll, BM_GETCHECK, 0, 0) == BST_CHECKED;
 			return;
@@ -5719,7 +5748,7 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		const int margin = DpiScaleX(8);
 		const int labelWidth = DpiScaleX(112);
 		const int editLeft = margin + labelWidth;
-		const int editWidth = std::clamp(cx * 34 / 100, DpiScaleX(180), DpiScaleX(520));
+		const int editWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 34 / 100), DpiScaleX(180), DpiScaleX(520)));
 		const int smallGap = DpiScaleX(8);
 		const int rowHeight = DpiScaleY(32);
 		const int lineEditHeight = DpiScaleY(46);
@@ -5744,12 +5773,12 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		x += DpiScaleX(72);
 		moveControl(IDC_REALTIME_FILTER_CONTEXT, x, row2, DpiScaleX(92), rowHeight);
 		x += DpiScaleX(100);
-		moveControl(IDC_REALTIME_FILTER_STATS, x, row2 + DpiScaleY(1), std::max(DpiScaleX(80), cx - x - margin), rowHeight - DpiScaleY(2));
+		moveControl(IDC_REALTIME_FILTER_STATS, x, row2 + DpiScaleY(1), static_cast<int>(std::max<LONG>(DpiScaleX(80), static_cast<LONG>(cx - x - margin))), rowHeight - DpiScaleY(2));
 		moveControl(IDC_REALTIME_FILTER_AUTOSCROLL, margin, row3 + DpiScaleY(1), DpiScaleX(190), DpiScaleY(24));
 		const int buttonHeight = DpiScaleY(24);
-		const int buttonWidths[] = { DpiScaleX(105), DpiScaleX(116), DpiScaleX(88), DpiScaleX(92), DpiScaleX(72) };
+		const int buttonWidths[] = { DpiScaleX(105), DpiScaleX(116), DpiScaleX(88), DpiScaleX(92), DpiScaleX(86), DpiScaleX(72) };
 		const int buttonIds[] = { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
-			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CLOSE };
+			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CANCEL, IDC_REALTIME_FILTER_CLOSE };
 		int buttonX = cx - margin;
 		for (int index = static_cast<int>(std::size(buttonIds)) - 1; index >= 0; --index) {
 			buttonX -= buttonWidths[index];

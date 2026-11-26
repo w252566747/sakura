@@ -246,20 +246,11 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 				if (i + 1 < tokens.size() && (tokens[i + 1] == L"IF" || tokens[i + 1] == L"LOOP" || tokens[i + 1] == L"CASE")) {
 					expected = tokens[++i];
 				}
-				if (!stack.empty()) {
-					auto found = stack.end();
-					if (expected.empty()) found = stack.end() - 1;
-					else {
-						for (auto it = stack.end(); it != stack.begin();) {
-							--it;
-						if (it->kind == expected) { found = it; break; }
-						}
-					}
-					if (found != stack.end()) {
-						const OpenBlock open = *found;
-						stack.erase(found, stack.end());
-						AddClosedRegion(regions, open, lineNo);
-					}
+				const std::wstring_view required = expected.empty() ? std::wstring_view(L"BEGIN") : expected;
+				if (!stack.empty() && stack.back().kind == required) {
+					const OpenBlock open = std::move(stack.back());
+					stack.pop_back();
+					AddClosedRegion(regions, open, lineNo);
 				}
 				continue;
 			}

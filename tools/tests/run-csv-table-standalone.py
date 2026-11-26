@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="sakura-csv-table-") as temp:
+        (Path(temp) / "StdAfx.h").write_text("#pragma once\n", encoding="utf-8")
         source = Path(temp) / "main.cpp"
         executable = Path(temp) / "csv-table-test"
         source.write_text(r'''#include "parse/CSVTableModel.h"
@@ -71,7 +72,7 @@ int main() {
 ''', encoding="utf-8")
         subprocess.run([
             "clang++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
-            "-fsanitize=undefined", "-I", str(ROOT / "sakura_core"),
+            "-fsanitize=undefined", "-I", temp, "-I", str(ROOT / "sakura_core"),
             str(ROOT / "sakura_core/parse/CSVParser.cpp"),
             str(ROOT / "sakura_core/parse/CSVTableModel.cpp"), str(source),
             "-o", str(executable),

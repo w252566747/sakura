@@ -56,7 +56,9 @@ private:
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <atomic>
 #include <mutex>
+#include <thread>
 
 int main() {
   using namespace textfilter;
@@ -107,6 +109,18 @@ int main() {
   assert(result->requestToken == 17 && result->documentVersion == 41);
   assert(result->finalBatch && !result->failed && result->scannedLines == 3);
   assert((result->matchingLines == std::vector<std::size_t>{1, 2}));
+
+  std::atomic_bool cancelledResultPublished{false};
+  service.Begin(18, 42, Options{}, [&](BatchResult) {
+    cancelledResultPublished.store(true, std::memory_order_relaxed);
+  });
+  std::vector<Line> largeBatch;
+  largeBatch.reserve(500000);
+  for (std::size_t i = 0; i < 500000; ++i) largeBatch.push_back({i, L"ordinary log line"});
+  assert(service.Submit(18, std::move(largeBatch), true));
+  service.Cancel();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  assert(!cancelledResultPublished.load(std::memory_order_relaxed));
   std::cout << "production filter matcher, regex adapter, ranges and async service passed\n";
 }
 ''', encoding="utf-8")

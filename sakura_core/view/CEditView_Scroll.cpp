@@ -45,6 +45,8 @@
 #include <utility>
 #include <vector>
 
+VOID CALLBACK EditViewTimerProc(HWND, UINT, UINT_PTR, DWORD);
+
 namespace {
 constexpr UINT_PTR IDT_SCROLLBAR_MARKERS = 2;
 constexpr int SCROLLBAR_MARKER_MENU_BASE = 0x6b00;
@@ -256,7 +258,7 @@ void CEditView::UpdateScrollBarMarkerScan()
 	RECT client{};
 	if (!::GetClientRect(m_hwndVScrollBar, &client)) return;
 	const int trackTop = ScrollBarMarkerTrackTop();
-	const int trackHeight = std::max(0, client.bottom - trackTop * 2);
+	const int trackHeight = static_cast<int>(std::max<LONG>(0L, client.bottom - trackTop * 2L));
 	const int lineCount = std::max(1, static_cast<int>(m_pcEditDoc->m_cLayoutMgr.GetLineCount()) + 2);
 
 	const auto& markerService = CWordMarker::Instance();
@@ -424,7 +426,7 @@ void CEditView::DrawScrollBarMarkers(HDC hdc)
 	if (!::GetClientRect(m_hwndVScrollBar, &client)) return;
 	const int width = client.right - client.left;
 	const int trackTop = ScrollBarMarkerTrackTop();
-	const int trackHeight = std::max(0, client.bottom - trackTop * 2);
+	const int trackHeight = static_cast<int>(std::max<LONG>(0L, client.bottom - trackTop * 2L));
 	if (trackHeight <= 0 || width < 6) return;
 
 	int thumbTop = -1;
@@ -470,8 +472,8 @@ bool CEditView::NavigateScrollBarMarker(int x, int y)
 	RECT client{};
 	::GetClientRect(m_hwndVScrollBar, &client);
 	const int trackTop = ScrollBarMarkerTrackTop();
-	const int trackHeight = std::max(0, client.bottom - trackTop * 2);
-	const int markerLeft = std::max(0, client.right - 14);
+	const int trackHeight = static_cast<int>(std::max<LONG>(0L, client.bottom - trackTop * 2L));
+	const int markerLeft = static_cast<int>(std::max<LONG>(0L, client.right - 14L));
 	const int laneWidth = 2;
 	if (y < trackTop || y >= trackTop + trackHeight || x < markerLeft) return false;
 	const int lane = (x - markerLeft) / laneWidth;
@@ -500,8 +502,8 @@ void CEditView::UpdateScrollBarMarkerTooltip(int x, int y)
 	RECT client{};
 	::GetClientRect(m_hwndVScrollBar, &client);
 	const int trackTop = ScrollBarMarkerTrackTop();
-	const int trackHeight = std::max(0, client.bottom - trackTop * 2);
-	const int markerLeft = std::max(0, client.right - 14);
+	const int trackHeight = static_cast<int>(std::max<LONG>(0L, client.bottom - trackTop * 2L));
+	const int markerLeft = static_cast<int>(std::max<LONG>(0L, client.right - 14L));
 	if (y < trackTop || y >= trackTop + trackHeight || x < markerLeft) {
 		TOOLINFOW tool{};
 		tool.cbSize = sizeof(tool);

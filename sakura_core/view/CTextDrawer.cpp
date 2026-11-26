@@ -19,6 +19,7 @@
 #include "charset/charcode.h"
 #include "doc/layout/CLayout.h"
 #include "apiwrap/StdApi.h"
+#include "util/window.h"
 #include <string>
 
 const CTextArea* CTextDrawer::GetTextArea() const
