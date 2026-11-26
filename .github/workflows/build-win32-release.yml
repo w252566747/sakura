@@ -134,7 +134,7 @@ jobs:
           }
 
       - name: Launch and exercise the Win32 editor
-        run: python tools/windows-ui/smoke_test.py --exe Win32/Release/sakura.exe --output test-output/windows-gui
+        run: python tools/windows-ui/gui_smoke.py --exe Win32/Release/sakura.exe --output test-output/windows-gui
 
       - name: Upload Windows GUI evidence
         if: always()
