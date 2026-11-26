@@ -36,6 +36,68 @@
 #include "CSelectLang.h"
 #include "sakura_rc.h"
 #include "config/app_constants.h"
+#include <string>
+
+namespace {
+	struct SearchMatchPosition {
+		int current = 0;
+		int total = 0;
+	};
+
+	// 現在の検索条件で文書全体を走査し、対象ヒットの文書内順序と総数を求める。
+	SearchMatchPosition CountSearchMatches(CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutPoint& currentPosition)
+	{
+		SearchMatchPosition result;
+		CLayoutInt line(0);
+		CLogicInt index(0);
+		CLayoutRange match;
+		int nearestBefore = 0;
+		int nearestAfter = 0;
+		while (layoutMgr.SearchWord(line, index, SEARCH_FORWARD, &match, pattern)) {
+			++result.total;
+			const CLayoutPoint from = match.GetFrom();
+			if (from == currentPosition) {
+				result.current = result.total;
+			} else if (from.GetY2() < currentPosition.GetY2()
+				|| (from.GetY2() == currentPosition.GetY2() && from.GetX2() < currentPosition.GetX2())) {
+				nearestBefore = result.total;
+			} else if (nearestAfter == 0) {
+				nearestAfter = result.total;
+			}
+
+			const CLayoutPoint to = match.GetTo();
+			line = to.GetY2();
+			CLogicPoint logicEnd;
+			layoutMgr.LayoutToLogic(to, &logicEnd);
+			const CLayout* nextLayout = layoutMgr.SearchLineByLayoutY(line);
+			if (!nextLayout) break;
+			index = logicEnd.x - nextLayout->GetLogicOffset();
+			if (from == to) {
+				// 幅0の正規表現一致でも走査を進め、無限ループを防ぐ。
+				++index;
+			}
+		}
+		if (result.current == 0) result.current = nearestBefore > 0 ? nearestBefore : nearestAfter;
+		return result;
+	}
+
+	void ShowSearchMatchPosition(CEditView* view, CLayoutMgr& layoutMgr, const CSearchStringPattern& pattern, const CLayoutRange& match, const WCHAR* prefix = nullptr)
+	{
+		const SearchMatchPosition position = CountSearchMatches(layoutMgr, pattern, match.GetFrom());
+		if (position.total > 0) {
+			std::wstring message;
+			if (prefix && *prefix) {
+				message.append(prefix);
+				message.append(L", ");
+			}
+			message.append(std::to_wstring(position.current > 0 ? position.current : 1));
+			message.append(L" 番目 / 合計 ");
+			message.append(std::to_wstring(position.total));
+			message.append(L" 件");
+			view->SendStatusMessage(message.c_str());
+		}
+	}
+}
 
 /*!
 検索(ボックス)コマンド実行.
@@ -297,8 +359,14 @@ end_of_func:;
 	}
 
 	if(bFound){
-		if(nullptr == pcSelectLogic && ((nLineNumOld > nLineNum)||(nLineNumOld == nLineNum && nIdxOld > nIdx)))
+		const WCHAR* statusPrefix = nullptr;
+		if(nullptr == pcSelectLogic && ((nLineNumOld > nLineNum)||(nLineNumOld == nLineNum && nIdxOld > nIdx))) {
+			statusPrefix = LS(STR_ERR_SRNEXT1);
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRNEXT1));
+		}
+		if (!bReplaceAll && nullptr == pcSelectLogic) {
+			ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA, statusPrefix);
+		}
 	}
 	else{
 		GetCaret().ShowEditCaret();	// 2002/04/18 YAZAKI
@@ -460,8 +528,12 @@ end_of_func:;
 		}
 	}
 	if(bFound){
-		if((nLineNumOld < nLineNum)||(nLineNumOld == nLineNum && nIdxOld < nIdx))
+		const WCHAR* statusPrefix = nullptr;
+		if((nLineNumOld < nLineNum)||(nLineNumOld == nLineNum && nIdxOld < nIdx)) {
+			statusPrefix = LS(STR_ERR_SRPREV1);
 			m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV1));
+		}
+		ShowSearchMatchPosition(m_pCommanderView, GetDocument()->m_cLayoutMgr, m_pCommanderView->m_sSearchPattern, sRangeA, statusPrefix);
 	}else{
 		m_pCommanderView->SendStatusMessage(LS(STR_ERR_SRPREV2));
 // To Here 2002.01.26 hor

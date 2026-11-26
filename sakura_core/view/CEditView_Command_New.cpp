@@ -947,6 +947,7 @@ bool CEditView::ReplaceData_CEditView3(
 			*pnInsSeq = LRArg.nInsSeq;
 		}
 	}
+	GetEditWnd().NotifyCurlSyntaxContentChanged(m_pcEditDoc);
 
 	//	Jan. 30, 2001 genta
 	//	ファイル全体の更新フラグが立っていないと各行の更新状態が表示されないので

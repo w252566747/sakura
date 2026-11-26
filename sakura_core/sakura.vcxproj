@@ -286,6 +286,8 @@
     <ClInclude Include="..\sakura_core\doc\CDocTypeSetting.h" />
     <ClInclude Include="..\sakura_core\doc\CDocVisitor.h" />
     <ClInclude Include="..\sakura_core\doc\CEditDoc.h" />
+    <ClInclude Include="..\sakura_core\curl\CurlSyntaxChecker.h" />
+    <ClInclude Include="..\sakura_core\curl\CurlSyntaxCheckService.h" />
     <ClInclude Include="..\sakura_core\doc\CLineComment.h" />
     <ClInclude Include="..\sakura_core\doc\layout\CLayout.h" />
     <ClInclude Include="..\sakura_core\doc\layout\CLayoutExInfo.h" />
@@ -655,6 +657,8 @@
     <ClCompile Include="..\sakura_core\doc\CDocTypeSetting.cpp" />
     <ClCompile Include="..\sakura_core\doc\CDocVisitor.cpp" />
     <ClCompile Include="..\sakura_core\doc\CEditDoc.cpp" />
+    <ClCompile Include="..\sakura_core\curl\CurlSyntaxChecker.cpp" />
+    <ClCompile Include="..\sakura_core\curl\CurlSyntaxCheckService.cpp" />
     <ClCompile Include="..\sakura_core\doc\CLineComment.cpp" />
     <ClCompile Include="..\sakura_core\doc\layout\CLayout.cpp" />
     <ClCompile Include="..\sakura_core\doc\layout\CLayoutMgr.cpp" />
@@ -840,6 +844,7 @@
     <ClCompile Include="..\sakura_core\view\colors\CColorStrategy.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Comment.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Found.cpp" />
+    <ClCompile Include="..\sakura_core\view\colors\CWordMarker.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Heredoc.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_KeywordSet.cpp" />
     <ClCompile Include="..\sakura_core\view\colors\CColor_Numeric.cpp" />

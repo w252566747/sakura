@@ -31,6 +31,7 @@
 #include "view/CTextMetrics.h"
 #include "basis/SakuraBasis.h"
 #include "agent/CSearchAgent.h"
+#include "view/colors/CWordMarker.h"
 #include "debug/CRunningTimer.h"
 #include "charset/charcode.h"
 #include "config/app_constants.h"
@@ -387,7 +388,10 @@ CLayout* CLayoutMgr::CreateLayout(
 	EColorIndexType	nTypePrev,
 	CLayoutInt		nIndent,
 	CLayoutInt		nPosX,
-	CLayoutColorInfo*	colorInfo
+	CLayoutColorInfo*	colorInfo,
+	const CBracketNestingState& bracketStateBegin,
+	const CBracketNestingState& bracketStateEnd,
+	const std::vector<SRainbowBracketMark>& bracketMarks
 )
 {
 	CLayout* pLayout = new (m_layoutMemRes->allocate(sizeof(CLayout))) CLayout(
@@ -396,7 +400,10 @@ CLayout* CLayoutMgr::CreateLayout(
 		nLength,
 		nTypePrev,
 		nIndent,
-		colorInfo
+		colorInfo,
+		bracketStateBegin,
+		bracketStateEnd,
+		bracketMarks
 	);
 
 	if( pCDocLine->GetEol().IsNone() ){
@@ -664,7 +671,8 @@ bool CLayoutMgr::WhereCurrentWord(
 	CLogicInt		nIdx,
 	CLayoutRange*	pSelect,		//!< [out]
 	CNativeW*		pcmcmWord,		//!< [out]
-	CNativeW*		pcmcmWordLeft	//!< [out]
+	CNativeW*		pcmcmWordLeft,	//!< [out]
+	bool expandAddedWordCharacters
 )
 {
 	const CLayout* pLayout = SearchLineByLayoutY( nLineNum );
@@ -683,6 +691,19 @@ bool CLayoutMgr::WhereCurrentWord(
 		pcmcmWord,
 		pcmcmWordLeft
 	);
+	if (nRetCode && expandAddedWordCharacters && !CWordMarker::Instance().AddedWordCharacters().empty()) {
+		const CDocLine* docLine = pLayout->GetDocLineRef();
+		CLogicInt lineLength;
+		const wchar_t* line = docLine->GetDocLineStrWithEOL(&lineLength);
+		int from = nFromX;
+		int to = nToX;
+		if (CWordMarker::Instance().ExpandWordRange(line, lineLength, &from, &to)) {
+			nFromX = CLogicInt(from);
+			nToX = CLogicInt(to);
+			if (pcmcmWord) pcmcmWord->SetString(line + from, to - from);
+			if (pcmcmWordLeft) pcmcmWordLeft->SetString(line + from, static_cast<int>(nIdx) - from);
+		}
+	}
 
 	if( nRetCode ){
 		/* 論理位置→レイアウト位置変換 */

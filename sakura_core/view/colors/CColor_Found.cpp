@@ -7,6 +7,8 @@
 #include "StdAfx.h"
 #include "view/CEditView.h" // SColorStrategyInfo
 #include "CColor_Found.h"
+#include "CWordMarker.h"
+#include "doc/CDocType.h"
 #include "types/CTypeSupport.h"
 #include "view/CViewSelect.h"
 #include <limits.h>
@@ -126,4 +128,64 @@ bool CColor_Found::EndColor([[maybe_unused]] const CStringRef& cStr, int nPos)
 	}
 
 	return false;
+}
+
+bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
+{
+	m_hasDirectBackColor = false;
+	if (!cStr.IsValid()) return false;
+	int end = -1;
+	const auto* view = CColorStrategyPool::getInstance()->GetCurrentView();
+	m_index = CWordMarker::Instance().Match(view->GetDocument(), cStr.GetPtr(), cStr.GetLength(), nPos, &end);
+	if (m_index == 0) return false;
+	const auto color = CWordMarker::Instance().ColorAt(m_index);
+	const auto& colors = view->GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+	if (m_index == 33) {
+		// Automatic selection highlighting uses Sakura's default pale orange marker color.
+		// This color slot is independent of the Find palette and the toolbar reads the same slot.
+		m_color = COLORIDX_DIFF_DELETE;
+		m_end = end;
+		return true;
+	}
+	if (CWordMarker::IsCustomColor(color)) {
+		m_color = COLORIDX_TEXT;
+		m_directBackColor = static_cast<COLORREF>(CWordMarker::DecodeCustomColor(color));
+		m_hasDirectBackColor = true;
+		m_end = end;
+		return true;
+	}
+	if (color > 0 && color <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
+		const int preferred = COLORIDX_SEARCH + static_cast<int>(color);
+		if (colors[preferred].m_sColorAttr.m_cTEXT != colors[preferred].m_sColorAttr.m_cBACK) {
+			m_color = static_cast<EColorIndexType>(preferred);
+			m_end = end;
+			return true;
+		}
+		for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
+			if (colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
+				m_color = static_cast<EColorIndexType>(index);
+				m_end = end;
+				return true;
+			}
+		}
+		m_color = COLORIDX_SELECT;
+		m_end = end;
+		return true;
+	}
+	for (int index = COLORIDX_SEARCH + 1; index <= COLORIDX_SEARCHTAIL; ++index) {
+		if (colors[index].m_sColorAttr.m_cBACK == color &&
+			colors[index].m_sColorAttr.m_cTEXT != colors[index].m_sColorAttr.m_cBACK) {
+			m_color = static_cast<EColorIndexType>(index);
+			m_end = end;
+			return true;
+		}
+	}
+	m_color = COLORIDX_SELECT;
+	m_end = end;
+	return true;
+}
+
+bool CColor_WordMarker::EndColor([[maybe_unused]] const CStringRef& cStr, int nPos)
+{
+	return m_end <= nPos;
 }

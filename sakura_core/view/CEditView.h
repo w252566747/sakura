@@ -76,6 +76,11 @@ class CColor_Found;
 #define IDM_JUMPDICT 2001	// 2006.04.10 fon
 #endif
 
+constexpr int IDM_WORDMARKER_TOGGLE = 2060;
+constexpr int IDM_WORDMARKER_CLEAR = 2061;
+constexpr int IDM_WORDMARKER_REMOVE_BASE = 2100;
+constexpr int IDM_WORDMARKER_COLOR_BASE = 2140;
+
 ///	マウスからコマンドが実行された場合の上位ビット
 ///	@date 2006.05.19 genta
 const int CMD_FROM_MOUSE = 2;
@@ -239,7 +244,9 @@ protected:
 	//色分け
 public:
 	CColor3Setting GetColorIndex( const CLayout* pcLayout, CLayoutYInt nLineNum, int nIndex, SColorStrategyInfo* pInfo, bool bPrev = false );	/* 指定位置のColorIndexの取得 02/12/13 ai */
-	void SetCurrentColor( CGraphics& gr, EColorIndexType, EColorIndexType, EColorIndexType);
+	void SetCurrentColor( CGraphics& gr, EColorIndexType, EColorIndexType, EColorIndexType,
+		bool hasDirectBackColor = false, COLORREF directBackColor = 0,
+		bool hasDirectForeColor = false, COLORREF directForeColor = 0);
 	COLORREF GetTextColorByColorInfo2(const ColorInfo& info, const ColorInfo& info2);
 	COLORREF GetBackColorByColorInfo2(const ColorInfo& info, const ColorInfo& info2);
 
@@ -754,6 +761,7 @@ public:
 	CMigemo*		m_pcmigemo;
 	bool			m_bMiniMap;
 	bool			m_bMiniMapMouseDown;
+	bool			m_bExpandAddedWordCharactersForMouse = false;
 	CLayoutInt		m_nPageViewTop;
 	CLayoutInt		m_nPageViewBottom;
 

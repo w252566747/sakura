@@ -96,15 +96,21 @@ static bool _GetKeywordLength(
 
 CLayout* CLayoutMgr::SLayoutWork::_CreateLayout(CLayoutMgr* mgr)
 {
-	return mgr->CreateLayout(
+	CLayout* layout = mgr->CreateLayout(
 		this->pcDocLine,
 		CLogicPoint(this->nBgn, this->nCurLine),
 		this->nPos - this->nBgn,
 		this->colorPrev,
 		this->nIndent,
 		this->nPosX,
-		this->exInfoPrev.DetachColorInfo()
+		this->exInfoPrev.DetachColorInfo(),
+		this->bracketStateBegin,
+		this->bracketState,
+		this->bracketMarks
 	);
+	this->bracketMarks.clear();
+	this->bracketStateBegin = this->bracketState;
+	return layout;
 }
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
@@ -245,6 +251,7 @@ void CLayoutMgr::_MakeOneLine(SLayoutWork* pWork, PF_OnLine pfOnLine)
 	CColorStrategyPool& color = *CColorStrategyPool::getInstance();
 
 	const bool bCheckColorEnabled = color.HasRangeBasedColorStrategies();
+	const bool bRainbowBracketEnabled = m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
 	const bool bKinsokuEnabled = m_pTypeConfig->m_bWordWrap
 		|| m_pTypeConfig->m_bKinsokuKuto
 		|| m_pTypeConfig->m_bKinsokuHead
@@ -300,6 +307,18 @@ void CLayoutMgr::_MakeOneLine(SLayoutWork* pWork, PF_OnLine pfOnLine)
 				}
 			}
 		}
+		if (bRainbowBracketEnabled) {
+			const EColorIndexType colorType = CColorStrategy::GetStrategyColorSafe(pWork->pcColorStrategy);
+			const bool inCommentOrString = colorType == COLORIDX_COMMENT || colorType == COLORIDX_SSTRING ||
+				colorType == COLORIDX_WSTRING || colorType == COLORIDX_HEREDOC || (colorType & COLORIDX_BLOCK_BIT) != 0;
+			if (!inCommentOrString) {
+				unsigned level = 0;
+				bool unmatched = false;
+				if (pWork->bracketState.Consume(ch, &level, &unmatched)) {
+					pWork->bracketMarks.push_back({ static_cast<int>(pWork->nPos), static_cast<unsigned char>(level), unmatched });
+				}
+			}
+		}
 		pWork->nPos += CNativeW::GetSizeOfChar( pWork->cLineStr, pWork->nPos );
 		pWork->nPosX += nCharKetas;
 	}
@@ -343,6 +362,9 @@ void CLayoutMgr::_DoLayout(bool bBlockingHook)
 	} else if (CColorStrategyPool::getInstance()->HasRangeBasedColorStrategies()) {
 		// 行をまたぐ可能性のある色分けが有効の場合、途中で処理単位が分割されて
 		// しまうと色分けがおかしくなってしまうためやむなくマルチスレッド処理の対象外とする
+		nWorkerThreadCount = 0;
+	} else if (m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) {
+		// 括弧の階層状態を先頭行から引き継ぐ必要があるため、機能使用時は順次処理する
 		nWorkerThreadCount = 0;
 	} else {
 		nWorkerThreadCount = (std::max)(1, (int)std::thread::hardware_concurrency()) - 1;
@@ -436,6 +458,8 @@ void CLayoutMgr::_DoLayoutSub(CDocLine* pDocLineBegin, const CDocLine* pDocLineE
 	pWork->pLayout					= nullptr;
 	pWork->pcColorStrategy			= nullptr;
 	pWork->colorPrev				= COLORIDX_DEFAULT;
+	pWork->bracketState = CBracketNestingState();
+	pWork->bracketStateBegin = pWork->bracketState;
 	pWork->nCurLine					= CLogicInt( nLineIndex );
 
 	constexpr DWORD userInterfaceInterval = 33;
@@ -516,6 +540,9 @@ void CLayoutMgr::_OnLine2(SLayoutWork* pWork)
 		pWork->pLayout = pWork->pLayout->GetNextLayout();
 		pWork->pLayout->SetColorTypePrev(pWork->colorPrev);
 		pWork->pLayout->GetLayoutExInfo()->SetColorInfo(pWork->exInfoPrev.DetachColorInfo());
+		pWork->pLayout->SetBracketCache(pWork->bracketStateBegin, pWork->bracketState, pWork->bracketMarks);
+		pWork->bracketMarks.clear();
+		pWork->bracketStateBegin = pWork->bracketState;
 		(*pWork->pnExtInsLineNum)++;								//	再描画してほしい行数+1
 	}
 	else {
@@ -573,6 +600,8 @@ CLayoutInt CLayoutMgr::DoLayout_Range(
 	pWork->pcColorStrategy			= CColorStrategyPool::getInstance()->GetStrategyByColor(nCurrentLineType);
 	pWork->colorPrev				= nCurrentLineType;
 	pWork->exInfoPrev.SetColorInfo(colorInfo);
+	pWork->bracketState = pLayoutPrev ? pLayoutPrev->GetBracketStateEnd() : CBracketNestingState();
+	pWork->bracketStateBegin = pWork->bracketState;
 	pWork->bNeedChangeCOMMENTMODE	= false;
 	if( nullptr == pWork->pLayout ){
 		pWork->nCurLine = CLogicInt(0);
@@ -624,6 +653,10 @@ CLayoutInt CLayoutMgr::DoLayout_Range(
 				}else if( pWork->exInfoPrev.GetColorInfo() && nullptr == pWork->pLayout->GetNextLayout()->GetColorInfo() ){
 					pWork->bNeedChangeCOMMENTMODE = true;
 				}else if( nullptr == pWork->exInfoPrev.GetColorInfo() && pWork->pLayout->GetNextLayout()->GetColorInfo() ){
+					pWork->bNeedChangeCOMMENTMODE = true;
+				}else if( m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp &&
+					(pWork->pLayout->GetBracketStateEnd() != pWork->pLayout->GetNextLayout()->GetBracketStateBegin() ||
+					 pWork->pLayout->GetBracketStateEnd() != pWork->bracketState) ){
 					pWork->bNeedChangeCOMMENTMODE = true;
 				}else{
 					break;

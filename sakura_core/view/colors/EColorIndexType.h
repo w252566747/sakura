@@ -81,6 +81,13 @@ enum EColorIndexType {
 	COLORIDX_DIFF_DELETE,	//!< DIFF追加  //@@@ 2002.06.01 MIK
 	COLORIDX_MARK,			//!< ブックマーク  // 02/10/16 ai Add
 	COLORIDX_PAGEVIEW,		//!< 表示範囲(ミニマップ)  // 2014.07.14 Add
+	COLORIDX_RAINBOW_BRACKET_ENABLE, //!< 括弧の色分け有効/無効
+	COLORIDX_RAINBOW_BRACKET1, //!< 括弧の色分けレベル1
+	COLORIDX_RAINBOW_BRACKET2, //!< 括弧の色分けレベル2
+	COLORIDX_RAINBOW_BRACKET3, //!< 括弧の色分けレベル3
+	COLORIDX_RAINBOW_BRACKET4, //!< 括弧の色分けレベル4
+	COLORIDX_RAINBOW_BRACKET5, //!< 括弧の色分けレベル5
+	COLORIDX_RAINBOW_BRACKET6, //!< 括弧の色分けレベル6
 
 	//カラーの最後
 	COLORIDX_LAST,			//!< カラーの最後

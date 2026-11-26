@@ -7,6 +7,7 @@
 */
 
 #include "StdAfx.h"
+#include <algorithm>
 #include <vector>
 #include <limits.h>
 #pragma comment(lib, "Msimg32.lib")
@@ -32,6 +33,39 @@
 #endif
 
 void _DispWrap(CGraphics& gr, DispPos* pDispPos, const CEditView* pcView, CLayoutYInt nLineNum);
+
+namespace {
+void DrawCurlSyntaxLineMarker(CGraphics& gr, const CEditView* view, const CLayout* layout, int y)
+{
+	const CEditDoc* document = view->GetDocument();
+	if (!layout || layout->GetLogicOffset() != CLogicInt(0) || !document || document->m_bCurlSyntaxResultStale ||
+		!GetEditWnd().IsCurlSyntaxDocument()) return;
+	const int line = static_cast<int>(layout->GetLogicLineNo()) + 1;
+	const auto& diagnostics = document->m_vCurlSyntaxDiagnostics;
+	const auto it = std::lower_bound(diagnostics.begin(), diagnostics.end(), line,
+		[](const curlsyntax::Diagnostic& diagnostic, int value) { return diagnostic.line < value; });
+	if (it == diagnostics.end() || it->line != line) return;
+	const auto lineEnd = std::upper_bound(it, diagnostics.end(), line,
+		[](int value, const curlsyntax::Diagnostic& diagnostic) { return value < diagnostic.line; });
+	const bool hasError = std::any_of(it, lineEnd, [](const curlsyntax::Diagnostic& diagnostic) {
+		return diagnostic.severity == curlsyntax::Severity::Error;
+	});
+	const int x = view->GetTextArea().GetLineNumberWidth() + DpiScaleX(1);
+	const int top = y + DpiScaleY(4);
+	const int saved = ::SaveDC(gr);
+	if (saved == 0) return;
+	HBRUSH brush = ::CreateSolidBrush(hasError ? RGB(220, 45, 45) : RGB(235, 165, 35));
+	if (brush) {
+		const HGDIOBJ oldBrush = ::SelectObject(gr, brush);
+		const HGDIOBJ oldPen = ::SelectObject(gr, ::GetStockObject(NULL_PEN));
+		::Ellipse(gr, x, top, x + DpiScaleX(7), top + DpiScaleY(7));
+		::SelectObject(gr, oldPen);
+		::SelectObject(gr, oldBrush);
+		::DeleteObject(brush);
+	}
+	::RestoreDC(gr, saved);
+}
+}
 
 /*
 	PAINT_LINENUMBER = (1<<0), //!< 行番号
@@ -417,6 +451,9 @@ CColor3Setting CEditView::GetColorIndex(
 	//color strategy
 	CColorStrategyPool* pool = CColorStrategyPool::getInstance();
 	pInfo->m_pStrategy = pool->GetStrategyByColor(eRet);
+	pInfo->m_pStrategyFound = nullptr;
+	pInfo->m_pStrategyMarker = nullptr;
+	pInfo->m_pStrategySelect = nullptr;
 	if(pInfo->m_pStrategy){
 		pInfo->m_pStrategy->InitStrategyStatus();
 		pInfo->m_pStrategy->SetStrategyColorInfo(colorInfo);
@@ -458,7 +495,9 @@ CColor3Setting CEditView::GetColorIndex(
 
 	@date 2013.05.08 novice 範囲外チェック削除
 */
-void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex,  EColorIndexType eColorIndex2, EColorIndexType eColorIndexBg)
+void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex, EColorIndexType eColorIndex2,
+	EColorIndexType eColorIndexBg, bool hasDirectBackColor, COLORREF directBackColor,
+	bool hasDirectForeColor, COLORREF directForeColor)
 {
 	//インデックス決定
 	int		nColorIdx = ToColorInfoArrIndex(eColorIndex);
@@ -470,10 +509,12 @@ void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex,  EC
 	const ColorInfo& info2 = m_pTypeData->m_ColorInfoArr[nColorIdx2];
 	const ColorInfo& infoBg = m_pTypeData->m_ColorInfoArr[nColorIdxBg];
 	COLORREF fgcolor = GetTextColorByColorInfo2(info, info2);
+	if (hasDirectForeColor) fgcolor = directForeColor;
 	gr.SetTextForeColor(fgcolor);
 	// 2012.11.21 背景色がテキストとおなじなら背景色はカーソル行背景
 	const ColorInfo& info3 = (info2.m_sColorAttr.m_cBACK == m_crBack ? infoBg : info2);
 	COLORREF bkcolor = (nColorIdx == nColorIdx2) ? info3.m_sColorAttr.m_cBACK : GetBackColorByColorInfo2(info, info3);
+	if (hasDirectBackColor && nColorIdx == nColorIdx2) bkcolor = directBackColor;
 	gr.SetTextBackColor(bkcolor);
 	SFONT sFont;
 	sFont.m_sFontAttr = (info.m_sColorAttr.m_cTEXT != info.m_sColorAttr.m_cBACK) ? info.m_sFontAttr : info2.m_sFontAttr;
@@ -768,6 +809,7 @@ void CEditView::OnPaint2( HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp
 				sPos.GetLayoutLineRef(),
 				sPos.GetDrawPos().y
 			);
+			DrawCurlSyntaxLineMarker(gr, this, sPos.GetLayoutRef(), sPos.GetDrawPos().y);
 			//行を進める
 			sPos.ForwardDrawLine(1);		//描画Y座標＋＋
 			sPos.ForwardLayoutLineRef(1);	//レイアウト行＋＋
@@ -913,7 +955,9 @@ bool CEditView::DrawLogicLine(
 			}
 		}else{
 			CColor3Setting cColor = GetColorIndex(pcLayout, pInfo->m_pDispPos->GetLayoutLineRef(), 0, pInfo, true);
-			SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+			SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+				cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor,
+				cColor.hasDirectTextForeColor, cColor.directTextForeColor);
 		}
 	}
 
@@ -997,7 +1041,9 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 			}
 			if( bChange ){
 				pInfo->DoChangeColor(&cColor);
-				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+					cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor,
+					cColor.hasDirectTextForeColor, cColor.directTextForeColor);
 			}
 		}
 		return false;
@@ -1032,6 +1078,7 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 		pInfo->m_pDispPos->GetLayoutLineRef(),
 		pInfo->m_pDispPos->GetDrawPos().y
 	);
+	DrawCurlSyntaxLineMarker(pInfo->m_gr, this, pcLayout, pInfo->m_pDispPos->GetDrawPos().y);
 
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 	//                       本文描画開始                          //
@@ -1105,7 +1152,9 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 				}
 				CColor3Setting cColor;
 				pInfo->DoChangeColor(&cColor);
-				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+					cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor,
+					cColor.hasDirectTextForeColor, cColor.directTextForeColor);
 			}
 
 			if (is_text && CFigure_Text::IsRenderType_Block(nextRenderType)){
@@ -1183,6 +1232,59 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 					}
 				}
 			}
+		}
+	}
+
+	// Curl 構文診断は本文色や選択色を変更せず、可視レイアウト行に波線だけを重ねる。
+	if (pcLayout && !m_bMiniMap && !m_pcEditDoc->m_bCurlSyntaxResultStale &&
+		GetEditWnd().IsCurlSyntaxDocument()) {
+		const int logicLine = static_cast<int>(pcLayout->GetLogicLineNo()) + 1;
+		const int logicOffset = static_cast<int>(pcLayout->GetLogicOffset());
+		const int layoutLength = static_cast<int>(pcLayout->GetLengthWithoutEOL());
+		const int logicEnd = logicOffset + layoutLength;
+		const int lineHeight = GetTextMetrics().GetHankakuDy();
+		const int viewLeft = static_cast<int>(GetTextArea().GetViewLeftCol());
+		const int baseLayoutX = static_cast<int>(pcLayout->GetIndent());
+		const int drawY = static_cast<int>(pInfo->m_pDispPos->GetDrawPos().y) + lineHeight - 2;
+		const auto& diagnostics = m_pcEditDoc->m_vCurlSyntaxDiagnostics;
+		const auto firstDiagnostic = std::lower_bound(diagnostics.begin(), diagnostics.end(), logicLine,
+			[](const curlsyntax::Diagnostic& diagnostic, int line) { return diagnostic.line < line; });
+		for (auto it = firstDiagnostic; it != diagnostics.end() && it->line == logicLine; ++it) {
+			const auto& diagnostic = *it;
+			const int logicColumn = diagnostic.column - 1;
+			if (logicColumn < logicOffset || logicColumn > logicEnd) continue;
+			if (logicColumn == logicEnd && pcLayout->GetNextLayout() &&
+				pcLayout->GetNextLayout()->GetLogicLineNo() == pcLayout->GetLogicLineNo()) continue;
+			const int localColumn = logicColumn - logicOffset;
+			const auto* lineText = pcLayout->GetPtr();
+			const int layoutX = baseLayoutX + static_cast<int>(m_pcEditDoc->m_cLayoutMgr.GetLayoutXOfChar(
+				lineText, layoutLength, localColumn));
+			const int nextLayoutX = localColumn < layoutLength
+				? baseLayoutX + static_cast<int>(m_pcEditDoc->m_cLayoutMgr.GetLayoutXOfChar(lineText, layoutLength, localColumn + 1))
+				: layoutX + static_cast<int>(GetTextMetrics().GetLayoutXDefault());
+			const int x1 = static_cast<int>(GetTextArea().GetAreaLeft()) +
+				static_cast<int>(GetTextMetrics().GetCharPxWidth(CLayoutXInt(layoutX - viewLeft)));
+			const int x2 = static_cast<int>(GetTextArea().GetAreaLeft()) +
+				static_cast<int>(GetTextMetrics().GetCharPxWidth(CLayoutXInt(nextLayoutX - viewLeft)));
+			const int left = std::max(x1, static_cast<int>(GetTextArea().GetAreaLeft()));
+			const int right = std::min(std::max(x2, x1 + 4), static_cast<int>(GetTextArea().GetAreaRight()));
+			if (right <= left) continue;
+			const int saved = ::SaveDC(pInfo->m_gr);
+			if (saved == 0) continue;
+			const COLORREF waveColor = diagnostic.severity == curlsyntax::Severity::Error
+				? RGB(220, 40, 40) : RGB(235, 165, 35);
+			HPEN pen = ::CreatePen(PS_SOLID, 1, waveColor);
+			if (pen) {
+				const HGDIOBJ oldPen = ::SelectObject(pInfo->m_gr, pen);
+				::MoveToEx(pInfo->m_gr, left, drawY, nullptr);
+				for (int x = left; x < right; x += 2) {
+					const int end = std::min(x + 2, right);
+					::LineTo(pInfo->m_gr, end, drawY + (((x - left) / 2) % 2));
+				}
+				::SelectObject(pInfo->m_gr, oldPen);
+				::DeleteObject(pen);
+			}
+			::RestoreDC(pInfo->m_gr, saved);
 		}
 	}
 

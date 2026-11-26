@@ -10,6 +10,7 @@
 #pragma once
 
 #include "recent/CRecentSearch.h"
+#include <vector>
 
 class CEditWnd;
 class CImageListMgr;
@@ -39,6 +40,7 @@ public:
 	HWND GetToolbarHwnd() const{ return m_hwndToolBar; }
 	HWND GetRebarHwnd() const{ return m_hwndReBar; }
 	HWND GetSearchHwnd() const{ return m_hwndSearchBox; }
+	bool GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, WCHAR* buffer, size_t bufferSize) const;
 	size_t GetSearchKey(std::wstring& buffer); //!< 検索キーを取得。戻り値は検索キーの文字数。
 
 	//操作
@@ -46,6 +48,12 @@ public:
 
 private:
 	static LRESULT CALLBACK ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData );
+	void RefreshMarkerControls();
+	void RefreshCurlSyntaxControl();
+	void UpdateMarkerVisibility();
+	void LayoutMarkerControls();
+	void HandleMarkerControl(UINT controlId);
+	void HandleMarkerColorChange(UINT controlId);
 
 	CEditWnd*	m_pOwner;
 	HWND		m_hwndToolBar = nullptr;
@@ -53,6 +61,25 @@ private:
 	//子ウィンドウ
 	HWND		m_hwndReBar = nullptr;		//!< Rebar ウィンドウ	//@@@ 2006.06.17 ryoji
 	HWND		m_hwndSearchBox = nullptr;	//!< 検索コンボボックス
+	HWND		m_hwndEnhancementToolBar = nullptr;
+	HIMAGELIST	m_hEnhancementImageList = nullptr;
+	int		m_nEnhancementMarkerStart = -1;
+	std::vector<int>		m_markerButtonWidths;
+	int		m_markerAutoButtonWidth = 0;
+	int		m_markerClearButtonWidth = 0;
+	int		m_markerOverflowButtonWidth = 0;
+	int		m_nLastMarkerAvailableWidth = -1;
+	size_t		m_nVisibleMarkerCount = static_cast<size_t>(-1);
+	std::wstring	m_markerOverflowLabel;
+	COLORREF	m_markerAutoColor = 0;
+	bool		m_bCurlSyntaxControlInitialized = false;
+	bool		m_bCurlSyntaxSupported = false;
+	bool		m_bCurlSyntaxEnabled = false;
+	std::vector<std::wstring>		m_markerButtonWords;
+	std::vector<COLORREF>		m_markerButtonBackColors;
+	std::vector<bool>		m_markerButtonEnabled;
+	std::wstring		m_markerAutoWord;
+	bool		m_markerAutoButtonVisible = false;
 
 	//フォント
 	HFONT		m_hFontSearchBox = nullptr;	//!< 検索コンボボックスのフォント

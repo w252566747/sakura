@@ -286,6 +286,11 @@ void PrintTo(EFunctionCode eFuncCode, std::ostream* os)
 	case F_CHGMOD_EOL_PS: *os << "F_CHGMOD_EOL_PS"; break;
 	case F_CHGMOD_EOL_LS: *os << "F_CHGMOD_EOL_LS"; break;
 	case F_CANCEL_MODE: *os << "F_CANCEL_MODE"; break;
+	case F_CURL_SYNTAX_TOGGLE: *os << "F_CURL_SYNTAX_TOGGLE"; break;
+	case F_CURL_SYNTAX_RUN: *os << "F_CURL_SYNTAX_RUN"; break;
+	case F_CURL_SYNTAX_ERRORS: *os << "F_CURL_SYNTAX_ERRORS"; break;
+	case F_CURL_SYNTAX_NEXT: *os << "F_CURL_SYNTAX_NEXT"; break;
+	case F_CURL_SYNTAX_PREV: *os << "F_CURL_SYNTAX_PREV"; break;
 	case F_SHOWTOOLBAR: *os << "F_SHOWTOOLBAR"; break;
 	case F_SHOWFUNCKEY: *os << "F_SHOWFUNCKEY"; break;
 	case F_SHOWSTATUSBAR: *os << "F_SHOWSTATUSBAR"; break;

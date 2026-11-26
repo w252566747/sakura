@@ -22,6 +22,7 @@
 
 #include "StdAfx.h"
 #include "prop/CPropCommon.h"
+#include "view/colors/CWordMarker.h"
 #include "env/CShareData.h"
 #include "env/DLLSHAREDATA.h"
 #include "env/CDocTypeManager.h"
@@ -290,6 +291,8 @@ INT_PTR CPropCommon::DoPropertySheet( int nPageNum, bool bTrayProc )
 void CPropCommon::InitData( const int* tempTypeKeywordSet, const WCHAR* name, const WCHAR* exts )
 {
 	m_Common = m_pShareData->m_Common;
+	m_bWordMarkerAutomaticEnabled = CWordMarker::Instance().IsAutomaticEnabled();
+	m_addedWordCharacters = CWordMarker::Instance().AddedWordCharacters();
 	m_tempTypeName[0] = L'\0';
 	m_tempTypeExts[0] = L'\0';
 
@@ -326,6 +329,8 @@ void CPropCommon::InitData( const int* tempTypeKeywordSet, const WCHAR* name, co
 void CPropCommon::ApplyData( int* tempTypeKeywordSet )
 {
 	m_pShareData->m_Common = m_Common;
+	CWordMarker::Instance().SetAutomaticEnabled(m_bWordMarkerAutomaticEnabled);
+	CWordMarker::Instance().SetAddedWordCharacters(m_addedWordCharacters);
 
 	int i;
 	const int nSize = (int)m_Types_nKeyWordSetIdx.size();

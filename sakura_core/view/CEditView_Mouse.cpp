@@ -43,6 +43,7 @@
 #include "charset/CCodeFactory.h"
 #include "apiwrap/StdApi.h"
 #include "CSelectLang.h"
+#include "view/colors/CWordMarker.h"
 #include "mem/CNativeA.h"
 #include "sakura_rc.h"
 #include "config/system_constants.h"
@@ -74,6 +75,27 @@ void CEditView::OnLBUTTONDOWN( WPARAM fwKeys, int _xPos , int _yPos )
 		m_bMiniMapMouseDown = true;
 		OnMOUSEMOVE( fwKeys, _xPos, _yPos );
 		return;
+	}
+	const int syntaxMarkerLeft = GetTextArea().GetLineNumberWidth() + DpiScaleX(1);
+	if (m_pcEditDoc && !m_pcEditDoc->m_bCurlSyntaxResultStale && GetEditWnd().IsCurlSyntaxDocument()
+		&& _xPos >= syntaxMarkerLeft && _xPos < syntaxMarkerLeft + DpiScaleX(7)) {
+		CLayoutPoint markerLayout;
+		GetTextArea().ClientToLayout(ptMouse, &markerLayout);
+		const int rowTop = GetTextArea().GetAreaTop() +
+			(static_cast<int>(markerLayout.y - GetTextArea().GetViewTopLine()) * GetTextMetrics().GetHankakuDy());
+		if (_yPos >= rowTop + DpiScaleY(4) && _yPos < rowTop + DpiScaleY(11)) {
+			CLogicPoint markerLogic;
+			m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(markerLayout, &markerLogic);
+			const int line = static_cast<int>(markerLogic.y) + 1;
+			const auto& diagnostics = m_pcEditDoc->m_vCurlSyntaxDiagnostics;
+			for (size_t i = 0; i < diagnostics.size(); ++i) {
+				if (diagnostics[i].line == line) {
+					GetEditWnd().SetActivePane(m_nMyIndex);
+					GetEditWnd().GoToCurlSyntaxDiagnostic(i);
+					return;
+				}
+			}
+		}
 	}
 
 	const wchar_t*	pLine;
@@ -326,7 +348,7 @@ normal_action:;
 			GetSelectionInfo().m_bBeginWordSelect = true;		/* 単語単位選択中 */
 			if( !GetSelectionInfo().IsTextSelected() ){
 				/* 現在位置の単語選択 */
-				if ( GetCommander().Command_SELECTWORD( &ptNewCaret ) ){
+				if ( GetCommander().Command_SELECTWORD( &ptNewCaret, true ) ){
 					bSelectWord = true;
 					GetSelectionInfo().m_sSelectBgn = GetSelectionInfo().m_sSelect;
 				}
@@ -350,7 +372,8 @@ normal_action:;
 						nIdx,
 						&sRange,
 						nullptr,
-						nullptr
+						nullptr,
+						true
 					);
 					if( bWhareResult ){
 						// 指定された行のデータ内の位置に対応する桁の位置を調べる。
@@ -378,7 +401,7 @@ normal_action:;
 					nIdx = LineColumnToIndex( pcLayout, GetSelectionInfo().m_sSelect.GetTo().GetX2() );
 					/* 現在位置の単語の範囲を調べる */
 					if( m_pcEditDoc->m_cLayoutMgr.WhereCurrentWord(
-						GetSelectionInfo().m_sSelect.GetTo().GetY2(), nIdx, &sRange, nullptr, nullptr )
+						GetSelectionInfo().m_sSelect.GetTo().GetY2(), nIdx, &sRange, nullptr, nullptr, true )
 					){
 						// 指定された行のデータ内の位置に対応する桁の位置を調べる
 						// 2007.10.15 kobake 既にレイアウト単位なので変換は不要
@@ -1021,6 +1044,9 @@ void CEditView::OnMOUSEMOVE( [[maybe_unused]] WPARAM fwKeys, int xPos_, int yPos
 		/* 現在のマウスカーソル位置→レイアウト位置 */
 		CLayoutPoint ptNew;
 		GetTextArea().ClientToLayout(ptMouse, &ptNew);
+		POINT syntaxTipPoint{ ptMouse.x, ptMouse.y };
+		::ClientToScreen(GetHwnd(), &syntaxTipPoint);
+		GetEditWnd().UpdateCurlSyntaxHover(ptNew, syntaxTipPoint);
 
 		CLogicRange	cUrlRange;	//URL範囲
 
@@ -1185,7 +1211,8 @@ void CEditView::OnMOUSEMOVE( [[maybe_unused]] WPARAM fwKeys, int xPos_, int yPos
 						LineColumnToIndex( pLayout, ptNewCursor.x ),
 						&sWord,
 						nullptr,
-						nullptr
+						nullptr,
+						true
 					);
 				}
 
@@ -1486,6 +1513,14 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 		GetCaret().ShowCaret_( GetHwnd() ); // 2002/07/22 novice
 
 		GetSelectionInfo().SelectEnd();
+		if (GetSelectionInfo().IsTextSelected()) {
+			CNativeW selected;
+			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+				CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
+				Redraw();
+				GetEditWnd().UpdateMarkerToolbar();
+			}
+		}
 
 		// 20100715 Moca マウスクリック座標をリセット
 		m_cMouseDownPos.Set(-INT_MAX, -INT_MAX);
@@ -1608,12 +1643,50 @@ void CEditView::OnLBUTTONDBLCLK( WPARAM fwKeys, int _xPos , int _yPos )
 		}
 	}
 
+	if ((nIdx & _CTRL) != 0 && nFuncID == F_SELECTWORD) {
+		GetCommander().Command_SELECTWORD(nullptr, true);
+	}
+	if ((nIdx & _CTRL) == 0 && GetSelectionInfo().IsTextSelected()) {
+		CNativeW selected;
+		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
+			Redraw();
+			GetEditWnd().UpdateMarkerToolbar();
+		}
+	}
+	// Ctrl+double-click toggles the selected token before a custom mouse command can change it.
+	if ((nIdx & _CTRL) != 0 && nFuncID == F_SELECTWORD && GetSelectionInfo().IsTextSelected()) {
+		CNativeW selected;
+		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			const auto& colors = GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
+			std::vector<unsigned> markerColors;
+			for (int color = COLORIDX_SEARCH + 1; color <= COLORIDX_SEARCHTAIL; ++color) {
+				const auto& attr = colors[color].m_sColorAttr;
+				if (attr.m_cTEXT != attr.m_cBACK) markerColors.push_back(static_cast<unsigned>(color - COLORIDX_SEARCH));
+			}
+			const unsigned markerColor = CWordMarker::Instance().NextColor(markerColors);
+			if (CWordMarker::Instance().Toggle(std::wstring(selected.GetStringPtr(), selected.GetStringLength()), markerColor)) {
+				Redraw();
+				GetEditWnd().UpdateMarkerToolbar();
+			}
+		}
+	}
 	if( nFuncID != 0 ){
 		/* コマンドコードによる処理振り分け */
 		//	May 19, 2006 genta マウスからのメッセージはCMD_FROM_MOUSEを上位ビットに入れて送る
+		const bool previousWordExpansion = m_bExpandAddedWordCharactersForMouse;
+		m_bExpandAddedWordCharactersForMouse = nFuncID == F_SELECTWORD;
 		::SendMessageCmd( ::GetParent( m_hwndParent ), WM_COMMAND, MAKELONG( nFuncID, CMD_FROM_MOUSE ),  (LPARAM)nullptr );
+		m_bExpandAddedWordCharactersForMouse = previousWordExpansion;
 	}
-
+	if ((nIdx & _CTRL) == 0 && nFuncID == F_SELECTWORD && GetSelectionInfo().IsTextSelected()) {
+		CNativeW selected;
+		if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {
+			CWordMarker::Instance().SetAutomatic(GetDocument(), std::wstring(selected.GetStringPtr(), selected.GetStringLength()));
+			Redraw();
+			GetEditWnd().UpdateMarkerToolbar();
+		}
+	}
 	// 2007.10.06 nasukoji	クアドラプルクリック時もここで抜ける
 	if(m_dwTripleClickCheck){
 		m_dwTripleClickCheck = 0;	// トリプルクリックチェック OFF（次回は通常クリック）

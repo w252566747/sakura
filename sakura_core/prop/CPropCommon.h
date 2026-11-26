@@ -25,6 +25,7 @@
 
 #include "func/CFuncLookup.h"
 #include "env/CommonSetting.h"
+#include <string>
 
 struct DLLSHAREDATA;
 class CImageListMgr;
@@ -111,6 +112,8 @@ public:
 	|| ダイアログデータ
 	*/
 	CommonSetting	m_Common;
+	bool				m_bWordMarkerAutomaticEnabled = true;
+	std::wstring		m_addedWordCharacters = L"_-";
 
 	// 2005.01.13 MIK セット数増加
 	struct SKeywordSetIndex{

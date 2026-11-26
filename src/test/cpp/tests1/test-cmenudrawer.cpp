@@ -59,6 +59,7 @@ TEST_F(CMenuDrawerTest, ToolbarButtonStateComesFromItsOwnFuncCode)
 		{  53, F_LTRIM,				true  },
 		{ 403, EFunctionCode(F_USERMACRO_0 + 49),
 									true  },	//!< 実コマンドの最後(外部マクロ50)。修正前は無効になっていた
+		{ 480, F_CURL_SYNTAX_TOGGLE, true },	//!< Curl checker is available to the toolbar customizer
 		{ 481, F_DISABLE,			false },	//!< tbd[]の最終要素。修正前はtbd[481]という範囲外を読んでいた
 	};
 
@@ -120,8 +121,13 @@ TEST_F(CMenuDrawerTest, IconIndexIsAssignedOnlyToRealCommands)
 		}
 		const auto button = drawer.getButton(toolbarNo);
 		if (F_DUMMY_MAX_CODE < button.idCommand) {
-			// アイコン番号はツールバー番号から、セパレータの分だけずれる
-			EXPECT_EQ(button.iBitmap, toolbarNo - 1) << "toolbarNo = " << toolbarNo;
+			if (toolbarNo == 480) {
+				const auto bookmarkIcon = drawer.getButton(drawer.FindToolbarNoFromCommandId(F_BOOKMARK_SET)).iBitmap;
+				EXPECT_EQ(button.iBitmap, bookmarkIcon) << "toolbarNo = " << toolbarNo;
+			} else {
+				// アイコン番号はツールバー番号から、セパレータの分だけずれる
+				EXPECT_EQ(button.iBitmap, toolbarNo - 1) << "toolbarNo = " << toolbarNo;
+			}
 		}
 		else {
 			EXPECT_EQ(button.iBitmap, -1) << "toolbarNo = " << toolbarNo;

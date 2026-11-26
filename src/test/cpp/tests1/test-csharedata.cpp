@@ -258,6 +258,7 @@ const std::set<int> popupFuncCodes = {
 	F_TOOL_CUSTOM_SUBMENU,
 	F_CHGMOD_EOL_SUBMENU,
 	F_TAB_MANIP_SUBMENU,
+	F_CURL_SYNTAX_SUBMENU,
 	F_WINDOW_LIST_SUBMENU,
 };
 
@@ -866,6 +867,8 @@ MATCHER(IsInitializedCommonSettingToolBar, "Checks if CommonSetting_ToolBar is p
 		0,		//F_SEPARATOR,
 
 		346,	//F_MENU_ALLFUNC,			//コマンド一覧
+		0,		//F_SEPARATOR,
+		289,	//Word Marker management via right-click menu
 	};
 
 	EXPECT_THAT(sToolBar.m_nToolBarButtonNum, std::size(defaultTools));
@@ -1354,6 +1357,13 @@ MATCHER(IsInitializedCommonSettingMainMenu, "Checks if CommonSetting_MainMenu is
 		SMenuItem{ 1, 31254, 'E' },
 		SMenuItem{ 1, 1 },
 		SMenuItem{ 1, 31270, 'X' },
+		SMenuItem{ 1, 1 },
+		SMenuItem{ 1, 34061, 'C' },
+		SMenuItem{ 2, 31570, 'R' },
+		SMenuItem{ 2, 31571, 'R' },
+		SMenuItem{ 2, 31572, 'E' },
+		SMenuItem{ 2, 31573, 'N' },
+		SMenuItem{ 2, 31574, 'P' },
 		SMenuItem{ 1, 30170, 'P' },
 		SMenuItem{ 1, 30171, 'S' },
 		SMenuItem{ 1, 1 },
@@ -1466,9 +1476,9 @@ MATCHER(IsInitializedCommonSettingMainMenu, "Checks if CommonSetting_MainMenu is
 		168,
 		199,
 		239,
-		258,
-		286,
-		326,
+		265,
+		293,
+		333,
 	};
 
 	for (size_t i = 0; i < std::size(mainMenuTopIdxs); ++i) {

@@ -209,6 +209,7 @@ BOOL CDlgAbout::OnInitDialog( HWND hwndDlg, WPARAM wParam, LPARAM lParam )
 		cFileTime->wMinute,
 		cFileTime->wSecond
 	);
+	cmemMsg.AppendString( L"      Custom enhancement build: Word Marker\r\n" );
 
 	// パッチの情報をコンパイル時に渡せるようにする
 #ifdef SKR_PATCH_INFO

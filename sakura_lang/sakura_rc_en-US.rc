@@ -4043,6 +4043,13 @@ BEGIN
     STR_COLOR_BOOKMARK      "Bookmark"
     STR_COLOR_NOTE_LINE     "Note Line"
     STR_COLOR_PAGEVIEW      "View Range(Minimap)"
+    STR_COLOR_RAINBOW_BRACKET_ENABLE "Enable rainbow brackets"
+    STR_COLOR_RAINBOW_BRACKET1 "Bracket color (level 1)"
+    STR_COLOR_RAINBOW_BRACKET2 "Bracket color (level 2)"
+    STR_COLOR_RAINBOW_BRACKET3 "Bracket color (level 3)"
+    STR_COLOR_RAINBOW_BRACKET4 "Bracket color (level 4)"
+    STR_COLOR_RAINBOW_BRACKET5 "Bracket color (level 5)"
+    STR_COLOR_RAINBOW_BRACKET6 "Bracket color (level 6)"
     STR_ERR_CSPLITTER01     "SplitterWnd class registration failed."
 END
 

@@ -138,6 +138,10 @@ INT_PTR CPropGeneral::DispatchEvent(
 		/* ボタン／チェックボックスがクリックされた */
 		case BN_CLICKED:
 			switch( wID ){
+			case IDC_BUTTON_WORD_CHARS_RESET:
+				::SetDlgItemTextW(hwndDlg, IDC_EDIT_ADDED_WORD_CHARS, L"");
+				::SetFocus(::GetDlgItem(hwndDlg, IDC_EDIT_ADDED_WORD_CHARS));
+				return TRUE;
 
 			case IDC_CHECK_USETRAYICON:	/* タスクトレイを使う */
 			// From Here 2001.12.03 hor
@@ -290,6 +294,9 @@ void CPropGeneral::SetData( HWND hwndDlg )
 
 	/* フリーカーソルモード */
 	::CheckDlgButton( hwndDlg, IDC_CHECK_FREECARET, m_Common.m_sGeneral.m_bIsFreeCursorMode ? 1 : 0 );
+	::CheckDlgButton( hwndDlg, IDC_CHECK_WORDMARKER_AUTO, m_bWordMarkerAutomaticEnabled ? BST_CHECKED : BST_UNCHECKED );
+	::SetDlgItemTextW(hwndDlg, IDC_EDIT_ADDED_WORD_CHARS, m_addedWordCharacters.c_str());
+	::SendMessageW(::GetDlgItem(hwndDlg, IDC_EDIT_ADDED_WORD_CHARS), EM_SETLIMITTEXT, 64, 0);
 
 	/* 単語単位で移動するときに、単語の両端で止まるか */
 	::CheckDlgButton( hwndDlg, IDC_CHECK_STOPS_BOTH_ENDS_WHEN_SEARCH_WORD, m_Common.m_sGeneral.m_bStopsBothEndsWhenSearchWord );
@@ -382,6 +389,10 @@ int CPropGeneral::GetData( HWND hwndDlg )
 
 	/* フリーカーソルモード */
 	m_Common.m_sGeneral.m_bIsFreeCursorMode = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_FREECARET ) != 0;
+	m_bWordMarkerAutomaticEnabled = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_WORDMARKER_AUTO ) != 0;
+	WCHAR addedWordCharacters[65] = {};
+	::GetDlgItemTextW(hwndDlg, IDC_EDIT_ADDED_WORD_CHARS, addedWordCharacters, static_cast<int>(std::size(addedWordCharacters)));
+	m_addedWordCharacters = addedWordCharacters;
 
 	/* 単語単位で移動するときに、単語の両端で止まるか */
 	m_Common.m_sGeneral.m_bStopsBothEndsWhenSearchWord = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_STOPS_BOTH_ENDS_WHEN_SEARCH_WORD );

@@ -319,7 +319,7 @@ BOOL CViewCommander::HandleCommand(
 	case F_MODIFYLINE_PREV:	Command_MODIFYLINE_PREV( m_pCommanderView->GetSelectionInfo().m_bSelectingLock ); break;	// 前の変更行へ
 
 	/* 選択系 */
-	case F_SELECTWORD:		Command_SELECTWORD();break;						//現在位置の単語選択
+	case F_SELECTWORD:		Command_SELECTWORD(nullptr, m_pCommanderView->m_bExpandAddedWordCharactersForMouse);break;						//現在位置の単語選択
 	case F_SELECTALL:		Command_SELECTALL();break;						//すべて選択
 	case F_SELECTLINE:		Command_SELECTLINE( lparam1 );break;			//1行選択	// 2007.10.13 nasukoji
 	case F_BEGIN_SEL:		Command_BEGIN_SELECT();break;					/* 範囲選択開始 */
@@ -493,6 +493,21 @@ BOOL CViewCommander::HandleCommand(
 
 	/* 設定系 */
 	case F_SHOWTOOLBAR:		Command_SHOWTOOLBAR();break;	/* ツールバーの表示/非表示 */
+	case F_CURL_SYNTAX_TOGGLE:
+		GetEditWindow()->SetCurlSyntaxRealtime(!curlsyntax::IsRealtimeEnabled());
+		break;
+	case F_CURL_SYNTAX_RUN:
+		GetEditWindow()->RunCurlSyntaxCheckNow();
+		break;
+	case F_CURL_SYNTAX_ERRORS:
+		GetEditWindow()->ToggleCurlSyntaxErrorList();
+		break;
+	case F_CURL_SYNTAX_NEXT:
+		GetEditWindow()->NavigateCurlSyntaxError(true);
+		break;
+	case F_CURL_SYNTAX_PREV:
+		GetEditWindow()->NavigateCurlSyntaxError(false);
+		break;
 	case F_SHOWFUNCKEY:		Command_SHOWFUNCKEY();break;	/* ファンクションキーの表示/非表示 */
 	case F_SHOWTAB:			Command_SHOWTAB();break;		/* タブの表示/非表示 */	//@@@ 2003.06.10 MIK
 	case F_SHOWSTATUSBAR:	Command_SHOWSTATUSBAR();break;	/* ステータスバーの表示/非表示 */

@@ -23,6 +23,7 @@ struct DispPos;
 class CColorStrategy;
 class CColor_Found;
 class CColor_Select;
+class CColor_WordMarker;
 class CColor_LineComment;
 class CColor_BlockComment;
 class CColor_SingleQuote;
@@ -75,6 +76,10 @@ struct CColor3Setting {
 	EColorIndexType eColorIndex;    //!< 選択を含む現在の色
 	EColorIndexType eColorIndex2;   //!< 選択以外の現在の色
 	EColorIndexType eColorIndexBg;  //!< 背景色
+	bool hasDirectMarkerBackColor = false;
+	COLORREF directMarkerBackColor = 0;
+	bool hasDirectTextForeColor = false;
+	COLORREF directTextForeColor = 0;
 };
 
 struct SColorStrategyInfo{
@@ -98,9 +103,12 @@ struct SColorStrategyInfo{
 	//色変え
 	CColorStrategy*		m_pStrategy = nullptr;
 	CColor_Found*		m_pStrategyFound = nullptr;
+	CColor_WordMarker*	m_pStrategyMarker = nullptr;
 	CColor_Select*		m_pStrategySelect = nullptr;
 	EColorIndexType		m_colorIdxBackLine = COLORIDX_TEXT;
 	CColor3Setting		m_cIndex = { COLORIDX_TEXT, COLORIDX_TEXT, COLORIDX_TEXT };
+	EColorIndexType m_rainbowBracketColor = COLORIDX_TEXT;
+	bool m_hasRainbowBracketColor = false;
 
 	//! 色の切り替え
 	bool CheckChangeColor(const CStringRef& cLineStr);
@@ -183,6 +191,7 @@ public:
 
 	//特定取得
 	CColor_Found*   GetFoundStrategy()  const noexcept { return m_pcFoundStrategy; }
+	CColor_WordMarker* GetMarkerStrategy() const noexcept { return m_pcMarkerStrategy; }
 	CColor_Select*  GetSelectStrategy() const noexcept { return m_pcSelectStrategy; }
 
 	//イベント
@@ -210,6 +219,7 @@ private:
 	std::vector<CColorStrategy*>	m_vStrategies;
 	std::vector<CColorStrategy*>	m_vStrategiesDisp;	//!< 色分け表示対象
 	CColor_Found*					m_pcFoundStrategy = nullptr;
+	CColor_WordMarker*			m_pcMarkerStrategy = nullptr;
 	CColor_Select*					m_pcSelectStrategy = nullptr;
 
 	// 範囲を持つ色分け

@@ -186,7 +186,7 @@ public:
 	void Command_MODIFYLINE_PREV( bool bSelect );	// 前の変更行へ
 
 	/* 選択系 */
-	bool Command_SELECTWORD( CLayoutPoint* pptCaretPos = nullptr );		/* 現在位置の単語選択 */
+	bool Command_SELECTWORD( CLayoutPoint* pptCaretPos = nullptr, bool expandAddedWordCharacters = false );		/* 現在位置の単語選択 */
 	void Command_SELECTALL( void );			/* すべて選択 */
 	void Command_SELECTLINE(LPARAM lparam1);	/* 1行選択 */	// 2007.10.13 nasukoji
 	void Command_BEGIN_SELECT( void );		/* 範囲選択開始 */

@@ -33,6 +33,7 @@
 #include "basis/SakuraBasis.h"
 #include "types/CType.h"
 #include "CLayoutExInfo.h"
+#include "doc/layout/BracketNestingState.h"
 #include "mem/CMemoryIterator.h"
 #include "CTsvModeInfo.h"
 #include "view/colors/EColorIndexType.h"
@@ -141,7 +142,7 @@ public:
 	CLayout*		SearchLineByLayoutY( CLayoutInt nLineLayout ){ return const_cast<CLayout*>(static_cast<const CLayoutMgr*>(this)->SearchLineByLayoutY(nLineLayout)); }
 
 	//ワードを探す
-	bool			WhereCurrentWord( CLayoutInt , CLogicInt , CLayoutRange* pSelect, CNativeW*, CNativeW* );	/* 現在位置の単語の範囲を調べる */
+	bool			WhereCurrentWord( CLayoutInt , CLogicInt , CLayoutRange* pSelect, CNativeW*, CNativeW*, bool expandAddedWordCharacters = false );	/* 現在位置の単語の範囲を調べる */
 
 	//判定
 	bool			IsEndOfLine( const CLayoutPoint& ptLinePos );	/* 指定位置が行末(改行文字の直前)か調べる */	//@@@ 2002.04.18 MIK
@@ -321,6 +322,9 @@ protected:
 		CColorStrategy*	pcColorStrategy;
 		EColorIndexType	colorPrev;
 		CLayoutExInfo	exInfoPrev;
+		CBracketNestingState bracketState;
+		CBracketNestingState bracketStateBegin;
+		std::vector<SRainbowBracketMark> bracketMarks;
 		CLogicInt		nCurLine;
 
 		//ループ外 (DoLayoutのみ)
@@ -369,7 +373,7 @@ protected:
 	*/
 	//@@@ 2002.09.23 YAZAKI
 	// 2009.08.28 nasukoji	nPosX引数追加
-	CLayout* CreateLayout( CDocLine* pCDocLine, CLogicPoint ptLogicPos, CLogicInt nLength, EColorIndexType nTypePrev, CLayoutInt nIndent, CLayoutInt nPosX, CLayoutColorInfo* );
+	CLayout* CreateLayout( CDocLine* pCDocLine, CLogicPoint ptLogicPos, CLogicInt nLength, EColorIndexType nTypePrev, CLayoutInt nIndent, CLayoutInt nPosX, CLayoutColorInfo*, const CBracketNestingState&, const CBracketNestingState&, const std::vector<SRainbowBracketMark>& );
 	CLayout* InsertLineNext( CLayout*, CLayout* );
 	void AddLineBottom( CLayout* );
 

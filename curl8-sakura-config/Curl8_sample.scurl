@@ -1,0 +1,37 @@
+﻿{curl 8.0 applet}
+{applet manifest = "manifest.curl"}
+
+|| Curl 8.0 syntax color validation sample
+|| Ordinary comment with a tagged-like form below:
+|DOC# tagged comment example #DOC|
+
+{define-class public CurlSampleFrame {Frame}
+  {method public {init}
+    {construct super.init}
+    let message:String = "Sakura: \"Curl\" and \\ escape \n"
+    let count:int = 42
+    let ratio:double = 3.14159
+    {self.add
+      {VBox
+        spacing = 8pt,
+        {TextField name = "keyword"},
+        {CommandButton
+          label = "Run",
+          on-action = {||
+            {if count > 0
+             then
+              {format "message={message}, count={count}, ratio={ratio}"}
+             else
+              {format "empty"}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+|#
+A block comment can span
+several lines and contains {define-class} as plain comment text.
+#|

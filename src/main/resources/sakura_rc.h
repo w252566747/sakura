@@ -71,6 +71,9 @@
 #define IDC_CHECK_STOPS_BOTH_ENDS_WHEN_SEARCH_PARAGRAPH 1008
 #define IDC_CHECK_RTRIM_PREVLINE        1009
 #define IDC_CHECK_FREECARET             1010
+#define IDC_CHECK_WORDMARKER_AUTO        1741
+#define IDC_EDIT_ADDED_WORD_CHARS        1742
+#define IDC_BUTTON_WORD_CHARS_RESET      1743
 #define IDC_BUTTON_CLEAR_MRU_FOLDER     1011
 #define IDC_BUTTON_RELEASE              1012
 #define IDC_COMBO_TEXT                  1013
@@ -888,6 +891,7 @@
 #define F_SEARCH_TOPMENU                34055
 #define F_TOOL_TOPMENU                  34056
 #define F_OPTION_TOPMENU                34057
+#define F_CURL_SYNTAX_SUBMENU           34061
 #define F_WINDOW_TOPMENU                34058
 #define F_HELP_TOPMENU                  34059
 #define F_WINDOW_LIST_SUBMENU           34060
@@ -1534,6 +1538,13 @@
 #define STR_COLOR_BOOKMARK              34724
 #define STR_COLOR_NOTE_LINE             34725
 #define STR_COLOR_PAGEVIEW              34726
+#define STR_COLOR_RAINBOW_BRACKET_ENABLE 34727
+#define STR_COLOR_RAINBOW_BRACKET1      34728
+#define STR_COLOR_RAINBOW_BRACKET2      34729
+#define STR_COLOR_RAINBOW_BRACKET3      34730
+#define STR_COLOR_RAINBOW_BRACKET4      34731
+#define STR_COLOR_RAINBOW_BRACKET5      34732
+#define STR_COLOR_RAINBOW_BRACKET6      34733
 #define STR_ERR_CSPLITTER01             34735
 #define STR_TABWND_LR_INFO              34736
 #define STR_TABWND_CLOSETAB             34737
@@ -1853,12 +1864,12 @@
 #define IDC_STATIC                      -1
 
 // Next default values for new objects
-// 
+//
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        35057
 #define _APS_NEXT_COMMAND_VALUE         101
-#define _APS_NEXT_CONTROL_VALUE         1741
+#define _APS_NEXT_CONTROL_VALUE         1742
 #define _APS_NEXT_SYMED_VALUE           10000
 #endif
 #endif

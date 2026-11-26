@@ -24,6 +24,10 @@
 #include "mem/CMemory.h"// 2002/4/21 YAZAKI
 #include "CLayoutExInfo.h"
 #include "view/colors/EColorIndexType.h"
+#include "doc/layout/BracketNestingState.h"
+#include <algorithm>
+#include <memory>
+#include <vector>
 
 class CLayout;
 class CLayoutMgr;
@@ -46,7 +50,10 @@ public:
 		CLogicInt		nLength,		//!< 実データ内データ長
 		EColorIndexType	nTypePrev,
 		CLayoutInt		nTypeIndent,
-		CLayoutColorInfo*		pColorInfo
+		CLayoutColorInfo*		pColorInfo,
+		const CBracketNestingState& bracketStateBegin = CBracketNestingState(),
+		const CBracketNestingState& bracketStateEnd = CBracketNestingState(),
+		const std::vector<SRainbowBracketMark>& bracketMarks = {}
 	)
 	{
 		m_pPrev			= nullptr;
@@ -57,6 +64,10 @@ public:
 		m_nTypePrev		= nTypePrev;	// タイプ 0=通常 1=行コメント 2=ブロックコメント 3=シングルクォーテーション文字列 4=ダブルクォーテーション文字列
 		m_nIndent		= nTypeIndent;	// このレイアウト行のインデント数 @@@ 2002.09.23 YAZAKI
 		m_cExInfo.SetColorInfo(pColorInfo);
+		if (bracketStateBegin.Depth() || bracketStateEnd.Depth() || !bracketMarks.empty()) {
+			m_rainbowBracketCache = std::make_unique<SRainbowBracketCache>(SRainbowBracketCache{
+				bracketStateBegin, bracketStateEnd, bracketMarks });
+		}
 	}
 	~CLayout();
 	void DUMP( void );
@@ -114,6 +125,35 @@ public:
 	CLayoutExInfo* GetLayoutExInfo(){
 		return &m_cExInfo;
 	}
+	const CBracketNestingState& GetBracketStateBegin() const noexcept
+	{
+		static const CBracketNestingState empty;
+		return m_rainbowBracketCache ? m_rainbowBracketCache->begin : empty;
+	}
+	const CBracketNestingState& GetBracketStateEnd() const noexcept
+	{
+		static const CBracketNestingState empty;
+		return m_rainbowBracketCache ? m_rainbowBracketCache->end : empty;
+	}
+	void SetBracketCache(const CBracketNestingState& begin, const CBracketNestingState& end,
+		const std::vector<SRainbowBracketMark>& marks)
+	{
+		if (begin.Depth() || end.Depth() || !marks.empty()) {
+			m_rainbowBracketCache = std::make_unique<SRainbowBracketCache>(SRainbowBracketCache{ begin, end, marks });
+		} else {
+			m_rainbowBracketCache.reset();
+		}
+	}
+	bool GetRainbowBracketMark(int position, SRainbowBracketMark* mark) const noexcept
+	{
+		if (!m_rainbowBracketCache) return false;
+		const auto& marks = m_rainbowBracketCache->marks;
+		const auto it = std::lower_bound(marks.begin(), marks.end(), position,
+			[](const SRainbowBracketMark& item, int value) { return item.position < value; });
+		if (it == marks.end() || it->position != position) return false;
+		if (mark) *mark = *it;
+		return true;
+	}
 
 private:
 	CLayout*			m_pPrev;
@@ -130,6 +170,7 @@ private:
 	CEol				m_cEol;
 	CLayoutInt			m_nLayoutWidth;		//!< このレイアウト行の改行を含むレイアウト長（「折り返さない」選択時のみ）	// 2009.08.28 nasukoji
 	CLayoutExInfo		m_cExInfo;			//!< 色分け詳細情報
+	std::unique_ptr<SRainbowBracketCache> m_rainbowBracketCache;
 
 	DISALLOW_COPY_AND_ASSIGN(CLayout);
 };

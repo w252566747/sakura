@@ -15,6 +15,8 @@
 #include "util/window.h"
 #include "view/CEditView.h" // SColorStrategyInfo
 #include "view/colors/CColorStrategy.h"
+#include "view/colors/CWordMarker.h"
+#include "curl/CurlSyntaxCheckService.h"
 #include "plugin/CPlugin.h"
 #include "uiparts/CMenuDrawer.h"
 #include "_main/CCommandLine.h"
@@ -77,6 +79,7 @@ void CShareData_IO::SaveShareData()
 bool CShareData_IO::ShareData_IO_2( bool bRead )
 {
 	//MY_RUNNINGTIMER( cRunningTimer, "CShareData_IO::ShareData_IO_2" );
+	if (bRead) curlsyntax::SetRealtimeEnabled(false);
 	CShareData* pcShare = CShareData::getInstance();
 
 	CDataProfile	cProfile;
@@ -110,6 +113,42 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 				pcShare->RefreshString();
 			}
 			return false;
+		}
+		std::vector<CWordMarker::Entry> markerEntries;
+		CWordMarker::Instance().SetAutomaticEnabled(true);
+		CWordMarker::Instance().SetAddedWordCharacters(L"_-");
+		std::wstring automaticEnabled;
+		if (cProfile.GetProfileData(L"WordMarker", L"AutomaticEnabled", automaticEnabled)) {
+			CWordMarker::Instance().SetAutomaticEnabled(automaticEnabled == L"1" || automaticEnabled == L"true");
+		}
+		std::wstring addedWordCharacters;
+		if (cProfile.GetProfileData(L"WordMarker", L"ExtraWordChars", addedWordCharacters)) {
+			CWordMarker::Instance().SetAddedWordCharacters(addedWordCharacters);
+		}
+		std::wstring markerCountValue;
+		unsigned markerCount = 0;
+		if (cProfile.GetProfileData(L"WordMarker", L"Count", markerCountValue)) {
+			try { markerCount = static_cast<unsigned>(std::min<unsigned long>(32, std::stoul(markerCountValue))); } catch (...) { markerCount = 0; }
+		}
+		for (unsigned i = 0; i < markerCount; ++i) {
+			std::wstring value;
+			if (!cProfile.GetProfileData(L"WordMarker", std::to_wstring(i), value)) break;
+			const auto separator = value.find(L'|');
+			if (separator == std::wstring::npos || separator == 0 || separator + 1 >= value.size()) continue;
+			try {
+				std::wstring enabledValue;
+				const bool enabled = !cProfile.GetProfileData(L"WordMarker", L"Enabled" + std::to_wstring(i), enabledValue) || enabledValue != L"0";
+				markerEntries.push_back({value.substr(separator + 1), static_cast<unsigned>(std::stoul(value.substr(0, separator))), enabled});
+			} catch (...) { }
+		}
+		CWordMarker::Instance().Load(markerEntries);
+		std::wstring curlSyntaxEnabled;
+		if (cProfile.GetProfileData(L"CurlSyntaxCheck", L"RealtimeEnabled", curlSyntaxEnabled)) {
+			curlsyntax::SetRealtimeEnabled(curlSyntaxEnabled == L"1" || curlSyntaxEnabled == L"true");
+		}
+		std::wstring curlSyntaxErrorListHeight;
+		if (cProfile.GetProfileData(L"CurlSyntaxCheck", L"ErrorListHeight", curlSyntaxErrorListHeight)) {
+			try { curlsyntax::SetErrorListHeight(std::stoi(curlSyntaxErrorListHeight)); } catch (...) { }
 		}
 
 		// バージョンアップ時はバックアップファイルを作成する	// 2011.01.28 ryoji
@@ -166,6 +205,17 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 	pcMenuDrawer = nullptr;
 
 	if( !bRead ){
+		const auto& markers = CWordMarker::Instance().Entries();
+		for (size_t i = 0; i < markers.size() && i < 32; ++i) {
+			cProfile.SetProfileData(L"WordMarker", std::to_wstring(i),
+				std::to_wstring(markers[i].color) + L"|" + markers[i].word);
+			cProfile.SetProfileData(L"WordMarker", L"Enabled" + std::to_wstring(i), markers[i].enabled ? L"1" : L"0");
+		}
+		cProfile.SetProfileData(L"WordMarker", L"Count", std::to_wstring(std::min<size_t>(markers.size(), 32)));
+		cProfile.SetProfileData(L"WordMarker", L"AutomaticEnabled", CWordMarker::Instance().IsAutomaticEnabled() ? L"1" : L"0");
+		cProfile.SetProfileData(L"WordMarker", L"ExtraWordChars", CWordMarker::Instance().AddedWordCharacters());
+		cProfile.SetProfileData(L"CurlSyntaxCheck", L"RealtimeEnabled", curlsyntax::IsRealtimeEnabled() ? L"1" : L"0");
+		cProfile.SetProfileData(L"CurlSyntaxCheck", L"ErrorListHeight", std::to_wstring(curlsyntax::GetErrorListHeight()));
 		// 2014.12.08 sakura.iniの読み取り専用
 		if( !GetDllShareData().m_Common.m_sOthers.m_bIniReadOnly ){
 			cProfile.WriteProfile( szIniFileName, L" sakura.ini テキストエディタ設定ファイル" );

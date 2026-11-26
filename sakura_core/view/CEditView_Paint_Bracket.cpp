@@ -140,6 +140,8 @@ void CEditView::DrawBracketPair( bool bDraw )
 			if( pLine )
 			{
 				EColorIndexType		nColorIndex;
+				bool hasRainbowBracketForeColor = false;
+				COLORREF rainbowBracketForeColor = 0;
 				CLogicInt	OutputX = LineColumnToIndex( pcLayout, ptColLine.GetX2() );
 				if( bDraw )	{
 					nColorIndex = COLORIDX_BRACKET_PAIR;
@@ -156,6 +158,8 @@ void CEditView::DrawBracketPair( bool bDraw )
 						// 2009.02.07 ryoji GetColorIndex に渡すインデックスの仕様変更（元はこっちの仕様だった模様）
 						CColor3Setting cColor = GetColorIndex( pcLayout, ptColLine.GetY2(), OutputX, pInfo );
 						nColorIndex = cColor.eColorIndex2;
+						hasRainbowBracketForeColor = cColor.hasDirectTextForeColor;
+						rainbowBracketForeColor = cColor.directTextForeColor;
 					}
 					else{
 						SetBracketPairPos( false );
@@ -194,7 +198,8 @@ void CEditView::DrawBracketPair( bool bDraw )
 						pcColorBack = &cColorIndexBgType;
 					}
 
-					SetCurrentColor( gr, nColorIndex, nColorIndex, nColorIndexBg );
+					SetCurrentColor( gr, nColorIndex, nColorIndex, nColorIndexBg, false, 0,
+						hasRainbowBracketForeColor, rainbowBracketForeColor );
 					bool bTrans = false;
 					// DEBUG_TRACE( L"DrawBracket %d %d " , ptColLine.y, ptColLine.x );
 					if( IsBkBitmap() &&

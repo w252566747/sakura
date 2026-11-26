@@ -33,9 +33,13 @@ bool _IsPosKeywordHead(const CStringRef& cStr, int nPos)
 */
 bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 {
+	const bool hadRainbowBracketColor = m_hasRainbowBracketColor;
+	const EColorIndexType previousRainbowBracketColor = m_rainbowBracketColor;
+	m_hasRainbowBracketColor = false;
 	CColorStrategyPool* pool = CColorStrategyPool::getInstance();
 	pool->SetCurrentView(m_pcView);
 	CColor_Found*  pcFound  = pool->GetFoundStrategy();
+	CColor_WordMarker* pcMarker = pool->GetMarkerStrategy();
 	CColor_Select* pcSelect = pool->GetSelectStrategy();
 	bool bChange = false;
 
@@ -69,6 +73,14 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 			bChange = true;
 		}
 	}
+	if(m_pStrategyMarker && m_pStrategyMarker->EndColor(cLineStr, this->GetPosInLogic())){
+		m_pStrategyMarker = nullptr;
+		bChange = true;
+	}
+	if(!m_pStrategyMarker && pcMarker->BeginColor(cLineStr, this->GetPosInLogic())){
+		m_pStrategyMarker = pcMarker;
+		bChange = true;
+	}
 
 	//色終了
 	if(m_pStrategy){
@@ -88,6 +100,20 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 				break;
 			}
 		}
+	}
+
+	if (const CLayout* layout = GetLayout()) {
+		SRainbowBracketMark bracketMark;
+		if (layout->GetRainbowBracketMark(static_cast<int>(m_nPosInLogic), &bracketMark)) {
+			m_rainbowBracketColor = bracketMark.unmatched
+				? COLORIDX_BRACKET_PAIR
+				: static_cast<EColorIndexType>(COLORIDX_RAINBOW_BRACKET1 + bracketMark.level % CBracketNestingState::COLOR_COUNT);
+			m_hasRainbowBracketColor = true;
+		}
+	}
+	if (hadRainbowBracketColor != m_hasRainbowBracketColor ||
+		(m_hasRainbowBracketColor && previousRainbowBracketColor != m_rainbowBracketColor)) {
+		bChange = true;
 	}
 
 	//カーソル行背景色
@@ -153,19 +179,33 @@ void SColorStrategyInfo::DoChangeColor(CColor3Setting *pcColor)
 		m_cIndex.eColorIndex = m_pStrategySelect->GetStrategyColor();
 	}else if(m_pStrategyFound){
 		m_cIndex.eColorIndex = m_pStrategyFound->GetStrategyColor();
+	}else if(m_pStrategyMarker){
+		m_cIndex.eColorIndex = m_pStrategyMarker->GetStrategyColor();
 	}else{
 		m_cIndex.eColorIndex = CColorStrategy::GetStrategyColorSafe(m_pStrategy);
 	}
 
 	if(m_pStrategyFound){
 		m_cIndex.eColorIndex2 = m_pStrategyFound->GetStrategyColor();
+	}else if(m_pStrategyMarker){
+		m_cIndex.eColorIndex2 = m_pStrategyMarker->GetStrategyColor();
 	}else{
 		m_cIndex.eColorIndex2 = CColorStrategy::GetStrategyColorSafe(m_pStrategy);
 	}
-
 	m_cIndex.eColorIndexBg = m_colorIdxBackLine;
 
 	*pcColor = m_cIndex;
+	pcColor->hasDirectTextForeColor = false;
+	if (m_hasRainbowBracketColor && m_pcView && m_pcView->GetDocument()) {
+		const int index = ToColorInfoArrIndex(m_rainbowBracketColor);
+		pcColor->hasDirectTextForeColor = true;
+		pcColor->directTextForeColor = m_pcView->GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr[index].m_sColorAttr.m_cTEXT;
+	}
+	pcColor->hasDirectMarkerBackColor = m_pStrategyMarker && !m_pStrategySelect &&
+		m_pStrategyMarker->HasDirectBackColor();
+	if (pcColor->hasDirectMarkerBackColor) {
+		pcColor->directMarkerBackColor = m_pStrategyMarker->GetDirectBackColor();
+	}
 }
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
@@ -177,6 +217,7 @@ CColorStrategyPool::CColorStrategyPool()
 	m_pcView = &(CEditWnd::getInstance()->GetView(0));
 	m_pcSelectStrategy = new CColor_Select();
 	m_pcFoundStrategy = new CColor_Found();
+	m_pcMarkerStrategy = new CColor_WordMarker();
 //	m_vStrategies.push_back(new CColor_Found);				// マッチ文字列
 	m_vStrategies.push_back(new CColor_RegexKeyword);		// 正規表現キーワード
 	m_vStrategies.push_back(new CColor_Heredoc);			// ヒアドキュメント
@@ -197,6 +238,7 @@ CColorStrategyPool::~CColorStrategyPool()
 {
 	SAFE_DELETE(m_pcSelectStrategy);
 	SAFE_DELETE(m_pcFoundStrategy);
+	SAFE_DELETE(m_pcMarkerStrategy);
 	m_vStrategiesDisp.clear();
 	int size = (int)m_vStrategies.size();
 	for(int i = 0; i < size; i++ ){
@@ -425,6 +467,13 @@ const SColorAttributeData g_ColorAttributeArr[] =
 	{L"DFD", 0},	//DIFF削除	//@@@ 2002.06.01 MIK
 	{L"MRK", 0},	//ブックマーク	// 02/10/16 ai Add
 	{L"PGV", COLOR_ATTRIB_NO_TEXT | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RBE", COLOR_ATTRIB_NO_TEXT | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB1", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB2", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB3", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB4", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB5", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
+	{L"RB6", COLOR_ATTRIB_FORCE_DISP | COLOR_ATTRIB_NO_BACK | COLOR_ATTRIB_NO_BOLD | COLOR_ATTRIB_NO_UNDERLINE | COLOR_ATTRIB_NO_EFFECTS},
 	{L"LAST", 0}	// Not Used
 };
 

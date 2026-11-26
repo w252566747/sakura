@@ -5,6 +5,8 @@ name: build sakura
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     paths-ignore:
       - '**/*.md'
       - .gitignore
@@ -117,7 +119,7 @@ jobs:
           mingw-w64-x86_64-7zip
           mingw-w64-x86_64-gdb
           mingw-w64-x86_64-ctags
-          mingw-w64-x86_64-diffutils
+          diffutils
 
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -275,6 +277,14 @@ jobs:
     name: MSBuild
     runs-on: *windows_runner
     needs: [build-vcpkg, build-chm]
+
+    # vcpkg binary packages are published by the build-vcpkg job to this
+    # repository's GitHub Packages feed. Fork builds need explicit read access
+    # for the per-platform MSBuild jobs to restore those packages.
+    permissions:
+      actions: read
+      contents: read
+      packages: read
 
     strategy:
       matrix:
@@ -438,6 +448,14 @@ jobs:
       if: ${{ !(matrix.platform == 'x64' && matrix.config == 'Debug') }}
       run: build-sln.bat ${{ matrix.platform }} ${{ matrix.config }}
       shell: cmd
+
+    - name: Upload standalone Word Marker executable
+      if: ${{ matrix.platform == 'Win32' && matrix.config == 'Release' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: SakuraEditor-WordMarker-Win32-Release-EXE
+        path: Win32/Release/sakura.exe
+        if-no-files-found: error
 
     - name: Restore CHM artifacts
       uses: actions/download-artifact@v8
