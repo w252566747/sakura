@@ -353,21 +353,43 @@ def main() -> int:
                 f"item_rect={curl_toolbar.button(curl_index).rectangle()}, "
                 f"toolbar_rect={win32gui.GetWindowRect(curl_toolbar.handle)}"
             )
-        time.sleep(1.5)
+        deadline = time.time() + 10
+        error_lists = [
+            child for child in window.descendants()
+            if child.class_name() == "SysListView32" and child.is_visible()
+        ]
+        while not error_lists and time.time() < deadline:
+            time.sleep(0.2)
+            error_lists = [
+                child for child in window.descendants()
+                if child.class_name() == "SysListView32" and child.is_visible()
+            ]
+        toolbar_error_rows = int(error_lists[0].send_message(0x1004)) if error_lists else 0
+        manual_error_rows = 0
+        if toolbar_error_rows == 0:
+            # Diagnostic only: distinguish a toolbar notification failure from
+            # a document/type/configuration problem without treating it as pass.
+            window.send_message(0x111, 31571, 0)  # WM_COMMAND / F_CURL_SYNTAX_RUN
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                error_lists = [
+                    child for child in window.descendants()
+                    if child.class_name() == "SysListView32" and child.is_visible()
+                ]
+                if error_lists:
+                    manual_error_rows = int(error_lists[0].send_message(0x1004))
+                    break
+                time.sleep(0.2)
         curl_syntax_image = window.capture_as_image()
         curl_syntax_image.save(output / "13-curl-realtime-syntax.png")
-        error_line = curl_syntax_image.convert("RGB").crop((30, 115, 480, 139))
-        red_error_pixels = sum(
-            1 for red, green, blue in error_line.getdata()
-            if red >= 150 and red - green >= 55 and red - blue >= 55
-        )
-        if red_error_pixels < 6:
+        if toolbar_error_rows < 2:
             raise AssertionError(
-                "Curl live syntax check did not draw a visible red diagnostic mark on malformed code: "
-                f"red pixels={red_error_pixels}"
+                "Curl real-time syntax did not show the expected two diagnostics: "
+                f"toolbar_rows={toolbar_error_rows}, manual_command_rows={manual_error_rows}, "
+                f"TB_GETSTATE=0x{curl_state_after:02x}"
             )
-        record("curl_live_syntax_error_indicator", toolbar_checked=bool(curl_state_after & 0x01),
-               red_error_pixels=red_error_pixels)
+        record("curl_live_syntax_diagnostic_list", toolbar_checked=bool(curl_state_after & 0x01),
+               diagnostic_rows=toolbar_error_rows)
 
         rainbow_control = toolbar_button(window, 0x7CFD)
         if rainbow_control is None:
