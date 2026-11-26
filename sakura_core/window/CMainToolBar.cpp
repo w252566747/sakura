@@ -42,6 +42,61 @@ constexpr UINT CURL_SYNTAX_BUTTON = 0x7CFF;
 constexpr int MAX_VISIBLE_MARKERS = 4;
 constexpr UINT ENHANCEMENT_TOOLBAR_ID = 0x7CFE;
 
+HBITMAP CreateNavigationArrowBitmap(bool left, int width, int height)
+{
+	BITMAPINFO info{};
+	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	info.bmiHeader.biWidth = width;
+	info.bmiHeader.biHeight = -height;
+	info.bmiHeader.biPlanes = 1;
+	info.bmiHeader.biBitCount = 32;
+	info.bmiHeader.biCompression = BI_RGB;
+	HDC screenDc = ::GetDC(nullptr);
+	DWORD* pixels = nullptr;
+	HBITMAP bitmap = ::CreateDIBSection(screenDc, &info, DIB_RGB_COLORS,
+		reinterpret_cast<void**>(&pixels), nullptr, 0);
+	if (screenDc) ::ReleaseDC(nullptr, screenDc);
+	if (!bitmap || !pixels) return bitmap;
+	const int x0 = std::max(1, width / 16);
+	const int x1 = std::max(x0 + 1, width * 7 / 16);
+	const int x2 = std::max(x1 + 1, width * 15 / 16);
+	const int y0 = std::max(1, height / 8);
+	const int y1 = std::max(y0 + 1, height * 5 / 16);
+	const int y2 = std::max(y1 + 1, height * 11 / 16);
+	const int y3 = std::min(height - 2, height * 15 / 16);
+	POINT points[7] = { {x0, height / 2}, {x1, y0}, {x1, y1}, {x2, y1},
+		{x2, y2}, {x1, y2}, {x1, y3} };
+	if (!left) for (auto& point : points) point.x = width - 1 - point.x;
+	auto inside = [&](int x, int y) {
+		bool result = false;
+		for (int i = 0, j = 6; i < 7; j = i++) {
+			const POINT& a = points[i];
+			const POINT& b = points[j];
+			if (((a.y > y) != (b.y > y)) &&
+				(x < (b.x - a.x) * (y - a.y) / static_cast<double>(b.y - a.y) + a.x)) result = !result;
+		}
+		return result;
+	};
+	const COLORREF fill = RGB(0, 120, 212);
+	const COLORREF edge = RGB(0, 78, 145);
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			const bool body = inside(x, y);
+			bool border = false;
+			if (body) {
+				for (int dy = -1; dy <= 1 && !border; ++dy) {
+					for (int dx = -1; dx <= 1; ++dx) {
+						if (!inside(x + dx, y + dy)) { border = true; break; }
+					}
+				}
+			}
+			const COLORREF color = border ? edge : fill;
+			pixels[y * width + x] = body ? 0xff000000 | GetRValue(color) << 16 | GetGValue(color) << 8 | GetBValue(color) : 0;
+		}
+	}
+	return bitmap;
+}
+
 HBITMAP CreateMarkerSwatchBitmap(COLORREF color, int width, int height)
 {
 	BITMAPINFO info{};
@@ -683,8 +738,19 @@ void CMainToolBar::RefreshMarkerControls()
 	if (!layoutChanged) {
 		if (colorsChanged && m_hEnhancementImageList) {
 			const size_t visible = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
-			HIMAGELIST replacement = ::ImageList_Create(DpiScaleX(16), DpiScaleY(16), ILC_COLOR32,
-				std::max(1, static_cast<int>(visible + (hasAutomatic ? 1 : 0))), 1);
+			const int iconWidth = DpiScaleX(16);
+			const int iconHeight = DpiScaleY(16);
+			HIMAGELIST replacement = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32,
+				std::max(2, static_cast<int>(visible + (hasAutomatic ? 1 : 0) + 2)), 1);
+			auto appendArrow = [&](bool left) {
+				HBITMAP bitmap = CreateNavigationArrowBitmap(left, iconWidth, iconHeight);
+				if (!bitmap) return I_IMAGENONE;
+				const int index = replacement ? ::ImageList_Add(replacement, bitmap, nullptr) : I_IMAGENONE;
+				::DeleteObject(bitmap);
+				return index < 0 ? I_IMAGENONE : index;
+			};
+			const int previousArrowIndex = appendArrow(true);
+			const int nextArrowIndex = appendArrow(false);
 			std::vector<int> imageIndices;
 			auto appendSwatch = [&](COLORREF color) {
 				HBITMAP bitmap = CreateMarkerSwatchBitmap(color, DpiScaleX(16), DpiScaleY(16));
@@ -695,14 +761,24 @@ void CMainToolBar::RefreshMarkerControls()
 			};
 			for (size_t i = 0; i < visible; ++i) imageIndices.push_back(appendSwatch(markerColors[i]));
 			const int autoImageIndex = hasAutomatic ? appendSwatch(autoColor) : I_IMAGENONE;
-			const size_t expectedImages = visible + (hasAutomatic ? 1 : 0);
-			if (replacement && imageIndices.size() == visible &&
+			const size_t expectedImages = 2 + visible + (hasAutomatic ? 1 : 0);
+			if (replacement && previousArrowIndex == 0 && nextArrowIndex == 1 && imageIndices.size() == visible &&
 				std::all_of(imageIndices.begin(), imageIndices.end(), [](int index) { return index != I_IMAGENONE; }) &&
 				(!hasAutomatic || autoImageIndex != I_IMAGENONE) &&
 				static_cast<size_t>(::ImageList_GetImageCount(replacement)) == expectedImages) {
 				HIMAGELIST oldImageList = m_hEnhancementImageList;
 				::SendMessage(m_hwndEnhancementToolBar, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(replacement));
 				m_hEnhancementImageList = replacement;
+				TBBUTTONINFO previousInfo{};
+				previousInfo.cbSize = sizeof(previousInfo);
+				previousInfo.dwMask = TBIF_IMAGE;
+				previousInfo.iImage = previousArrowIndex;
+				::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO, WORDMARKER_PREVIOUS_BUTTON, reinterpret_cast<LPARAM>(&previousInfo));
+				TBBUTTONINFO nextInfo{};
+				nextInfo.cbSize = sizeof(nextInfo);
+				nextInfo.dwMask = TBIF_IMAGE;
+				nextInfo.iImage = nextArrowIndex;
+				::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO, WORDMARKER_NEXT_BUTTON, reinterpret_cast<LPARAM>(&nextInfo));
 				for (size_t i = 0; i < visible; ++i) {
 					TBBUTTONINFO info{};
 					info.cbSize = sizeof(info);
@@ -755,8 +831,27 @@ void CMainToolBar::RefreshMarkerControls()
 	const int iconWidth = DpiScaleX(16);
 	const int iconHeight = DpiScaleY(16);
 	const size_t visibleMarkerCount = std::min(entries.size(), static_cast<size_t>(MAX_VISIBLE_MARKERS));
-	m_hEnhancementImageList = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32 | ILC_MASK,
-		std::max(1, static_cast<int>(visibleMarkerCount + (hasAutomatic ? 1 : 0))), 1);
+	m_hEnhancementImageList = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32,
+		std::max(2, static_cast<int>(visibleMarkerCount + (hasAutomatic ? 1 : 0) + 2)), 1);
+	auto appendArrow = [&](bool left) {
+		HBITMAP bitmap = CreateNavigationArrowBitmap(left, iconWidth, iconHeight);
+		if (!bitmap) return I_IMAGENONE;
+		const int index = m_hEnhancementImageList ? ::ImageList_Add(m_hEnhancementImageList, bitmap, nullptr) : I_IMAGENONE;
+		::DeleteObject(bitmap);
+		return index < 0 ? I_IMAGENONE : index;
+	};
+	const int previousArrowIndex = appendArrow(true);
+	const int nextArrowIndex = appendArrow(false);
+	TBBUTTONINFO previousInfo{};
+	previousInfo.cbSize = sizeof(previousInfo);
+	previousInfo.dwMask = TBIF_IMAGE;
+	previousInfo.iImage = previousArrowIndex;
+	::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO, WORDMARKER_PREVIOUS_BUTTON, reinterpret_cast<LPARAM>(&previousInfo));
+	TBBUTTONINFO nextInfo{};
+	nextInfo.cbSize = sizeof(nextInfo);
+	nextInfo.dwMask = TBIF_IMAGE;
+	nextInfo.iImage = nextArrowIndex;
+	::SendMessage(m_hwndEnhancementToolBar, TB_SETBUTTONINFO, WORDMARKER_NEXT_BUTTON, reinterpret_cast<LPARAM>(&nextInfo));
 	std::vector<int> imageIndices;
 	auto appendSwatch = [&](COLORREF color) {
 		HBITMAP bitmap = CreateMarkerSwatchBitmap(color, iconWidth, iconHeight);
@@ -860,14 +955,14 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 
 		std::wstring labels = L"構文チェック";
 		labels.push_back(L'\0');
-		labels.append(L"← 前へ");
+		labels.append(L"前へ");
 		labels.push_back(L'\0');
-		labels.append(L"次へ →");
+		labels.append(L"次へ");
 		labels.push_back(L'\0');
 		labels.push_back(L'\0');
 		const int stringBase = static_cast<int>(::SendMessageW(m_hwndEnhancementToolBar,
 			TB_ADDSTRINGW, 0, reinterpret_cast<LPARAM>(labels.c_str())));
-		TBBUTTON buttons[6]{};
+		TBBUTTON buttons[7]{};
 		buttons[0].iBitmap = DpiScaleX(3);
 		buttons[0].fsStyle = BTNS_SEP;
 		buttons[1].iBitmap = I_IMAGENONE;
@@ -877,21 +972,23 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		buttons[1].iString = stringBase;
 		buttons[2].iBitmap = DpiScaleX(3);
 		buttons[2].fsStyle = BTNS_SEP;
-		buttons[3].iBitmap = I_IMAGENONE;
+		buttons[3].iBitmap = 0;
 		buttons[3].idCommand = WORDMARKER_PREVIOUS_BUTTON;
 		buttons[3].fsState = 0;
 		buttons[3].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
 		buttons[3].iString = stringBase + 1;
-		buttons[4].iBitmap = I_IMAGENONE;
+		buttons[4].iBitmap = 1;
 		buttons[4].idCommand = WORDMARKER_NEXT_BUTTON;
 		buttons[4].fsState = 0;
 		buttons[4].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
 		buttons[4].iString = stringBase + 2;
-		buttons[5].iBitmap = DpiScaleX(4);
-		buttons[5].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[5].iBitmap = DpiScaleX(3);
 		buttons[5].fsStyle = BTNS_SEP;
-		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 6, reinterpret_cast<LPARAM>(buttons));
-		m_nEnhancementMarkerStart = 6;
+		buttons[6].iBitmap = DpiScaleX(1);
+		buttons[6].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[6].fsStyle = BTNS_SEP;
+		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 7, reinterpret_cast<LPARAM>(buttons));
+		m_nEnhancementMarkerStart = 7;
 		::SendMessage(m_hwndEnhancementToolBar, TB_AUTOSIZE, 0, 0);
 	}
 	if (!m_hwndEnhancementToolBar) return;
@@ -905,6 +1002,36 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, CURL_SYNTAX_BUTTON, MAKELONG(enabled, 0));
 	}
 	LayoutMarkerControls();
+}
+
+bool CMainToolBar::GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, WCHAR* buffer, size_t bufferSize) const
+{
+	if (!buffer || bufferSize == 0 || !::IsWindow(m_hwndEnhancementToolBar) ||
+		::SendMessage(m_hwndEnhancementToolBar, TB_GETTOOLTIPS, 0, 0) != reinterpret_cast<LRESULT>(hwndTooltip)) return false;
+	std::wstring text;
+	const UINT id = static_cast<UINT>(idFrom);
+	if (id == CURL_SYNTAX_BUTTON) {
+		text = L"Curl 構文チェックの切替";
+	} else if (id == WORDMARKER_PREVIOUS_BUTTON) {
+		text = L"前へ：前の自動 Marker に移動";
+	} else if (id == WORDMARKER_NEXT_BUTTON) {
+		text = L"次へ：次の自動 Marker に移動";
+	} else if (id >= WORDMARKER_BUTTON_BASE && id < WORDMARKER_AUTO_BUTTON) {
+		const size_t index = id - WORDMARKER_BUTTON_BASE;
+		text = L"固定 Marker";
+		if (index < m_markerButtonWords.size()) text += L"「" + m_markerButtonWords[index] + L"」";
+		text += L"の表示／非表示（右クリックで色変更）";
+	} else if (id == WORDMARKER_AUTO_BUTTON) {
+		text = L"自動 Marker を解除";
+	} else if (id == WORDMARKER_CLEAR_BUTTON) {
+		text = L"固定・自動 Marker をすべて解除";
+	} else if (id == WORDMARKER_OVERFLOW_BUTTON) {
+		text = L"Marker 一覧を表示";
+	} else {
+		return false;
+	}
+	wcsncpy_s(buffer, bufferSize, text.c_str(), _TRUNCATE);
+	return true;
 }
 
 void CMainToolBar::LayoutMarkerControls()
