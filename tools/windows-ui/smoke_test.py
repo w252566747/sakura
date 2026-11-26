@@ -112,6 +112,14 @@ def main() -> int:
             raise AssertionError("Sakura window screenshot is blank or uniform")
         record("launch_and_window_capture", width=launch_image.width, height=launch_image.height)
 
+        # Leave an unsaved edit in the original document before opening the filter.
+        window.set_focus()
+        window.type_keys("^{END}")
+        window.type_keys("GUI_SMOKE_FILTER_SAVE", with_spaces=True)
+        filter_saved = original + b"GUI_SMOKE_FILTER_SAVE"
+        if sample.read_bytes() != original:
+            raise AssertionError("the filter Ctrl+S scenario was saved before the filter was opened")
+
         window.click_input(coords=(30, 38))
         time.sleep(0.2)
         menu_image = window.capture_as_image()
@@ -148,6 +156,15 @@ def main() -> int:
             raise AssertionError("live filter did not populate exactly one result row")
         if sample.read_bytes() != original:
             raise AssertionError("activating and using the live filter changed the source document")
+        window.type_keys("^s")
+        deadline = time.time() + 10
+        while sample.read_bytes() != filter_saved and time.time() < deadline:
+            time.sleep(0.2)
+        if sample.read_bytes() != filter_saved:
+            raise AssertionError(
+                "Ctrl+S while filtering did not save the complete original document: "
+                f"expected {filter_saved!r}, got {sample.read_bytes()!r}"
+            )
         window.capture_as_image().save(output / "04-filter-results.png")
         window.click_input(coords=(780, 63))
         time.sleep(0.2)
@@ -157,7 +174,7 @@ def main() -> int:
             raise AssertionError("Filter toolbar second click did not hide the results list")
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
-        record("file_menu_and_filter_toolbar_on_off")
+        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved))
 
         # Exercise actual mouse input against the editor's client area.
         window.click_input(coords=(90, 260))
@@ -185,13 +202,15 @@ def main() -> int:
             edited = sample.read_bytes()
         if b"GUI_SMOKE_EDITED" not in edited:
             raise AssertionError("keyboard input and Ctrl+S did not update the opened file")
+        if edited != filter_saved + b"GUI_SMOKE_EDITED":
+            raise AssertionError(f"keyboard edit changed unexpected source bytes: {edited!r}")
         window.capture_as_image().save(output / "08-edited.png")
         record("keyboard_edit_and_save", saved_bytes=len(edited))
 
         undo_count = 0
         undone = sample.read_bytes()
         for _ in range(len(b"GUI_SMOKE_EDITED") + 2):
-            if undone == original:
+            if undone == filter_saved:
                 break
             previous = undone
             window.type_keys("^z")
@@ -199,9 +218,9 @@ def main() -> int:
             time.sleep(0.15)
             undone = sample.read_bytes()
             undo_count += 1
-            if not undone.startswith(original) or len(undone) >= len(previous):
+            if not undone.startswith(filter_saved) or len(undone) >= len(previous):
                 raise AssertionError(f"Ctrl+Z did not progressively undo the appended text: {undone!r}")
-        if undone != original:
+        if undone != filter_saved:
             raise AssertionError(f"bounded Ctrl+Z sequence did not restore original bytes: {undone!r}")
         window.capture_as_image().save(output / "09-undo.png")
         record("undo_and_save", undo_steps=undo_count)
@@ -215,7 +234,7 @@ def main() -> int:
             if not redone.startswith(previous) or len(redone) <= len(previous):
                 raise AssertionError(f"Ctrl+Y did not progressively redo the text: {redone!r}")
         redone = sample.read_bytes()
-        if redone != original + b"GUI_SMOKE_EDITED":
+        if redone != filter_saved + b"GUI_SMOKE_EDITED":
             raise AssertionError(f"bounded Ctrl+Y sequence did not restore the edited text: {redone!r}")
         window.capture_as_image().save(output / "10-redo.png")
         record("redo_and_save", redo_steps=undo_count)
