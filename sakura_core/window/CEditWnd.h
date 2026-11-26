@@ -450,6 +450,7 @@ private:
 	std::mutex m_curlSyntaxMailboxMutex;
 	std::optional<curlsyntax::CheckResult> m_curlSyntaxMailbox;
 	std::unique_ptr<curlsyntax::CheckService> m_pCurlSyntaxCheckService;
+	HWND m_hwndCurlSyntaxErrorSummary = nullptr;
 	HWND m_hwndCurlSyntaxErrorList = nullptr;
 	bool m_bCurlSyntaxErrorListVisible = false;
 	int m_nCurlSyntaxErrorListHeight = 150;

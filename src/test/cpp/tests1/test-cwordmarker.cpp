@@ -58,9 +58,23 @@ TEST(CWordMarker, ChoosesUnusedPaletteColorsFirst)
 	const std::vector<unsigned> palette{ 0, 1, 2, 3 };
 	EXPECT_EQ(markers.NextColor(palette), 1u);
 	markers.Load({ { L"one", 0 }, { L"two", 1 }, { L"three", 2 }, { L"four", 3 } });
-	EXPECT_EQ(markers.NextColor(palette), 1u);
+	const auto extra = markers.NextColor(palette);
+	EXPECT_TRUE(CWordMarker::IsCustomColor(extra));
+	EXPECT_NE(CWordMarker::DecodeCustomColor(extra), 0u);
 	markers.Load({});
-	EXPECT_EQ(markers.NextColor(std::vector<unsigned>{ 0 }), 1u);
+	EXPECT_TRUE(CWordMarker::IsCustomColor(markers.NextColor(std::vector<unsigned>{ 0 })));
+	markers.Load({});
+}
+
+TEST(CWordMarker, DuplicateLoadedColorsAreReassigned)
+{
+	auto& markers = CWordMarker::Instance();
+	markers.Load({ { L"first", 1 }, { L"second", 1 }, { L"third", 1 } });
+	ASSERT_EQ(markers.Entries().size(), 3u);
+	EXPECT_EQ(markers.Entries()[0].color, 1u);
+	EXPECT_TRUE(CWordMarker::IsCustomColor(markers.Entries()[1].color));
+	EXPECT_TRUE(CWordMarker::IsCustomColor(markers.Entries()[2].color));
+	EXPECT_NE(markers.Entries()[1].color, markers.Entries()[2].color);
 	markers.Load({});
 }
 

@@ -495,7 +495,8 @@ CColor3Setting CEditView::GetColorIndex(
 
 	@date 2013.05.08 novice 範囲外チェック削除
 */
-void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex,  EColorIndexType eColorIndex2, EColorIndexType eColorIndexBg)
+void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex, EColorIndexType eColorIndex2,
+	EColorIndexType eColorIndexBg, bool hasDirectBackColor, COLORREF directBackColor)
 {
 	//インデックス決定
 	int		nColorIdx = ToColorInfoArrIndex(eColorIndex);
@@ -511,6 +512,7 @@ void CEditView::SetCurrentColor( CGraphics& gr, EColorIndexType eColorIndex,  EC
 	// 2012.11.21 背景色がテキストとおなじなら背景色はカーソル行背景
 	const ColorInfo& info3 = (info2.m_sColorAttr.m_cBACK == m_crBack ? infoBg : info2);
 	COLORREF bkcolor = (nColorIdx == nColorIdx2) ? info3.m_sColorAttr.m_cBACK : GetBackColorByColorInfo2(info, info3);
+	if (hasDirectBackColor && nColorIdx == nColorIdx2) bkcolor = directBackColor;
 	gr.SetTextBackColor(bkcolor);
 	SFONT sFont;
 	sFont.m_sFontAttr = (info.m_sColorAttr.m_cTEXT != info.m_sColorAttr.m_cBACK) ? info.m_sFontAttr : info2.m_sFontAttr;
@@ -951,7 +953,8 @@ bool CEditView::DrawLogicLine(
 			}
 		}else{
 			CColor3Setting cColor = GetColorIndex(pcLayout, pInfo->m_pDispPos->GetLayoutLineRef(), 0, pInfo, true);
-			SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+			SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+				cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor);
 		}
 	}
 
@@ -1035,7 +1038,8 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 			}
 			if( bChange ){
 				pInfo->DoChangeColor(&cColor);
-				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+					cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor);
 			}
 		}
 		return false;
@@ -1144,7 +1148,8 @@ bool CEditView::DrawLayoutLine(SColorStrategyInfo* pInfo)
 				}
 				CColor3Setting cColor;
 				pInfo->DoChangeColor(&cColor);
-				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg);
+				SetCurrentColor(pInfo->m_gr, cColor.eColorIndex, cColor.eColorIndex2, cColor.eColorIndexBg,
+					cColor.hasDirectMarkerBackColor, cColor.directMarkerBackColor);
 			}
 
 			if (is_text && CFigure_Text::IsRenderType_Block(nextRenderType)){

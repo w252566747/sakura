@@ -70,3 +70,29 @@
 
 - 最终块首逗号修正已推送并构建：Actions Run `45639899022` 成功，提交 `28f9d1059284e85ecd9545eeccbe06bd08ba3b0a`；修正源码和 GoogleTest 回归用例均包含在该提交。ZIP SHA-256：`a0f3ebb16cc38f3ff2e09d0d4786dd59f3a5bd6e44fa8f42678334b483517cc8`。
 - 最新交付 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,341,888 字节，SHA-256 `81e4c1bb7f80d269185482abf755ca3166ea5ab38f642ace73e11c457d564df8`；上一轮 EXE 已备份为 `结果文件/历史版本/sakura-before-curl-check-round9-final-20261126.exe`。
+
+## 2026/11/26：补齐高亮基本词与流程词拼写提示
+
+- 对照 `Curl8_01_basic.kwd` 与 `Curl8_02_flow.kwd`，补齐检查器词表；目前共有 116 个基本/流程语言词及补充语法词。拼写提示仍按单字符差异和最短长度限制运行，以控制普通短变量误报。
+- 新增用例覆盖 `until`、`repeat`、`class-extends?`、`assert` 的单字符缺失；本机独立 C++17 冒烟均提示预期候选，合法 `width` 属性未误报；官方 `Curl8_sample.scurl` 仍为 0 条诊断。
+- 性能复测：5,700,000 字符、100,000 行，0 条诊断，约 236 ms（macOS 优化构建）。
+- 范围边界：2～3 字符关键词（如 `if`、`for`、`let`）少字母后过短，仍不做自动拼写推断；函数/API/GUI 符号主要在表达式头或类型标注处提示，普通变量位置仍允许自定义标识符，不会按全局函数词表强判。
+
+- Win32 Release 已构建成功：GitHub Actions Run `45723380135`，Commit `de955f04bff9c56519b2baff4a68640b3f78c3c7`。ZIP SHA-256：`982b7791992f93972e9d11e226c9c657544d97e52405f6b093d7c973e0133dee`。
+- 交付 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,342,400 字节，SHA-256 `18f28f972c8a955d028c01368979eea61814494bcec590aab6356bcac9082629`；旧 EXE 备份为 `结果文件/历史版本/sakura-before-curl-keyword-coverage-20261126.exe`。
+- 本轮 Win32 Release 工作流只编译并上传 EXE，没有执行 GoogleTest。MinGW 与 Cppcheck 运行因 MSYS2 初始化失败，源码单元测试和静态分析步骤均被跳过；Windows GUI 实机验证仍待用户使用该版本确认。
+
+## 2026/11/26：工具栏与右键菜单收尾
+
+- 工具栏：移除「前へ／次へ」之间的分隔线及导航组右侧重复线；Marker 色块改用 32 位透明通道绘制，关闭态为中性灰，开启态展示实际 Marker 颜色。
+- 右键菜单：仅将「選択語を固定マーカーに追加／解除」移到最外层；「マーカー」子菜单中的其他项目保持原样。
+- Win32 Release 成功：GitHub Actions Run `45726045632`，Commit `96ca6c61cd322cd7ee91d62b85094abf379b170f`。ZIP SHA-256：`82d256378153d03baa50ad8ca581ff114eae08ed3119c2ceada600936634c6d9`。
+- 最终 `结果文件/sakura.exe`：PE32 GUI Intel 80386，2,342,400 字节，SHA-256 `b5742cee718f98001b9fc89f8bbed0e80dd936d81719ed2e86900e4e486100a6`。更新前 EXE 备份：`结果文件/历史版本/sakura-before-toolbar-context-menu-fixes-20261126.exe`。
+- 本地 `git diff --check` 通过，Win32 编译成功。GoogleTest 未执行：MinGW 与 Cppcheck 工作流的 MSYS2 初始化失败，测试/静态分析步骤被跳过。Windows GUI 视觉效果仍需在 Windows 启动该 EXE 后确认。
+# 2026/11/26：减少关键字与 API 拼写误报
+
+- `CURL012` 的近似比较现在保留首字母大小写；同时，已列出的语言关键字会先判为合法词，不再继续和 API 词表中的其他近似名称比较。
+- 本机用 Clang 单独编译 Curl 检查器并运行冒烟程序：`Action`、`elseif` 作为类型名时不再产生 `CURL012`；`{some-proc , alpha}` 仍会报 `CURL014`。这不是 Windows 主程序编译或仓库 GoogleTest 结果。
+- `MPSBitikuGrid.scurl` 不在本工作区，无法据截图的第 57 行确认 `CURL014` 是真错还是上下文误报；需要该行前后代码才能判断。Curl 检查器仍是规则子集，不等同官方 RTE 编译器。
+- Win32 Release 构建和仓库 GoogleTest 尚未针对本轮完成。
+

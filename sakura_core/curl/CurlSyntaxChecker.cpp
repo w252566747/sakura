@@ -119,7 +119,8 @@ bool IsAsciiIdentifier(std::wstring_view token)
 bool IsOneEditAway(std::wstring_view actual, std::wstring_view known)
 {
 	if (actual == known || !IsAsciiIdentifier(actual) || actual.size() < 4 || known.size() < 5 ||
-		actual.size() + 1 < known.size() || known.size() + 1 < actual.size()) return false;
+		actual.size() + 1 < known.size() || known.size() + 1 < actual.size() ||
+		actual.front() != known.front()) return false;
 	size_t a = 0, b = 0;
 	int edits = 0;
 	while (a < actual.size() && b < known.size()) {
@@ -138,6 +139,15 @@ bool IsOneEditAway(std::wstring_view actual, std::wstring_view known)
 std::wstring_view FindLikelyTypo(std::wstring_view token)
 {
 	if (!IsAsciiIdentifier(token) || token.size() < 4 || token.size() >= 128) return {};
+	// A language word can also appear where this conservative scanner expects a
+	// type name (for example after a named argument's colon). Do not reinterpret
+	// a valid Curl keyword as a misspelled API/type name.
+	for (const auto keyword : kLikelyLanguageKeywords) {
+		if (token.size() != keyword.size()) continue;
+		if (std::equal(token.begin(), token.end(), keyword.begin(), [](wchar_t left, wchar_t right) {
+			return std::towlower(left) == std::towlower(right);
+		})) return {};
+	}
 	static const std::unordered_set<std::wstring> knownSymbols = [] {
 		std::unordered_set<std::wstring> symbols;
 		for (const auto candidate : kKnownCurlSymbols) {
@@ -172,6 +182,12 @@ std::wstring_view FindLikelyTypo(std::wstring_view token)
 std::wstring_view FindLikelyLanguageKeywordTypo(std::wstring_view token)
 {
 	if (!IsAsciiIdentifier(token) || token.size() < 4 || token.size() >= 128) return {};
+	for (const auto keyword : kLikelyLanguageKeywords) {
+		if (token.size() != keyword.size()) continue;
+		if (std::equal(token.begin(), token.end(), keyword.begin(), [](wchar_t left, wchar_t right) {
+			return std::towlower(left) == std::towlower(right);
+		})) return {};
+	}
 	static const auto keywordsByLength = [] {
 		std::array<std::vector<std::wstring_view>, 128> groups;
 		for (const auto candidate : kLikelyLanguageKeywords) {

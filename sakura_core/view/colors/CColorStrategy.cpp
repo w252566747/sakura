@@ -179,6 +179,11 @@ void SColorStrategyInfo::DoChangeColor(CColor3Setting *pcColor)
 	m_cIndex.eColorIndexBg = m_colorIdxBackLine;
 
 	*pcColor = m_cIndex;
+	pcColor->hasDirectMarkerBackColor = m_pStrategyMarker && !m_pStrategySelect &&
+		m_pStrategyMarker->HasDirectBackColor();
+	if (pcColor->hasDirectMarkerBackColor) {
+		pcColor->directMarkerBackColor = m_pStrategyMarker->GetDirectBackColor();
+	}
 }
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //

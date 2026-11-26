@@ -56,3 +56,29 @@ Marker 状态没有加入 `DLLSHAREDATA`、`CommonSetting` 或共享内存版本
 - Doxygen 检查通过：[Doxygen run #8](https://github.com/w252566747/sakura/actions/runs/45503316517)。
 - MinGW Build/Test 与 Cppcheck 的独立 workflow 在 MSYS2 软件包安装步骤失败，未运行到源码编译/静态分析：当前请求的 `mingw-w64-x86_64-diffutils` 和 `mingw-w64-x86_64-cppcheck` 包名不可用。它们不影响 MSVC Win32 Release 构建和主 workflow 的单元测试。
 - 大行性能目前有 Marker 1 MiB 单行扫描单测（Win32 Debug 454 ms）及本机 Matcher 冒烟测试（`-O2` 约 7 ms）；没有在真实 Windows 编辑器 UI 中量测打开超大文件后的滚动/重绘，也没有实机完成仅替换 EXE、右键颜色、INI、宏及新旧版本并行回归。
+
+
+## 工具栏导航按钮更新（2026-11-26）
+
+- 根据用户确认的示意图，前へ／次へ采用蓝色 16×16 方向箭头图标并保留日文文字，两侧固定分隔线宽一致；Marker 快捷区仍靠右显示。
+- 补充工具栏各功能的日文悬停提示，并将右键菜单分隔线移到固定 Marker 命令前，使该命令与「マーカー」菜单相邻。
+- Windows Win32 Release Actions Run [#45730035075](https://github.com/w252566747/sakura/actions/runs/45730035075) 成功，提交 `8ce793a04e481d670f645502303e94b9079efddb`。Artifact ZIP SHA-256：`d9e77b80068806329b1f52401487a2aed7ae6196416cfa3c3050319de2ffd104`。
+- 已交付 `结果文件/sakura.exe`，PE32 GUI Intel 80386，2,344,448 字节，SHA-256：`7cceff5c7a51445ab7bc3edc66a4d801a9f25b272351742b97e5441856d06188`。旧文件备份为 `结果文件/历史版本/sakura-before-blue-navigation-arrows-20261126.exe`。
+- `git diff --check` 通过。Doxygen 成功；Cppcheck 与 MinGW 工作流分别在 MSYS2 设置阶段失败/取消，源码检查与单元测试步骤未运行。Windows GUI 外观和鼠标悬停提示仍需在目标 Windows 桌面实机确认。
+
+
+## 工具栏响应式 Marker 与箭头对称（2026-11-26）
+
+- 固定 Marker 可见数量根据工具栏剩余宽度动态计算，不再限制为 4 个；未显示的词条汇总到「Marker +N」。
+- 调整窗口宽度时会重新计算可见项；Marker 词条顺序、开关状态及颜色仍由原列表维护。
+- 导航箭头使用对称像素轮廓，左右箭头互为水平镜像；删除导航右边多余的竖分隔线，左右分隔宽度保持一致。
+- 源码静态检查：`git diff --check` 通过。第一轮编译发现并修复 `LONG/int` 类型不匹配；修正后 Win32 Release Actions [Run #45739041830](https://github.com/w252566747/sakura/actions/runs/45739041830) 成功，Doxygen Run #45739041843 成功。
+- 构建提交：`3ecd6b0b1d30f9ddb72b836dd7a8b6fe843635dc`。Artifact ZIP SHA-256：`4a947c0867eb2ad2df4f42a5ac75183a70241579cdef3c8643a194cff29a3566`；内含 PE32 GUI Intel 80386 的 `sakura.exe`，2,345,984 字节，SHA-256 `b3b4f44771dbec5af43038ab0a1c9e85940de82a698b4a5baf2df0bc5b2d10c4`。已放入 `结果文件/sakura.exe`，更新前版本已备份。
+- 本轮专用 Release workflow 不含单元测试。Cppcheck/MinGW 两项独立 workflow 在 MSYS2 环境准备阶段失败，未完成其源码检查。窗口缩放时的实际 GUI 展示仍需 Windows 实机确认。
+# 2026/11/26：原生导航图标、自定义 Marker 色与检查统计
+
+- 「前へ／次へ」改用 Sakura 菜单工具栏中相同命令的原生图标；Marker 超过原有检索色数量后，分配不重复的柔和自定义底色，并由文本绘制路径直接使用同一 `COLORREF`。自定义颜色写入既有 `[WordMarker]` 数值项，没有新增共享内存字段。
+- Curl 错误一览上方显示「エラー合計: N 件」，仅统计 Error，不放在「構文チェック」按钮旁。
+- 新增 Marker 颜色重复载入、颜色槽耗尽后分配自定义色等 C++ 单元测试。本机便携冒烟检查验证 32 种自定义色配置互不相同、重复旧颜色可拆分；`git diff --check` 通过。
+- 当前 Mac 没有 MSVC/Windows SDK；本轮 Win32 Release 编译、完整 GoogleTest 与 Windows 桌面 UI 回归尚未完成。自定义色绘制路径需由 Windows Release 构建继续验证。
+

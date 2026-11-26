@@ -76,6 +76,8 @@ struct CColor3Setting {
 	EColorIndexType eColorIndex;    //!< 選択を含む現在の色
 	EColorIndexType eColorIndex2;   //!< 選択以外の現在の色
 	EColorIndexType eColorIndexBg;  //!< 背景色
+	bool hasDirectMarkerBackColor = false;
+	COLORREF directMarkerBackColor = 0;
 };
 
 struct SColorStrategyInfo{

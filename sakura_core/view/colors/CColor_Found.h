@@ -59,9 +59,13 @@ public:
 	bool BeginColor(const CStringRef& cStr, int nPos) override;
 	bool Disp() const override { return true; }
 	bool EndColor(const CStringRef& cStr, int nPos) override;
+	bool HasDirectBackColor() const noexcept { return m_hasDirectBackColor; }
+	COLORREF GetDirectBackColor() const noexcept { return m_directBackColor; }
 private:
 	int m_end = -1;
 	int m_index = 0;
 	EColorIndexType m_color = COLORIDX_SEARCH;
+	bool m_hasDirectBackColor = false;
+	COLORREF m_directBackColor = 0;
 };
 #endif /* SAKURA_CCOLOR_FOUND_8094BA64_0ACB_4776_A190_D68729D3FABC_H_ */

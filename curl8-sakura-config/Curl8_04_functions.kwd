@@ -1,0 +1,44 @@
+﻿// Curl 8.0 04_functions
+ キーワード定義ファイル
+// CASE=False
+format
+format*
+sprintf
+printf
+println
+print
+write
+read
+read-line
+read-char
+read-byte
+parse-int
+parse-float
+parse-bool
+to-int
+to-float
+to-string
+to-String
+to-lowercase
+to-uppercase
+to-titlecase
+trim
+trim-left
+trim-right
+split
+join
+concat
+substring
+sub-string?
+string-length
+string?
+string=?
+string-equal?
+string-prefix?
+string-suffix?
+string-match?
+string-replace
+string-replace-all
+string-find
+string-index
+string-last-index?

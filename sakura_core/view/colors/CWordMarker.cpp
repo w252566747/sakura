@@ -49,7 +49,8 @@ bool CWordMarker::ToggleEnabled(size_t index) noexcept
 	return true;
 }
 
-unsigned CWordMarker::NextColor(const std::vector<unsigned>& palette) const noexcept
+unsigned CWordMarker::NextColor(const std::vector<unsigned>& palette,
+	const std::vector<unsigned>& unavailableColors) const noexcept
 {
 	for (size_t index = 0; index < palette.size(); ++index) {
 		const auto color = palette[index];
@@ -58,8 +59,23 @@ unsigned CWordMarker::NextColor(const std::vector<unsigned>& palette) const noex
 		if (std::find(palette.begin(), palette.begin() + index, color) != palette.begin() + index) continue;
 		if (std::none_of(m_entries.begin(), m_entries.end(), [color](const Entry& entry) { return entry.color == color; })) return color;
 	}
-	for (const auto color : palette) if (color != 0) return color;
-	return 1u;
+	// Continue with distinct pastel colors once the user's configured Sakura
+	// search palette is exhausted. These values are stored in the existing INI
+	// color field and do not require a shared-memory layout change.
+	static constexpr unsigned customColors[] = {
+		0x00d7f2ff, 0x00c8e7ff, 0x00d8dcff, 0x00e9d7ff, 0x00f5d5ff, 0x00f7d9e8,
+		0x00d7e8f3, 0x00d7f3e8, 0x00e6f3d7, 0x00f4edcf, 0x00f6dfcf, 0x00e5e0d8,
+		0x00c9d9e8, 0x00d6d2ee, 0x00edcee4, 0x00e6cfcf, 0x00cfe8dc, 0x00e4edc8,
+		0x00f0e4c8, 0x00d3e3f5, 0x00e5d9f5, 0x00f2d9f0, 0x00f0d7d7, 0x00d7eee8,
+		0x00e2edda, 0x00f3eccf, 0x00f1dfd3, 0x00d4e1e4, 0x00ded8e8, 0x00e8dce0,
+		0x00cfe2ef, 0x00e5edda
+	};
+	for (const unsigned color : customColors) {
+		const unsigned encoded = EncodeCustomColor(color);
+		if (std::none_of(m_entries.begin(), m_entries.end(), [encoded](const Entry& entry) { return entry.color == encoded; }) &&
+			std::find(unavailableColors.begin(), unavailableColors.end(), color) == unavailableColors.end()) return encoded;
+	}
+	return EncodeCustomColor(0x00d7f2ff);
 }
 
 void CWordMarker::ClearFixed() noexcept
@@ -178,7 +194,12 @@ void CWordMarker::Load(const std::vector<Entry>& entries)
 			entry.word.find(L'\0') != std::wstring::npos || entry.word.find(L'\r') != std::wstring::npos ||
 			entry.word.find(L'\n') != std::wstring::npos) continue;
 		if (std::any_of(m_entries.begin(), m_entries.end(), [&](const Entry& current) { return current.word == entry.word; })) continue;
-		m_entries.push_back(entry);
+		Entry loaded = entry;
+		if (loaded.color == 0) loaded.color = NextColor({}, {});
+		if (std::any_of(m_entries.begin(), m_entries.end(), [&](const Entry& current) { return current.color == loaded.color; })) {
+			loaded.color = NextColor({}, {});
+		}
+		m_entries.push_back(std::move(loaded));
 	}
 	RebuildIndex();
 	m_automaticByDocument.clear();

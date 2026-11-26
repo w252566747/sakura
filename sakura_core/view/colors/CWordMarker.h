@@ -15,12 +15,17 @@
 class CWordMarker final {
 public:
 	struct Entry { std::wstring word; unsigned color; bool enabled = true; };
+	static constexpr unsigned CUSTOM_COLOR_FLAG = 0x80000000u;
+	static bool IsCustomColor(unsigned color) noexcept { return (color & CUSTOM_COLOR_FLAG) != 0; }
+	static unsigned EncodeCustomColor(unsigned color) noexcept { return CUSTOM_COLOR_FLAG | (color & 0x00ffffffu); }
+	static unsigned DecodeCustomColor(unsigned color) noexcept { return color & 0x00ffffffu; }
 	static CWordMarker& Instance();
 	const std::vector<Entry>& Entries() const noexcept { return m_entries; }
 	bool Toggle(std::wstring word, unsigned color);
 	bool SetColor(size_t index, unsigned color) noexcept;
 	bool ToggleEnabled(size_t index) noexcept;
-	unsigned NextColor(const std::vector<unsigned>& palette) const noexcept;
+	unsigned NextColor(const std::vector<unsigned>& palette,
+		const std::vector<unsigned>& unavailableColors = {}) const noexcept;
 	void ClearFixed() noexcept;
 	void SetAutomatic(const void* document, std::wstring word);
 	void ClearAutomatic(const void* document) noexcept;

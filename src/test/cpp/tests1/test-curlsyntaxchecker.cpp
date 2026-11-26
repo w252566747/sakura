@@ -98,6 +98,14 @@ TEST(CurlSyntaxChecker, DoesNotWarnForCustomIdentifiersAndProperties)
 	EXPECT_EQ(FindCode(diagnostics, "CURL012"), nullptr);
 }
 
+TEST(CurlSyntaxChecker, DoesNotConfuseCaseDifferentCustomTypesOrLanguageWordsWithApiTypos)
+{
+	const auto diagnostics = curlsyntax::Check(
+		L"{define-proc {use-action}:Action {return}}\n"
+		L"{define-proc {use-elseif}:elseif {return}}");
+	EXPECT_EQ(FindCode(diagnostics, "CURL012"), nullptr);
+}
+
 TEST(CurlSyntaxChecker, AcceptsCommaSeparatedIdentifierArguments)
 {
 	const auto diagnostics = curlsyntax::Check(L"{some-proc alpha, beta, gamma}");

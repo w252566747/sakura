@@ -1,0 +1,39 @@
+﻿// Curl 8.0 05_collections
+ キーワード定義ファイル
+// CASE=False
+Array
+Array-of
+Array2
+Array2-of
+Array3-of
+FastArray
+FastArray-of
+HashTable
+HashTable-of
+HashSet
+Set
+List
+List-of
+Pair
+Queue
+Stack
+Deque
+Record
+Record-of
+Table
+Table-of
+Vector
+Vector-of
+Iterator
+Iterator-of
+Sequence
+Sequence-of
+Collection
+Collection-of
+Map
+Map-of
+Tuple
+Tuple-of
+SortedSet
+SortedMap
+WeakHashTable

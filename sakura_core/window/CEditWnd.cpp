@@ -289,6 +289,7 @@ void CEditWnd::OnCurlSyntaxDocumentTypeChanged()
 	NotifyCurlSyntaxContentChanged(GetDocument());
 	if (!IsCurlSyntaxDocument()) {
 		m_bCurlSyntaxErrorListVisible = false;
+		if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_HIDE);
 		if (m_hwndCurlSyntaxErrorList) ::ShowWindow(m_hwndCurlSyntaxErrorList, SW_HIDE);
 		RECT client{};
 		::GetClientRect(GetHwnd(), &client);
@@ -311,6 +312,7 @@ void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 		}
 		RefreshCurlSyntaxErrorList();
 		m_bCurlSyntaxErrorListVisible = false;
+		if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_HIDE);
 		if (m_hwndCurlSyntaxErrorList) ::ShowWindow(m_hwndCurlSyntaxErrorList, SW_HIDE);
 		HideCurlSyntaxTooltip();
 		RECT client{};
@@ -376,6 +378,7 @@ void CEditWnd::AcceptCurlSyntaxResult()
 		CreateCurlSyntaxErrorList();
 		m_bCurlSyntaxErrorListVisible = m_hwndCurlSyntaxErrorList != nullptr;
 		if (m_bCurlSyntaxErrorListVisible) {
+			if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, SW_SHOW);
 			::ShowWindow(m_hwndCurlSyntaxErrorList, SW_SHOW);
 			RECT client{};
 			::GetClientRect(GetHwnd(), &client);
@@ -392,10 +395,23 @@ void CEditWnd::CreateCurlSyntaxErrorList()
 	if (m_hwndCurlSyntaxErrorList) return;
 	INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
 	::InitCommonControlsEx(&controls);
+	m_hwndCurlSyntaxErrorSummary = ::CreateWindowExW(0, L"STATIC", L"",
+		WS_CHILD | SS_LEFT | SS_CENTERIMAGE,
+		0, 0, 0, 0, GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
 	m_hwndCurlSyntaxErrorList = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
 		WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
 		0, 0, 0, 0, GetHwnd(), nullptr, CEditApp::getInstance()->GetAppInstance(), nullptr);
-	if (!m_hwndCurlSyntaxErrorList) return;
+	if (!m_hwndCurlSyntaxErrorList) {
+		if (m_hwndCurlSyntaxErrorSummary) {
+			::DestroyWindow(m_hwndCurlSyntaxErrorSummary);
+			m_hwndCurlSyntaxErrorSummary = nullptr;
+		}
+		return;
+	}
+	if (m_hwndCurlSyntaxErrorSummary) {
+		::SendMessageW(m_hwndCurlSyntaxErrorSummary, WM_SETFONT,
+			reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+	}
 	::SetWindowSubclass(m_hwndCurlSyntaxErrorList, &CEditWnd::CurlSyntaxErrorListProc, 1, reinterpret_cast<DWORD_PTR>(this));
 	ListView_SetExtendedListViewStyle(m_hwndCurlSyntaxErrorList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 	const wchar_t* titles[] = { L"種別", L"ファイル名", L"行", L"列", L"コード", L"メッセージ" };
@@ -458,9 +474,23 @@ LRESULT CALLBACK CEditWnd::CurlSyntaxErrorListProc(HWND hwnd, UINT message, WPAR
 
 void CEditWnd::RefreshCurlSyntaxErrorList()
 {
+	if (!m_hwndCurlSyntaxErrorList && !m_hwndCurlSyntaxErrorSummary) return;
+	const CEditDoc* document = GetDocument();
+	if (m_hwndCurlSyntaxErrorSummary) {
+		std::wstring summary;
+		if (document && document->m_bCurlSyntaxResultStale) {
+			summary = L"構文チェック中";
+		} else {
+			const auto errorCount = document ? std::count_if(document->m_vCurlSyntaxDiagnostics.begin(),
+				document->m_vCurlSyntaxDiagnostics.end(), [](const auto& diagnostic) {
+					return diagnostic.severity == curlsyntax::Severity::Error;
+				}) : 0;
+			summary = L"エラー合計: " + std::to_wstring(errorCount) + L" 件";
+		}
+		::SetWindowTextW(m_hwndCurlSyntaxErrorSummary, summary.c_str());
+	}
 	if (!m_hwndCurlSyntaxErrorList) return;
 	ListView_DeleteAllItems(m_hwndCurlSyntaxErrorList);
-	const CEditDoc* document = GetDocument();
 	if (!document || document->m_vCurlSyntaxDiagnostics.empty()) {
 		LVITEMW item{};
 		item.mask = LVIF_TEXT;
@@ -495,6 +525,7 @@ void CEditWnd::ToggleCurlSyntaxErrorList()
 	CreateCurlSyntaxErrorList();
 	if (!m_hwndCurlSyntaxErrorList) return;
 	m_bCurlSyntaxErrorListVisible = !m_bCurlSyntaxErrorListVisible;
+	if (m_hwndCurlSyntaxErrorSummary) ::ShowWindow(m_hwndCurlSyntaxErrorSummary, m_bCurlSyntaxErrorListVisible ? SW_SHOW : SW_HIDE);
 	::ShowWindow(m_hwndCurlSyntaxErrorList, m_bCurlSyntaxErrorListVisible ? SW_SHOW : SW_HIDE);
 	RECT client{};
 	::GetClientRect(GetHwnd(), &client);
@@ -3695,7 +3726,13 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 	int nHeight = cy - nToolBarHeight - nFuncKeyWndHeight - nTabWndHeight - nTabHeightBottom - nStatusBarHeight;
 	if (m_hwndCurlSyntaxErrorList && m_bCurlSyntaxErrorListVisible) {
 		const int panelHeight = std::min<int>(static_cast<int>(DpiScaleY(m_nCurlSyntaxErrorListHeight)), std::max<int>(0, nHeight / 2));
-		::MoveWindow(m_hwndCurlSyntaxErrorList, 0, nTop + nHeight - panelHeight, cx, panelHeight, TRUE);
+		const int summaryHeight = std::min<int>(static_cast<int>(DpiScaleY(22)), panelHeight);
+		const int panelTop = nTop + nHeight - panelHeight;
+		if (m_hwndCurlSyntaxErrorSummary) {
+			::MoveWindow(m_hwndCurlSyntaxErrorSummary, 0, panelTop, cx, summaryHeight, TRUE);
+		}
+		::MoveWindow(m_hwndCurlSyntaxErrorList, 0, panelTop + summaryHeight, cx,
+			std::max(0, panelHeight - summaryHeight), TRUE);
 		nHeight -= panelHeight;
 	}
 	if( m_cDlgFuncList.GetHwnd() && m_cDlgFuncList.IsDocking() )

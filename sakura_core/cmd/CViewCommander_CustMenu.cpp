@@ -103,13 +103,8 @@ void CViewCommander::Command_MENU_RBUTTON( void )
 					const auto slot = static_cast<unsigned>(i - COLORIDX_SEARCH);
 					if (attr.m_cTEXT != attr.m_cBACK && std::find(palette.begin(), palette.end(), slot) == palette.end()) palette.push_back(slot);
 				}
-				if (!palette.empty()) {
-					const auto current = markers.Entries()[index].color;
-					const auto found = std::find(palette.begin(), palette.end(), current);
-					const size_t next = found == palette.end() ? 0 : (static_cast<size_t>(found - palette.begin()) + 1) % palette.size();
-					markers.SetColor(index, palette[next]);
-					m_pCommanderView->Redraw();
-				}
+				markers.SetColor(index, markers.NextColor(palette));
+				m_pCommanderView->Redraw();
 			}
 			break;
 		}

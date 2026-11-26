@@ -15,6 +15,7 @@
 #include "util/os.h"
 #include "util/window.h"
 #include "uiparts/CImageListMgr.h"
+#include "uiparts/CMenuDrawer.h"
 #include "apiwrap/CommonControl.h"
 #include "apiwrap/StdControl.h"
 #include "CSelectLang.h"
@@ -41,8 +42,9 @@ constexpr UINT WORDMARKER_MENU_CLEAR = WORDMARKER_MENU_REMOVE_BASE + 35;
 constexpr UINT CURL_SYNTAX_BUTTON = 0x7CFF;
 constexpr UINT ENHANCEMENT_TOOLBAR_ID = 0x7CFE;
 
-HBITMAP CreateNavigationArrowBitmap(bool left, int width, int height)
+HBITMAP CreateNativeNavigationIconBitmap(const CImageListMgr* icons, int imageNo, int width, int height)
 {
+	if (!icons || imageNo < 0) return nullptr;
 	BITMAPINFO info{};
 	info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	info.bmiHeader.biWidth = width;
@@ -56,37 +58,10 @@ HBITMAP CreateNavigationArrowBitmap(bool left, int width, int height)
 		reinterpret_cast<void**>(&pixels), nullptr, 0);
 	if (screenDc) ::ReleaseDC(nullptr, screenDc);
 	if (!bitmap || !pixels) return bitmap;
-	const int tipX = std::max(1, width / 16);
-	const int shaftStart = std::max(tipX + 1, width * 7 / 16);
-	const int shaftEnd = width - 2;
-	const int maxVerticalDistance = std::max(1, height - 1);
-	const int shaftHalfHeightTwice = std::max(2, height / 4);
-	auto inside = [&](int x, int y) {
-		if (!left) x = width - 1 - x;
-		const int signedDistance = 2 * y - (height - 1);
-		const int verticalDistance = signedDistance < 0 ? -signedDistance : signedDistance;
-		const int headInset = (shaftStart - tipX) * verticalDistance / maxVerticalDistance;
-		const int headMinX = tipX + headInset;
-		const bool head = x >= headMinX && x <= shaftStart;
-		const bool shaft = x >= shaftStart - 1 && x <= shaftEnd && verticalDistance <= shaftHalfHeightTwice;
-		return head || shaft;
-	};
-	const COLORREF fill = RGB(0, 120, 212);
-	const COLORREF edge = RGB(0, 78, 145);
-	for (int y = 0; y < height; ++y) {
-		for (int x = 0; x < width; ++x) {
-			const bool body = inside(x, y);
-			bool border = false;
-			if (body) {
-				for (int dy = -1; dy <= 1 && !border; ++dy) {
-					for (int dx = -1; dx <= 1; ++dx) {
-						if (!inside(x + dx, y + dy)) { border = true; break; }
-					}
-				}
-			}
-			const COLORREF color = border ? edge : fill;
-			pixels[y * width + x] = body ? 0xff000000 | GetRValue(color) << 16 | GetGValue(color) << 8 | GetBValue(color) : 0;
-		}
+	std::fill_n(reinterpret_cast<uint32_t*>(pixels), static_cast<size_t>(width) * height, 0u);
+	if (!icons->DrawToolIcon(reinterpret_cast<uint32_t*>(pixels), imageNo, true, width, height)) {
+		::DeleteObject(bitmap);
+		return nullptr;
 	}
 	return bitmap;
 }
@@ -703,6 +678,9 @@ void CMainToolBar::RefreshMarkerControls()
 	const std::wstring& autoWord = hasAutomatic ? *automatic : emptyWord;
 	const auto& colors = m_pOwner->GetActiveView().GetDocument()->m_cDocType.GetDocumentAttribute().m_ColorInfoArr;
 	auto resolveColor = [&](unsigned preferred) {
+		if (CWordMarker::IsCustomColor(preferred)) {
+			return static_cast<COLORREF>(CWordMarker::DecodeCustomColor(preferred));
+		}
 		if (preferred > 0 && preferred <= static_cast<unsigned>(COLORIDX_SEARCHTAIL - COLORIDX_SEARCH)) {
 			const auto& attr = colors[COLORIDX_SEARCH + preferred].m_sColorAttr;
 			if (attr.m_cTEXT != attr.m_cBACK) return attr.m_cBACK;
@@ -715,9 +693,21 @@ void CMainToolBar::RefreshMarkerControls()
 	};
 	std::vector<COLORREF> markerColors;
 	std::vector<bool> markerEnabled;
-	for (const auto& entry : entries) {
+	std::vector<COLORREF> usedMarkerColors;
+	for (size_t i = 0; i < entries.size(); ++i) {
+		const auto& entry = entries[i];
+		COLORREF chosenColor = resolveColor(entry.color);
+		if (std::find(usedMarkerColors.begin(), usedMarkerColors.end(), chosenColor) != usedMarkerColors.end()) {
+			std::vector<unsigned> unavailable;
+			unavailable.reserve(usedMarkerColors.size());
+			for (const COLORREF color : usedMarkerColors) unavailable.push_back(static_cast<unsigned>(color));
+			const unsigned replacement = markers.NextColor({}, unavailable);
+			markers.SetColor(i, replacement);
+			chosenColor = resolveColor(replacement);
+		}
+		usedMarkerColors.push_back(chosenColor);
 		// Disabled markers keep their chosen color, but show a neutral swatch while inactive.
-		markerColors.push_back(entry.enabled ? resolveColor(entry.color) : RGB(210, 210, 210));
+		markerColors.push_back(entry.enabled ? chosenColor : RGB(210, 210, 210));
 		markerEnabled.push_back(entry.enabled);
 	}
 	COLORREF autoColor = RGB(255, 233, 172);
@@ -737,7 +727,9 @@ void CMainToolBar::RefreshMarkerControls()
 			HIMAGELIST replacement = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32,
 				std::max(2, static_cast<int>(visible + (hasAutomatic ? 1 : 0) + 2)), 1);
 			auto appendArrow = [&](bool left) {
-				HBITMAP bitmap = CreateNavigationArrowBitmap(left, iconWidth, iconHeight);
+				const int functionId = left ? F_SEARCH_PREV : F_SEARCH_NEXT;
+				const int imageNo = m_pOwner->GetMenuDrawer().GetIconIdByFuncId(functionId);
+				HBITMAP bitmap = CreateNativeNavigationIconBitmap(m_pcIcons, imageNo, iconWidth, iconHeight);
 				if (!bitmap) return I_IMAGENONE;
 				const int index = replacement ? ::ImageList_Add(replacement, bitmap, nullptr) : I_IMAGENONE;
 				::DeleteObject(bitmap);
@@ -833,7 +825,9 @@ void CMainToolBar::RefreshMarkerControls()
 	m_hEnhancementImageList = ::ImageList_Create(iconWidth, iconHeight, ILC_COLOR32,
 		std::max(2, static_cast<int>(visibleMarkerCount + (hasAutomatic ? 1 : 0) + 2)), 1);
 	auto appendArrow = [&](bool left) {
-		HBITMAP bitmap = CreateNavigationArrowBitmap(left, iconWidth, iconHeight);
+		const int functionId = left ? F_SEARCH_PREV : F_SEARCH_NEXT;
+		const int imageNo = m_pOwner->GetMenuDrawer().GetIconIdByFuncId(functionId);
+		HBITMAP bitmap = CreateNativeNavigationIconBitmap(m_pcIcons, imageNo, iconWidth, iconHeight);
 		if (!bitmap) return I_IMAGENONE;
 		const int index = m_hEnhancementImageList ? ::ImageList_Add(m_hEnhancementImageList, bitmap, nullptr) : I_IMAGENONE;
 		::DeleteObject(bitmap);
@@ -1179,11 +1173,7 @@ void CMainToolBar::HandleMarkerColorChange(UINT controlId)
 		const auto& attr = colors[index].m_sColorAttr;
 		if (attr.m_cTEXT != attr.m_cBACK) palette.push_back(static_cast<unsigned>(index - COLORIDX_SEARCH));
 	}
-	if (palette.empty()) return;
-	const unsigned current = markers.Entries()[markerIndex].color;
-	const auto found = std::find(palette.begin(), palette.end(), current);
-	const size_t next = found == palette.end() ? 0 : (static_cast<size_t>(found - palette.begin()) + 1) % palette.size();
-	markers.SetColor(markerIndex, palette[next]);
+	markers.SetColor(markerIndex, markers.NextColor(palette));
 	m_pOwner->GetActiveView().Redraw();
 	RefreshMarkerControls();
 }

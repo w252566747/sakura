@@ -132,6 +132,7 @@ bool CColor_Found::EndColor([[maybe_unused]] const CStringRef& cStr, int nPos)
 
 bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 {
+	m_hasDirectBackColor = false;
 	if (!cStr.IsValid()) return false;
 	int end = -1;
 	const auto* view = CColorStrategyPool::getInstance()->GetCurrentView();
@@ -143,6 +144,13 @@ bool CColor_WordMarker::BeginColor(const CStringRef& cStr, int nPos)
 		// Automatic selection highlighting uses Sakura's default pale orange marker color.
 		// This color slot is independent of the Find palette and the toolbar reads the same slot.
 		m_color = COLORIDX_DIFF_DELETE;
+		m_end = end;
+		return true;
+	}
+	if (CWordMarker::IsCustomColor(color)) {
+		m_color = COLORIDX_TEXT;
+		m_directBackColor = static_cast<COLORREF>(CWordMarker::DecodeCustomColor(color));
+		m_hasDirectBackColor = true;
 		m_end = end;
 		return true;
 	}
