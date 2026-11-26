@@ -16,7 +16,7 @@ import win32con
 import win32gui
 from PIL import ImageChops
 from PIL import ImageStat
-from pywinauto import Application
+from pywinauto import Application, mouse
 
 
 def main() -> int:
@@ -82,9 +82,7 @@ def main() -> int:
         owner = win32gui.GetWindowRect(toolbar.handle)
         x = owner[0] + (item.left + item.right) // 2
         y = owner[1] + (item.top + item.bottom) // 2
-        win32api.SetCursorPos((x, y))
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        mouse.click(button="left", coords=(x, y))
 
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
