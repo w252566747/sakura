@@ -50,6 +50,7 @@ private:
 	static LRESULT CALLBACK ToolBarWndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData );
 	void RefreshMarkerControls();
 	void RefreshCurlSyntaxControl();
+	void UpdateMarkerVisibility();
 	void LayoutMarkerControls();
 	void HandleMarkerControl(UINT controlId);
 	void HandleMarkerColorChange(UINT controlId);
@@ -63,6 +64,13 @@ private:
 	HWND		m_hwndEnhancementToolBar = nullptr;
 	HIMAGELIST	m_hEnhancementImageList = nullptr;
 	int		m_nEnhancementMarkerStart = -1;
+	std::vector<int>		m_markerButtonWidths;
+	int		m_markerAutoButtonWidth = 0;
+	int		m_markerClearButtonWidth = 0;
+	int		m_markerOverflowButtonWidth = 0;
+	int		m_nLastMarkerAvailableWidth = -1;
+	size_t		m_nVisibleMarkerCount = static_cast<size_t>(-1);
+	std::wstring	m_markerOverflowLabel;
 	COLORREF	m_markerAutoColor = 0;
 	bool		m_bCurlSyntaxControlInitialized = false;
 	bool		m_bCurlSyntaxSupported = false;
