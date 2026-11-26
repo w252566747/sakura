@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-import win32gui
+import win32api
 from PIL import ImageStat
 from pywinauto import Application
 
@@ -39,6 +39,9 @@ def main() -> int:
         "interactive_station": os.environ.get("SESSIONNAME", "unknown"),
         "steps": [],
     }
+    screen_width = win32api.GetSystemMetrics(0)
+    screen_height = win32api.GetSystemMetrics(1)
+    evidence["screen_resolution"] = [screen_width, screen_height]
     steps: list[dict[str, object]] = evidence["steps"]  # type: ignore[assignment]
 
     def record(name: str, **values: object) -> None:
@@ -51,21 +54,51 @@ def main() -> int:
         )
         window = app.top_window()
         window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the requested document: {window.window_text()!r}")
         window.set_focus()
         if not window.is_visible() or not window.is_enabled():
             raise AssertionError("main Sakura window is not visible and enabled")
         hwnd = window.handle
         evidence["window_title"] = window.window_text()
         evidence["window_handle"] = hwnd
-        window.move_window(x=40, y=40, width=1280, height=820, repaint=True)
+        width = max(640, int(screen_width * 0.92))
+        height = max(480, int(screen_height * 0.92))
+        window.move_window(x=0, y=0, width=width, height=height, repaint=True)
         time.sleep(1)
+        resized_image = window.capture_as_image()
+        resized_image.save(output / "01-resized.png")
+        window.maximize()
+        time.sleep(0.5)
         launch_image = window.capture_as_image()
         launch_image.save(output / "01-launch.png")
         if launch_image.width < 640 or launch_image.height < 400:
             raise AssertionError("captured Sakura window is unexpectedly small")
+        if launch_image.width < screen_width * 0.85 or launch_image.height < screen_height * 0.85:
+            raise AssertionError(
+                f"maximized window capture is smaller than the active screen: "
+                f"capture={launch_image.size}, screen={(screen_width, screen_height)}"
+            )
         if max(ImageStat.Stat(launch_image.convert("RGB")).stddev) < 2:
             raise AssertionError("Sakura window screenshot is blank or uniform")
         record("launch_and_window_capture", width=launch_image.width, height=launch_image.height)
+
+        window.click_input(coords=(30, 8))
+        time.sleep(0.2)
+        window.capture_as_image().save(output / "02-file-menu.png")
+        window.type_keys("{ESC}")
+        window.click_input(coords=(780, 32))
+        time.sleep(0.5)
+        window.capture_as_image().save(output / "03-filter-toolbar.png")
+        window.click_input(coords=(780, 32))
+        time.sleep(0.2)
+        if not window.is_visible():
+            raise AssertionError("menu/toolbar input left the main window unavailable")
+        record("menu_and_filter_toolbar_click")
 
         # Exercise actual mouse input against the editor's client area.
         window.click_input(coords=(500, 260))
@@ -73,7 +106,8 @@ def main() -> int:
         time.sleep(0.2)
         window.type_keys("{ESC}")
         window.double_click_input(coords=(500, 260))
-        window.drag_mouse_input(src=(480, 260), dst=(620, 260), duration=0.3)
+        window.drag_mouse_input(src=(480, 260), dst=(620, 260))
+        window.capture_as_image().save(output / "04-mouse-selection.png")
         record("mouse_left_right_double_click_and_drag")
 
         window.set_focus()
@@ -87,7 +121,7 @@ def main() -> int:
             edited = sample.read_bytes()
         if b"GUI_SMOKE_EDITED" not in edited:
             raise AssertionError("keyboard input and Ctrl+S did not update the opened file")
-        window.capture_as_image().save(output / "02-edited.png")
+        window.capture_as_image().save(output / "05-edited.png")
         record("keyboard_edit_and_save", saved_bytes=len(edited))
 
         window.type_keys("^z")
@@ -96,7 +130,7 @@ def main() -> int:
         undone = sample.read_bytes()
         if undone != original:
             raise AssertionError(f"Ctrl+Z did not restore original bytes: {undone!r}")
-        window.capture_as_image().save(output / "03-undo.png")
+        window.capture_as_image().save(output / "06-undo.png")
         record("undo_and_save")
 
         window.type_keys("^y")
@@ -105,7 +139,7 @@ def main() -> int:
         redone = sample.read_bytes()
         if b"GUI_SMOKE_EDITED" not in redone:
             raise AssertionError("Ctrl+Y did not restore the edited text")
-        window.capture_as_image().save(output / "04-redo.png")
+        window.capture_as_image().save(output / "07-redo.png")
         record("redo_and_save")
 
         window.close()
@@ -119,7 +153,7 @@ def main() -> int:
         window.wait("visible enabled", timeout=45)
         window.set_focus()
         restarted = window.capture_as_image()
-        restarted.save(output / "05-restart.png")
+        restarted.save(output / "08-restart.png")
         if b"GUI_SMOKE_EDITED" not in sample.read_bytes():
             raise AssertionError("saved document content was not preserved after restart")
         record("restart_and_reopen_saved_document", screenshot_size=list(restarted.size))
