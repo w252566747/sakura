@@ -13,6 +13,7 @@ from pathlib import Path
 import win32api
 import win32clipboard
 import win32con
+import win32gui
 from PIL import ImageChops
 from PIL import ImageStat
 from pywinauto import Application
@@ -69,8 +70,21 @@ def main() -> int:
                 continue
             index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
-                return child.button(index)
+                return child, index
         return None
+
+    def toolbar_state(toolbar, command_id: int) -> int:
+        return int(toolbar.send_message(0x412, command_id))  # TB_GETSTATE
+
+    def click_toolbar_button(toolbar, index: int) -> None:
+        # The generic ButtonWrapper exposes the toolbar HWND state, not fsState.
+        item = toolbar.button(index).rectangle()
+        owner = win32gui.GetWindowRect(toolbar.handle)
+        x = owner[0] + (item.left + item.right) // 2
+        y = owner[1] + (item.top + item.bottom) // 2
+        win32api.SetCursorPos((x, y))
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
@@ -318,19 +332,26 @@ def main() -> int:
         time.sleep(0.5)
         curl_open_image = window.capture_as_image()
         curl_open_image.save(output / "12-curl-open.png")
-        curl_button = toolbar_button(window, 0x7CFF)
-        if curl_button is None:
+        curl_control = toolbar_button(window, 0x7CFF)
+        if curl_control is None:
             raise AssertionError("Curl real-time syntax toolbar button was not found")
-        if not curl_button.is_checked():
-            curl_button.click_input()
+        curl_toolbar, curl_index = curl_control
+        curl_state_before = toolbar_state(curl_toolbar, 0x7CFF)
+        if not curl_state_before & 0x01:
+            if not curl_state_before & 0x04:
+                raise AssertionError(f"Curl toolbar button is natively disabled: TB_GETSTATE=0x{curl_state_before:02x}")
+            click_toolbar_button(curl_toolbar, curl_index)
         deadline = time.time() + 10
-        while not curl_button.is_checked() and time.time() < deadline:
+        curl_state_after = toolbar_state(curl_toolbar, 0x7CFF)
+        while not curl_state_after & 0x01 and time.time() < deadline:
             time.sleep(0.2)
-        if not curl_button.is_checked():
+            curl_state_after = toolbar_state(curl_toolbar, 0x7CFF)
+        if not curl_state_after & 0x01:
             raise AssertionError(
                 "Curl real-time syntax toolbar did not become checked after mouse click: "
-                f"enabled={curl_button.is_enabled()}, checkable={curl_button.is_checkable()}, "
-                f"state={curl_button.state()!r}, rect={curl_button.rectangle()}"
+                f"TB_GETSTATE before=0x{curl_state_before:02x}, after=0x{curl_state_after:02x}, "
+                f"item_rect={curl_toolbar.button(curl_index).rectangle()}, "
+                f"toolbar_rect={win32gui.GetWindowRect(curl_toolbar.handle)}"
             )
         time.sleep(1.5)
         curl_syntax_image = window.capture_as_image()
@@ -345,16 +366,21 @@ def main() -> int:
                 "Curl live syntax check did not draw a visible red diagnostic mark on malformed code: "
                 f"red pixels={red_error_pixels}"
             )
-        record("curl_live_syntax_error_indicator", toolbar_checked=curl_button.is_checked(),
+        record("curl_live_syntax_error_indicator", toolbar_checked=bool(curl_state_after & 0x01),
                red_error_pixels=red_error_pixels)
 
-        rainbow_button = toolbar_button(window, 0x7CFD)
-        if rainbow_button is None:
+        rainbow_control = toolbar_button(window, 0x7CFD)
+        if rainbow_control is None:
             raise AssertionError("rainbow bracket toolbar button was not present")
-        if not rainbow_button.is_checked():
-            rainbow_button.click_input()
+        rainbow_toolbar, rainbow_index = rainbow_control
+        rainbow_state = toolbar_state(rainbow_toolbar, 0x7CFD)
+        if not rainbow_state & 0x01:
+            if not rainbow_state & 0x04:
+                raise AssertionError(f"Rainbow toolbar button is natively disabled: TB_GETSTATE=0x{rainbow_state:02x}")
+            click_toolbar_button(rainbow_toolbar, rainbow_index)
             time.sleep(0.5)
-        if not rainbow_button.is_checked():
+            rainbow_state = toolbar_state(rainbow_toolbar, 0x7CFD)
+        if not rainbow_state & 0x01:
             raise AssertionError("rainbow bracket toolbar did not become checked after mouse click")
         rainbow_image = window.capture_as_image()
         rainbow_image.save(output / "14-rainbow-brackets.png")
@@ -371,7 +397,7 @@ def main() -> int:
                 "rainbow bracket colors were not visible on the real Curl source screenshot: "
                 f"saturated pixels={saturated_bracket_pixels}"
             )
-        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_checked=rainbow_button.is_checked(),
+        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_checked=bool(rainbow_state & 0x01),
                saturated_bracket_pixels=saturated_bracket_pixels)
         window.close()
         app.wait_for_process_exit(timeout=20)
