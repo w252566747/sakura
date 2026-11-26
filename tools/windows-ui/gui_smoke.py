@@ -69,7 +69,7 @@ def main() -> int:
                 continue
             index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
-                return child.wrapper_object().button(index)
+                return child.button(index)
         return None
 
     def clipboard_text() -> str:
