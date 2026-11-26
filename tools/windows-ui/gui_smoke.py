@@ -69,7 +69,7 @@ def main() -> int:
                 continue
             index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
-                return int(child.send_message(0x412, index))  # TB_GETSTATE
+                return int(child.send_message(0x412, command_id))  # TB_GETSTATE uses command ID
         return None
 
     def clipboard_text() -> str:
