@@ -327,7 +327,11 @@ def main() -> int:
         while not curl_button.is_checked() and time.time() < deadline:
             time.sleep(0.2)
         if not curl_button.is_checked():
-            raise AssertionError("Curl real-time syntax toolbar did not become checked after mouse click")
+            raise AssertionError(
+                "Curl real-time syntax toolbar did not become checked after mouse click: "
+                f"enabled={curl_button.is_enabled()}, checkable={curl_button.is_checkable()}, "
+                f"state={curl_button.state()!r}, rect={curl_button.rectangle()}"
+            )
         time.sleep(1.5)
         curl_syntax_image = window.capture_as_image()
         curl_syntax_image.save(output / "13-curl-realtime-syntax.png")
