@@ -1881,7 +1881,10 @@ LRESULT CEditWnd::DispatchEvent(
 
 				//ツールチップテキスト取得、設定
 				LPTOOLTIPTEXT lptip = (LPTOOLTIPTEXT)pnmh;
-				GetTooltipText(szText, int(std::size(szText)), lptip->hdr.idFrom);
+				if (!m_cToolbar.GetEnhancementTooltipText(lptip->hdr.hwndFrom, lptip->hdr.idFrom,
+					szText, std::size(szText))) {
+					GetTooltipText(szText, int(std::size(szText)), lptip->hdr.idFrom);
+				}
 				lptip->lpszText = szText;
 			}
 			break;
