@@ -66,7 +66,7 @@ def main() -> int:
 
     def toolbar_button(window, command_id: int):
         for child in window.descendants():
-            if child.class_name() != "ToolbarWindow32":
+            if child.class_name() != "ToolbarWindow32" or not child.is_visible():
                 continue
             index = int(child.send_message(0x419, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
@@ -384,7 +384,8 @@ def main() -> int:
             raise AssertionError(
                 "Curl real-time syntax did not show the expected two diagnostics: "
                 f"toolbar_rows={toolbar_error_rows}, manual_command_rows={manual_error_rows}, "
-                f"TB_GETSTATE=0x{curl_state_after:02x}"
+                f"TB_GETSTATE before=0x{curl_state_before:02x}, after=0x{curl_state_after:02x}, "
+                f"toolbar_hwnd={curl_toolbar.handle}, toolbar_rect={win32gui.GetWindowRect(curl_toolbar.handle)}"
             )
         record("curl_live_syntax_diagnostic_list", toolbar_checked=bool(curl_state_after & 0x01),
                diagnostic_rows=toolbar_error_rows)
