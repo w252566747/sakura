@@ -40,6 +40,7 @@ public:
 	HWND GetToolbarHwnd() const{ return m_hwndToolBar; }
 	HWND GetRebarHwnd() const{ return m_hwndReBar; }
 	HWND GetSearchHwnd() const{ return m_hwndSearchBox; }
+	bool GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, WCHAR* buffer, size_t bufferSize) const;
 	size_t GetSearchKey(std::wstring& buffer); //!< 検索キーを取得。戻り値は検索キーの文字数。
 
 	//操作
