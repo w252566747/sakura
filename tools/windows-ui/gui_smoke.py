@@ -68,13 +68,13 @@ def main() -> int:
         for child in window.descendants():
             if child.class_name() != "ToolbarWindow32":
                 continue
-            index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
+            index = int(child.send_message(0x419, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
                 return child, index
         return None
 
     def toolbar_state(toolbar, command_id: int) -> int:
-        return int(toolbar.send_message(0x412, command_id))  # TB_GETSTATE
+        return int(toolbar.send_message(0x411, command_id))  # TB_GETSTATE
 
     def click_toolbar_button(toolbar, index: int) -> None:
         # The generic ButtonWrapper exposes the toolbar HWND state, not fsState.
