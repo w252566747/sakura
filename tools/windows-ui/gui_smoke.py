@@ -63,6 +63,15 @@ def main() -> int:
             if child.class_name() == class_name and child.is_visible()
         ]
 
+    def toolbar_button_state(window, command_id: int) -> int | None:
+        for child in window.descendants():
+            if child.class_name() != "ToolbarWindow32":
+                continue
+            index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
+            if index >= 0:
+                return int(child.send_message(0x412, index))  # TB_GETSTATE
+        return None
+
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
         try:
@@ -285,6 +294,82 @@ def main() -> int:
         window.close()
         app.wait_for_process_exit(timeout=20)
         record("close_after_restart")
+
+        curl_sample = output / "gui-smoke.curl"
+        curl_source = (
+            '{TextField value = "ok"}\r\n'
+            '{TextFeld value = "x"}\r\n'
+            "{call (value]}\r\n"
+        )
+        curl_sample.write_text(curl_source, encoding="ascii", newline="")
+        app = Application(backend="win32").start(
+            f'"{exe}" "{curl_sample}"', timeout=30
+        )
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while curl_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if curl_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the Curl fixture: {window.window_text()!r}")
+        window.set_focus()
+        window.maximize()
+        time.sleep(0.5)
+        curl_open_image = window.capture_as_image()
+        curl_open_image.save(output / "12-curl-open.png")
+        window.click_input(coords=(580, 63))
+        deadline = time.time() + 10
+        curl_state = toolbar_button_state(window, 0x7CFF)
+        while (curl_state is None or not (curl_state & 0x01)) and time.time() < deadline:
+            time.sleep(0.2)
+            curl_state = toolbar_button_state(window, 0x7CFF)
+        if curl_state is None or not (curl_state & 0x01):
+            raise AssertionError(f"Curl real-time syntax toolbar did not become checked: {curl_state!r}")
+        time.sleep(1.5)
+        curl_syntax_image = window.capture_as_image()
+        curl_syntax_image.save(output / "13-curl-realtime-syntax.png")
+        error_line = curl_syntax_image.convert("RGB").crop((30, 115, 480, 139))
+        red_error_pixels = sum(
+            1 for red, green, blue in error_line.getdata()
+            if red >= 150 and red - green >= 55 and red - blue >= 55
+        )
+        if red_error_pixels < 6:
+            raise AssertionError(
+                "Curl live syntax check did not draw a visible red diagnostic mark on malformed code: "
+                f"red pixels={red_error_pixels}"
+            )
+        record("curl_live_syntax_error_indicator", toolbar_state=curl_state, red_error_pixels=red_error_pixels)
+
+        rainbow_state = toolbar_button_state(window, 0x7CFD)
+        if rainbow_state is None:
+            raise AssertionError("rainbow bracket toolbar button was not present")
+        if not (rainbow_state & 0x01):
+            window.click_input(coords=(640, 63))
+            time.sleep(0.5)
+            rainbow_state = toolbar_button_state(window, 0x7CFD)
+        if rainbow_state is None or not (rainbow_state & 0x01):
+            raise AssertionError(f"rainbow bracket toolbar did not enable: {rainbow_state!r}")
+        rainbow_image = window.capture_as_image()
+        rainbow_image.save(output / "14-rainbow-brackets.png")
+        bracket_pixels = [
+            rainbow_image.convert("RGB").crop(box).getdata()
+            for box in ((32, 90, 48, 108), (186, 90, 202, 108))
+        ]
+        saturated_bracket_pixels = sum(
+            1 for pixels in bracket_pixels for red, green, blue in pixels
+            if max(red, green, blue) - min(red, green, blue) >= 80
+        )
+        if saturated_bracket_pixels < 4:
+            raise AssertionError(
+                "rainbow bracket colors were not visible on the real Curl source screenshot: "
+                f"saturated pixels={saturated_bracket_pixels}"
+            )
+        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_state=rainbow_state,
+               saturated_bracket_pixels=saturated_bracket_pixels)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+        record("close_curl_test_application")
         evidence["status"] = "passed"
         return 0
     except Exception as exc:  # retain failure evidence from the real runner
