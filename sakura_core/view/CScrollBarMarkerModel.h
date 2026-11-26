@@ -1,4 +1,4 @@
-/*
+﻿/*
 	Copyright (C) 2026 Sakura Editor Organization
 	Custom enhancement based on Sakura Editor.
 	SPDX-License-Identifier: Zlib
