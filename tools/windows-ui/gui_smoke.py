@@ -175,8 +175,20 @@ def main() -> int:
         ]
         if len(result_lists) != 1 or int(result_lists[0].send_message(0x1004)) != 1:
             raise AssertionError("live filter did not populate exactly one result row")
+        filter_inputs = [
+            child for child in window.descendants()
+            if child.class_name() == "Edit" and child.is_visible()
+            and child.window_text() == "GUI_SMOKE_SELECTABLE_TOKEN"
+        ]
+        if len(filter_inputs) != 1:
+            raise AssertionError(
+                "could not uniquely identify the live-filter query edit before testing Ctrl+S: "
+                f"visible edit texts={visible_child_texts(window, 'Edit')!r}"
+            )
         if sample.read_bytes() != original:
             raise AssertionError("activating and using the live filter changed the source document")
+        filter_inputs[0].set_focus()
+        time.sleep(0.1)
         window.type_keys("^s")
         deadline = time.time() + 10
         while sample.read_bytes() != filter_saved and time.time() < deadline:
@@ -195,7 +207,8 @@ def main() -> int:
             raise AssertionError("Filter toolbar second click did not hide the results list")
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
-        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved))
+        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
+               focused_filter_edit=filter_inputs[0].handle)
 
         # Exercise actual mouse input against the editor's client area.
         window.double_click_input(coords=(90, 223))
