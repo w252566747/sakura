@@ -3475,7 +3475,8 @@ void CEditWnd::MessageLoop( void )
 
 			HWND acceleratorTarget = msg.hwnd;
 			if (m_bRealtimeFilterMode &&
-				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude ||\n\t\t\t\t::GetFocus() == m_hwndRealtimeFilterInclude || ::GetFocus() == m_hwndRealtimeFilterExclude)) {
+				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude ||
+				::GetFocus() == m_hwndRealtimeFilterInclude || ::GetFocus() == m_hwndRealtimeFilterExclude)) {
 				acceleratorTarget = GetHwnd();
 			}
 			if( m_hAccel && TranslateAccelerator( acceleratorTarget, m_hAccel, &msg ) ){}
