@@ -63,13 +63,13 @@ def main() -> int:
             if child.class_name() == class_name and child.is_visible()
         ]
 
-    def toolbar_button_state(window, command_id: int) -> int | None:
+    def toolbar_button(window, command_id: int):
         for child in window.descendants():
             if child.class_name() != "ToolbarWindow32":
                 continue
             index = int(child.send_message(0x411, command_id))  # TB_COMMANDTOINDEX
             if index >= 0:
-                return int(child.send_message(0x412, command_id))  # TB_GETSTATE uses command ID
+                return child.wrapper_object().button(index)
         return None
 
     def clipboard_text() -> str:
@@ -319,14 +319,16 @@ def main() -> int:
         time.sleep(0.5)
         curl_open_image = window.capture_as_image()
         curl_open_image.save(output / "12-curl-open.png")
-        window.click_input(coords=(580, 63))
+        curl_button = toolbar_button(window, 0x7CFF)
+        if curl_button is None:
+            raise AssertionError("Curl real-time syntax toolbar button was not found")
+        if not curl_button.is_checked():
+            curl_button.click_input()
         deadline = time.time() + 10
-        curl_state = toolbar_button_state(window, 0x7CFF)
-        while (curl_state is None or not (curl_state & 0x01)) and time.time() < deadline:
+        while not curl_button.is_checked() and time.time() < deadline:
             time.sleep(0.2)
-            curl_state = toolbar_button_state(window, 0x7CFF)
-        if curl_state is None or not (curl_state & 0x01):
-            raise AssertionError(f"Curl real-time syntax toolbar did not become checked: {curl_state!r}")
+        if not curl_button.is_checked():
+            raise AssertionError("Curl real-time syntax toolbar did not become checked after mouse click")
         time.sleep(1.5)
         curl_syntax_image = window.capture_as_image()
         curl_syntax_image.save(output / "13-curl-realtime-syntax.png")
@@ -340,17 +342,17 @@ def main() -> int:
                 "Curl live syntax check did not draw a visible red diagnostic mark on malformed code: "
                 f"red pixels={red_error_pixels}"
             )
-        record("curl_live_syntax_error_indicator", toolbar_state=curl_state, red_error_pixels=red_error_pixels)
+        record("curl_live_syntax_error_indicator", toolbar_checked=curl_button.is_checked(),
+               red_error_pixels=red_error_pixels)
 
-        rainbow_state = toolbar_button_state(window, 0x7CFD)
-        if rainbow_state is None:
+        rainbow_button = toolbar_button(window, 0x7CFD)
+        if rainbow_button is None:
             raise AssertionError("rainbow bracket toolbar button was not present")
-        if not (rainbow_state & 0x01):
-            window.click_input(coords=(640, 63))
+        if not rainbow_button.is_checked():
+            rainbow_button.click_input()
             time.sleep(0.5)
-            rainbow_state = toolbar_button_state(window, 0x7CFD)
-        if rainbow_state is None or not (rainbow_state & 0x01):
-            raise AssertionError(f"rainbow bracket toolbar did not enable: {rainbow_state!r}")
+        if not rainbow_button.is_checked():
+            raise AssertionError("rainbow bracket toolbar did not become checked after mouse click")
         rainbow_image = window.capture_as_image()
         rainbow_image.save(output / "14-rainbow-brackets.png")
         bracket_pixels = [
@@ -366,7 +368,7 @@ def main() -> int:
                 "rainbow bracket colors were not visible on the real Curl source screenshot: "
                 f"saturated pixels={saturated_bracket_pixels}"
             )
-        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_state=rainbow_state,
+        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_checked=rainbow_button.is_checked(),
                saturated_bracket_pixels=saturated_bracket_pixels)
         window.close()
         app.wait_for_process_exit(timeout=20)
