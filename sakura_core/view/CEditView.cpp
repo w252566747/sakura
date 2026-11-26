@@ -1606,8 +1606,8 @@ int	CEditView::CreatePopUpMenuSub( HMENU hMenu, int nMenuIdx, int* pParentMenus,
 			::AppendMenuW(markerMenu, MF_SEPARATOR, 0, nullptr);
 			::AppendMenuW(markerMenu, MF_STRING, IDM_WORDMARKER_CLEAR, L"固定マーカーをすべて解除");
 		}
-		::AppendMenuW(hMenu, MF_STRING, IDM_WORDMARKER_TOGGLE, L"選択語を固定マーカーに追加／解除");
 		::AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+		::AppendMenuW(hMenu, MF_STRING, IDM_WORDMARKER_TOGGLE, L"選択語を固定マーカーに追加／解除");
 		::AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(markerMenu), L"マーカー");
 	}
 
