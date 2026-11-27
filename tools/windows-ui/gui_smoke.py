@@ -460,6 +460,156 @@ def main() -> int:
         window.close()
         app.wait_for_process_exit(timeout=20)
         record("close_curl_test_application")
+
+        multicursor_sample = output / "gui-smoke-multicursor.txt"
+        multicursor_original = b"alpha + alpha\r\nbeta + beta\r\n"
+        multicursor_sample.write_bytes(multicursor_original)
+        app = Application(backend="win32").start(
+            f'"{exe}" "{multicursor_sample}"', timeout=30
+        )
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while multicursor_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if multicursor_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the multi-cursor fixture: {window.window_text()!r}")
+        window.maximize()
+        window.click_input(coords=(47, 92))
+        window.double_click_input(coords=(47, 92))
+        multicursor_control = toolbar_button(window, 0x7CDC)  # MULTICURSOR_BUTTON
+        if multicursor_control is None:
+            raise AssertionError("multi-cursor toolbar menu button was not found")
+        multicursor_toolbar, multicursor_index = multicursor_control
+        click_toolbar_button(multicursor_toolbar, multicursor_index)
+        time.sleep(0.2)
+        win32api.keybd_event(win32con.VK_HOME, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_HOME, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(0.2)
+        window.type_keys("OMEGA", with_spaces=True)
+        window.type_keys("^s")
+        expected_multicursor = b"OMEGA + OMEGA\r\nbeta + beta\r\n"
+        deadline = time.time() + 10
+        while multicursor_sample.read_bytes() != expected_multicursor and time.time() < deadline:
+            time.sleep(0.2)
+        if multicursor_sample.read_bytes() != expected_multicursor:
+            raise AssertionError(
+                "multi-cursor select-next did not replace exactly both matching words: "
+                f"got={multicursor_sample.read_bytes()!r}"
+            )
+        multicursor_image = window.capture_as_image()
+        multicursor_image.save(output / "15-multicursor-edit.png")
+        record("multi_cursor_menu_select_next_and_edit", saved_bytes=len(expected_multicursor))
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+
+        fold_sample = output / "gui-smoke-fold.cpp"
+        fold_original = (
+            "int main() {\r\n"
+            "    int value = 1;\r\n"
+            "    if (value) {\r\n"
+            "        value = 2;\r\n"
+            "    }\r\n"
+            "    return value;\r\n"
+            "}\r\n"
+        ).encode("ascii")
+        fold_sample.write_bytes(fold_original)
+        app = Application(backend="win32").start(f'"{exe}" "{fold_sample}"', timeout=30)
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while fold_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if fold_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the code-fold fixture: {window.window_text()!r}")
+        window.maximize()
+        window.click_input(coords=(90, 92))
+        fold_control = toolbar_button(window, 31575)  # F_CODEFOLD_TOGGLE
+        if fold_control is None:
+            raise AssertionError("code-fold toolbar button was not found")
+        fold_toolbar, fold_index = fold_control
+        fold_before = window.capture_as_image()
+        click_toolbar_button(fold_toolbar, fold_index)
+        time.sleep(0.5)
+        fold_collapsed = window.capture_as_image()
+        fold_collapsed.save(output / "16-codefold-collapsed.png")
+        fold_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((25, 80, 700, 300)),
+            fold_collapsed.convert("RGB").crop((25, 80, 700, 300)),
+        )).sum)
+        if fold_change < 1000:
+            raise AssertionError(f"code-fold toolbar action did not visibly change the editor: {fold_change}")
+        if fold_sample.read_bytes() != fold_original:
+            raise AssertionError("collapsing a block changed the saved source text")
+        click_toolbar_button(fold_toolbar, fold_index)
+        time.sleep(0.3)
+        fold_expanded = window.capture_as_image()
+        fold_expanded.save(output / "17-codefold-expanded.png")
+        fold_restore_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((25, 80, 700, 300)),
+            fold_expanded.convert("RGB").crop((25, 80, 700, 300)),
+        )).sum)
+        if fold_restore_change > fold_change:
+            raise AssertionError("code-fold expand action did not restore the original editor view")
+        record("code_fold_collapse_expand_and_source_preservation",
+               collapsed_pixel_delta=fold_change, expanded_pixel_delta=fold_restore_change)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+
+        csv_sample = output / "gui-smoke.csv"
+        csv_original = b"Name,Value\r\nalpha,1\r\nbeta,2\r\n"
+        csv_sample.write_bytes(csv_original)
+        app = Application(backend="win32").start(f'"{exe}" "{csv_sample}"', timeout=30)
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while csv_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if csv_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the CSV fixture: {window.window_text()!r}")
+        window.maximize()
+        csv_control = toolbar_button(window, 0x7CFC)  # CSV_TABLE_BUTTON
+        if csv_control is None:
+            raise AssertionError("CSV table toolbar button was not found")
+        csv_toolbar, csv_index = csv_control
+        click_toolbar_button(csv_toolbar, csv_index)
+        deadline = time.time() + 10
+        csv_tables = []
+        csv_row_count = 0
+        csv_column_count = 0
+        while time.time() < deadline:
+            csv_tables = [child for child in window.descendants()
+                          if child.class_name() == "SysListView32" and child.is_visible()]
+            if csv_tables:
+                csv_row_count = int(csv_tables[0].send_message(0x1004))  # LVM_GETITEMCOUNT
+                csv_header = int(csv_tables[0].send_message(0x101F))  # LVM_GETHEADER
+                csv_column_count = int(win32gui.SendMessage(csv_header, 0x1200, 0, 0)) if csv_header else 0
+                if csv_row_count == 2 and csv_column_count == 2:
+                    break
+            time.sleep(0.2)
+        if not csv_tables or csv_row_count != 2 or csv_column_count != 2:
+            raise AssertionError(
+                "CSV table did not display the expected two data rows and two columns: "
+                f"rows={csv_row_count}, columns={csv_column_count}"
+            )
+        window.capture_as_image().save(output / "18-csv-table.png")
+        if csv_sample.read_bytes() != csv_original:
+            raise AssertionError("opening the CSV table rewrote the source document")
+        click_toolbar_button(csv_toolbar, csv_index)
+        time.sleep(0.3)
+        if any(child.is_visible() for child in window.descendants() if child.class_name() == "SysListView32"):
+            raise AssertionError("CSV table toggle did not return to the text editor")
+        if csv_sample.read_bytes() != csv_original:
+            raise AssertionError("leaving CSV table mode rewrote the source document")
+        record("csv_table_view_rows_columns_toggle_and_source_preservation",
+               rows=csv_row_count, columns=csv_column_count)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
         evidence["status"] = "passed"
         return 0
     except Exception as exc:  # retain failure evidence from the real runner
