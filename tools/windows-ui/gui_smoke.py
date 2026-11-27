@@ -321,12 +321,24 @@ def main() -> int:
         while not any("一致 1 行" in text for text in visible_child_texts(window, "Static")) and time.time() < filter_deadline:
             time.sleep(0.1)
         filter_state_after = toolbar_state(filter_toolbar, 0x7CF6)
-        window.capture_as_image().save(output / "03-filter-toolbar-on.png")
-        if visible_child_by_class(window, "SysListView32") or not visible_child_by_class(window, "SakuraView"):
+        filter_image = window.capture_as_image()
+        filter_image.save(output / "03-filter-toolbar-on.png")
+        filter_edit_hwnd = win32gui.GetDlgItem(window.handle, 0x7CE2)
+        source_status = status_bar_text(window.handle)
+        if not (filter_state_after & 0x01):
             raise AssertionError(
-                "real filter toolbar click did not keep the original editor surface visible: "
-                f"before=0x{filter_state_before:02x}, after=0x{filter_state_after:02x}, "
-                f"button_rect={filter_toolbar.button(filter_index).rectangle()}"
+                "real filter toolbar click did not check the filter button: "
+                f"before=0x{filter_state_before:02x}, after=0x{filter_state_after:02x}"
+            )
+        if not filter_edit_hwnd or not win32gui.IsWindowVisible(filter_edit_hwnd):
+            raise AssertionError(
+                "filter toolbar click did not expose the include-query edit: "
+                f"hwnd={filter_edit_hwnd}, after=0x{filter_state_after:02x}"
+            )
+        if "26 Ln" not in source_status:
+            raise AssertionError(
+                "the original 26-line editor was not visible after opening the filter toolbar: "
+                f"status={source_status!r}, screenshot={filter_image.size}"
             )
         source_view_before_filter = window.capture_as_image()
         window.type_keys("GUI_SMOKE_SELECTABLE_TOKEN", with_spaces=True)
@@ -380,8 +392,25 @@ def main() -> int:
         click_toolbar_button(filter_toolbar, filter_index)
         filter_off = window.capture_as_image()
         filter_off.save(output / "05-filter-toolbar-off.png")
-        if visible_child_by_class(window, "SysListView32"):
-            raise AssertionError("Filter mode exposed the obsolete results list")
+        filter_state_off = toolbar_state(filter_toolbar, 0x7CF6)
+        filter_edit_visible_off = bool(
+            win32gui.GetDlgItem(window.handle, 0x7CE2)
+            and win32gui.IsWindowVisible(win32gui.GetDlgItem(window.handle, 0x7CE2))
+        )
+        if filter_state_off & 0x01 or filter_edit_visible_off:
+            raise AssertionError(
+                "filter toolbar click did not close the live filter controls: "
+                f"state=0x{filter_state_off:02x}, include_edit_visible={filter_edit_visible_off}"
+            )
+        window.click_input(coords=(100, 260))
+        window.type_keys("^a")
+        window.type_keys("^c")
+        restored_document = clipboard_text()
+        if restored_document != filter_saved.decode("ascii"):
+            raise AssertionError(
+                "closing the live filter did not restore the complete source document: "
+                f"expected {len(filter_saved)} characters, copied {len(restored_document)}"
+            )
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
         record("source_view_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
