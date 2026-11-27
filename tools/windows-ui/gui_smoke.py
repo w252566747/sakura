@@ -131,12 +131,19 @@ def main() -> int:
             if child.class_name() == class_name and child.is_visible()
         ]
 
-    def status_bar_text(window) -> str:
-        for child in window.descendants():
-            if child.class_name() == "msctls_statusbar32" and child.is_visible():
-                buffer = ctypes.create_unicode_buffer(1024)
-                _SEND_MESSAGE(child.handle, 0x040D, 0, ctypes.addressof(buffer))  # SB_GETTEXTW
-                return buffer.value
+    def status_bar_text(parent_hwnd: int) -> str:
+        status_hwnds: list[int] = []
+
+        def collect_child(child_hwnd: int, _lparam: int) -> bool:
+            if win32gui.GetClassName(child_hwnd) == "msctls_statusbar32" and win32gui.IsWindowVisible(child_hwnd):
+                status_hwnds.append(child_hwnd)
+            return True
+
+        win32gui.EnumChildWindows(parent_hwnd, collect_child, 0)
+        for status_hwnd in status_hwnds:
+            buffer = ctypes.create_unicode_buffer(1024)
+            _SEND_MESSAGE(status_hwnd, 0x040D, 0, ctypes.addressof(buffer))  # SB_GETTEXTW
+            return buffer.value
         raise AssertionError("the main window status bar was not found")
 
     def toolbar_button(window, command_id: int):
@@ -423,10 +430,10 @@ def main() -> int:
         if selected_text != "GUI_SMOKE_BASELINE":
             raise AssertionError(f"mouse drag did not select the intended full word: {selected_text!r}")
         deadline = time.time() + 3
-        mouse_selection_status = status_bar_text(window)
+        mouse_selection_status = status_bar_text(hwnd)
         while "合計 23 件" not in mouse_selection_status and time.time() < deadline:
             time.sleep(0.05)
-            mouse_selection_status = status_bar_text(window)
+            mouse_selection_status = status_bar_text(hwnd)
         if "合計 23 件" not in mouse_selection_status:
             raise AssertionError(f"mouse selection did not show the 23 matching occurrences: {mouse_selection_status!r}")
         window.capture_as_image().save(output / "07-mouse-selection-occurrence-count.png")
@@ -436,10 +443,10 @@ def main() -> int:
         window.click_input(coords=(200, 260))
         window.type_keys("{HOME}+{END}")
         deadline = time.time() + 3
-        keyboard_selection_status = status_bar_text(window)
+        keyboard_selection_status = status_bar_text(hwnd)
         while "合計 1 件" not in keyboard_selection_status and time.time() < deadline:
             time.sleep(0.05)
-            keyboard_selection_status = status_bar_text(window)
+            keyboard_selection_status = status_bar_text(hwnd)
         if "合計 1 件" not in keyboard_selection_status:
             raise AssertionError(f"keyboard selection did not show its occurrence count: {keyboard_selection_status!r}")
         window.capture_as_image().save(output / "07-keyboard-selection-occurrence-count.png")
