@@ -142,9 +142,13 @@ def main() -> int:
             settings.type_keys("^{TAB}")
             time.sleep(0.05)
         settings.capture_as_image().save(output / "02-settings-extension.png")
+        feature_controls = [
+            settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
+            for control_id in range(1749, 1763)
+        ]
+        if not all(control.is_visible() for control in feature_controls):
+            raise AssertionError("the enhancement settings page did not expose all 14 toolbar and feature checkboxes")
         curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
-        if not curl_feature.is_visible():
-            raise AssertionError("the enhancement settings page did not expose its Curl feature checkbox")
         curl_enabled_before = int(curl_feature.check_state())
         curl_feature.click()
         if int(curl_feature.check_state()) == curl_enabled_before:
