@@ -598,12 +598,14 @@ def main() -> int:
                 csv_row_count = int(csv_tables[0].send_message(0x1004))  # LVM_GETITEMCOUNT
                 csv_header = int(csv_tables[0].send_message(0x101F))  # LVM_GETHEADER
                 csv_column_count = int(win32gui.SendMessage(csv_header, 0x1200, 0, 0)) if csv_header else 0
-                if csv_row_count == 2 and csv_column_count == 2:
+                # The default CSV settings treat the first line as data and
+                # the table adds a leading row-number column labeled "#".
+                if csv_row_count == 3 and csv_column_count == 3:
                     break
             time.sleep(0.2)
-        if not csv_tables or csv_row_count != 2 or csv_column_count != 2:
+        if not csv_tables or csv_row_count != 3 or csv_column_count != 3:
             raise AssertionError(
-                "CSV table did not display the expected two data rows and two columns: "
+                "CSV table did not display three source rows and the row-number plus two data columns: "
                 f"rows={csv_row_count}, columns={csv_column_count}"
             )
         window.capture_as_image().save(output / "18-csv-table.png")
