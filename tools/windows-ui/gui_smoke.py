@@ -41,7 +41,7 @@ _GET_MENU_ITEM_RECT.argtypes = [
 _GET_MENU_ITEM_RECT.restype = wintypes.BOOL
 _SEND_MESSAGE = USER32.SendMessageW
 _SEND_MESSAGE.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-_SEND_MESSAGE.restype = wintypes.LRESULT
+_SEND_MESSAGE.restype = ctypes.c_ssize_t
 
 
 def menu_item_rect(hwnd: int, menu: int, index: int) -> tuple[int, int, int, int]:
