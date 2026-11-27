@@ -17,7 +17,7 @@ import win32clipboard
 import win32con
 import win32gui
 from PIL import ImageChops
-from PIL import ImageStat
+from PIL import ImageStat, ImageGrab
 from pywinauto import Application, mouse
 
 
@@ -31,6 +31,26 @@ _GET_MENU_STRING.argtypes = [
     wintypes.UINT,
 ]
 _GET_MENU_STRING.restype = ctypes.c_int
+_GET_MENU_ITEM_RECT = USER32.GetMenuItemRect
+_GET_MENU_ITEM_RECT.argtypes = [
+    wintypes.HWND,
+    wintypes.HMENU,
+    wintypes.UINT,
+    ctypes.POINTER(wintypes.RECT),
+]
+_GET_MENU_ITEM_RECT.restype = wintypes.BOOL
+
+
+def menu_item_rect(hwnd: int, menu: int, index: int) -> tuple[int, int, int, int]:
+    rect = wintypes.RECT()
+    if not _GET_MENU_ITEM_RECT(hwnd, menu, index, ctypes.byref(rect)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def click_menu_position(hwnd: int, menu: int, index: int) -> None:
+    left, top, right, bottom = menu_item_rect(hwnd, menu, index)
+    mouse.click(button="left", coords=((left + right) // 2, (top + bottom) // 2))
 
 
 def menu_item_text(menu: int, index: int) -> str:
@@ -717,18 +737,46 @@ def main() -> int:
         ]
         if "CSV" not in top_level_labels or top_level_labels.index("CSV") != top_level_labels.index("Help") + 1:
             raise AssertionError(f"CSV top-level menu is not immediately to the right of Help: {top_level_labels!r}")
-        csv_menu = win32gui.GetSubMenu(main_menu, top_level_labels.index("CSV"))
-        csv_menu_labels = [
-            menu_item_text(csv_menu, index).replace("&", "").strip()
-            for index in range(win32gui.GetMenuItemCount(csv_menu))
-        ]
+        csv_top_index = top_level_labels.index("CSV")
+        csv_menu = win32gui.GetSubMenu(main_menu, csv_top_index)
+        if not csv_menu:
+            raise AssertionError("CSV top-level menu has no native popup handle")
+        # Sakura builds owner-drawn submenu entries on WM_INITMENUPOPUP. Open
+        # the actual menu before inspecting its command IDs or taking evidence.
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        deadline = time.time() + 5
+        while win32gui.GetMenuItemCount(csv_menu) != 6 and time.time() < deadline:
+            time.sleep(0.05)
         expected_csv_items = [
             "Toggle CSV table view", "CSV display options...", "Validate CSV",
             "Filter current column...", "Sort current column...", "Edit rows and columns...",
         ]
-        if csv_menu_labels != expected_csv_items:
-            raise AssertionError(f"CSV menu commands differ from the expected set/order: {csv_menu_labels!r}")
-        window.menu_select("CSV->Toggle CSV table view")
+        expected_csv_ids = [31996, 31994, 31995, 31993, 31992, 31991]
+        csv_command_ids_in_menu = [
+            win32gui.GetMenuItemID(csv_menu, index)
+            for index in range(win32gui.GetMenuItemCount(csv_menu))
+        ]
+        if csv_command_ids_in_menu != expected_csv_ids:
+            raise AssertionError(
+                "CSV menu command IDs/order differ from the expected commands: "
+                f"{csv_command_ids_in_menu!r}"
+            )
+        item_rects = [menu_item_rect(window.handle, csv_menu, index) for index in range(6)]
+        menu_screenshot = ImageGrab.grab().convert("RGB")
+        menu_bounds = (
+            min(rect[0] for rect in item_rects) - 8,
+            min(rect[1] for rect in item_rects) - 4,
+            max(rect[2] for rect in item_rects) + 8,
+            max(rect[3] for rect in item_rects) + 4,
+        )
+        menu_crop = menu_screenshot.crop(menu_bounds)
+        menu_crop.save(output / "18-csv-menu-open.png")
+        if max(ImageStat.Stat(menu_crop).stddev) < 4:
+            raise AssertionError("the opened CSV submenu screenshot is blank or uniform")
+        # Command labels are owner-drawn and GetMenuStringW is intentionally
+        # empty for those entries; clicking by their native IDs verifies each
+        # rendered entry while the real dropdown screenshot retains the text.
+        click_menu_position(window.handle, csv_menu, 0)
         deadline = time.time() + 10
         csv_tables = []
         csv_row_count = 0
@@ -750,13 +798,17 @@ def main() -> int:
                 "CSV table did not display three source rows and the row-number plus two data columns: "
                 f"rows={csv_row_count}, columns={csv_column_count}"
             )
-        window.capture_as_image().save(output / "18-csv-table.png")
+        window.capture_as_image().save(output / "19-csv-table.png")
         if csv_sample.read_bytes() != csv_original:
             raise AssertionError("opening the CSV table rewrote the source document")
 
         popup_commands = [31994, 31993, 31992, 31991]
         for command_id in popup_commands:
-            win32gui.PostMessage(window.handle, win32con.WM_COMMAND, command_id, 0)
+            click_menu_position(window.handle, main_menu, csv_top_index)
+            if win32gui.GetMenuItemCount(csv_menu) != 6:
+                raise AssertionError("CSV submenu was not populated when reopened")
+            item_index = expected_csv_ids.index(command_id)
+            click_menu_position(window.handle, csv_menu, item_index)
             time.sleep(0.2)
             win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
             win32api.keybd_event(win32con.VK_ESCAPE, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -765,7 +817,8 @@ def main() -> int:
                        for child in window.descendants()):
                 raise AssertionError(f"CSV menu command 0x{command_id:04x} did not return to the table")
 
-        window.menu_select("CSV->Validate CSV")
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        click_menu_position(window.handle, csv_menu, expected_csv_ids.index(31995))
         deadline = time.time() + 10
         visible_lists = []
         while time.time() < deadline:
@@ -776,11 +829,12 @@ def main() -> int:
             time.sleep(0.2)
         if len(visible_lists) < 2:
             raise AssertionError("CSV validation menu did not show its validation result list")
-        window.capture_as_image().save(output / "19-csv-validation-menu.png")
+        window.capture_as_image().save(output / "20-csv-validation-menu.png")
         record("csv_menu_commands_and_validation_panel",
                popup_commands=popup_commands, visible_list_views=len(visible_lists))
 
-        window.menu_select("CSV->Toggle CSV table view")
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        click_menu_position(window.handle, csv_menu, expected_csv_ids.index(31996))
         time.sleep(0.3)
         if any(child.is_visible() for child in window.descendants() if child.class_name() == "SysListView32"):
             raise AssertionError("CSV table toggle did not return to the text editor")
