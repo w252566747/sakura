@@ -149,9 +149,9 @@ def main() -> int:
         if not all(control.is_visible() for control in feature_controls):
             raise AssertionError("the enhancement settings page did not expose all 14 toolbar and feature checkboxes")
         curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
-        curl_enabled_before = int(curl_feature.check_state())
+        curl_enabled_before = int(curl_feature.get_check_state())
         curl_feature.click()
-        if int(curl_feature.check_state()) == curl_enabled_before:
+        if int(curl_feature.get_check_state()) == curl_enabled_before:
             raise AssertionError("the Curl feature setting checkbox did not toggle")
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
@@ -163,11 +163,11 @@ def main() -> int:
             settings.type_keys("^{TAB}")
             time.sleep(0.05)
         curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
-        curl_enabled_saved = int(curl_feature.check_state())
+        curl_enabled_saved = int(curl_feature.get_check_state())
         if curl_enabled_saved == curl_enabled_before:
             raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
         curl_feature.click()
-        if int(curl_feature.check_state()) != curl_enabled_before:
+        if int(curl_feature.get_check_state()) != curl_enabled_before:
             raise AssertionError("could not restore the original Curl feature setting")
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
