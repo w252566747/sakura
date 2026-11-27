@@ -74,7 +74,7 @@ def main() -> int:
         return None
 
     def toolbar_state(toolbar, command_id: int) -> int:
-        return int(toolbar.send_message(0x411, command_id))  # TB_GETSTATE
+        return int(toolbar.send_message(0x412, command_id))  # TB_GETSTATE (WM_USER + 18)
 
     def click_toolbar_button(toolbar, index: int) -> None:
         # The generic ButtonWrapper exposes the toolbar HWND state, not fsState.
