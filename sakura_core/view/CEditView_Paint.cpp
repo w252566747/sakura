@@ -135,7 +135,7 @@ void CEditView::RedrawAll()
 	GetEditWnd().UpdateCaption();
 
 	//	Jul. 9, 2005 genta	選択範囲の情報をステータスバーへ表示
-	GetSelectionInfo().PrintSelectionInfoMsg();
+	GetSelectionInfo().PrintSelectionInfoMsg(true);
 
 	// スクロールバーの状態を更新する
 	AdjustScrollBars();

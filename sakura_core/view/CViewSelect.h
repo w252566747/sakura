@@ -13,6 +13,7 @@ class CEditView;
 
 #include "basis/SakuraBasis.h"
 #include "doc/layout/CLayout.h"
+#include <string>
 
 class CViewSelect{
 public:
@@ -101,7 +102,7 @@ public:
 		return ret;
 	}
 	//! 選択情報データの作成	2005.07.09 genta
-	void PrintSelectionInfoMsg() const;
+	void PrintSelectionInfoMsg(bool includeOccurrenceCount = false) const;
 
 	// -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
 	//                         状態取得                            //
@@ -151,6 +152,11 @@ private:
 	bool	m_bBeginBoxSelect;		// 矩形範囲選択中
 	bool	m_bSelectAreaChanging;	// 選択範囲変更中
 	int		m_nLastSelectedByteLen;	// 前回選択時の選択バイト数
+	mutable bool m_bOccurrenceCountCacheValid = false;
+	mutable std::wstring m_sOccurrenceCountCacheText;
+	mutable CLogicPoint m_ptOccurrenceCountCacheStart{ CLogicInt(0), CLogicInt(0) };
+	mutable size_t m_nOccurrenceCountCacheCurrent = 0;
+	mutable size_t m_nOccurrenceCountCacheTotal = 0;
 
 public:
 	bool	m_bBeginLineSelect;		// 行単位選択中

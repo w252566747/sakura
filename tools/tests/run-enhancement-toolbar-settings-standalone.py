@@ -14,7 +14,7 @@ def check_toolbar_wiring() -> None:
     settings_io = (ROOT / "sakura_core/env/CShareData_IO.cpp").read_text(encoding="utf-8-sig")
     assert "ShowEnhancementToolbarMenu(point)" in toolbar
     assert "TB_HIDEBUTTON" in toolbar
-    for group in ("CurlSyntax", "RainbowBracket", "MarkerNavigation", "RealtimeFilter", "CSVTable",
+    for group in ("CurlSyntax", "RainbowBracket", "MarkerNavigation", "RealtimeFilter",
                   "CodeFolding", "MultiCursor"):
         assert f"enhancementtoolbar::Group::{group}" in toolbar
     assert "buttons[3].idCommand = CODEFOLD_BUTTON" in toolbar
@@ -39,6 +39,7 @@ def check_runtime_feature_wiring() -> None:
     assert 'L"EnhancementFeatures", L"EnabledMask"' in settings_io and "SetFeatureEnabled" in settings_io
     assert "RefreshCurlSyntaxRealtime" in edit_window and "RefreshScrollBarMarkerFeature" in edit_window
     assert "ToggleRealtimeFilter();" in edit_window and "ToggleCSVTableMode();" in edit_window
+    assert "enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable)" in edit_window
     assert "ResetCodeFolds();" in edit_window
     assert "Group::CodeFolding" in layout
     assert "Group::RainbowBracket" in rainbow_layout and "Group::MarkerNavigation" in view_scroll
@@ -64,27 +65,24 @@ def check_common_settings_page() -> None:
     assert "IDD_PROP_EXTENSION DIALOGEX" in resources
     assert "STR_PROPCOMMON_EXTENSION" in resources
     assert "#define IDD_PROP_EXTENSION" in resource_ids
-    for control in (
-        "CURL", "RAINBOW", "MARKER", "FILTER", "CSV", "FOLD", "MULTICURSOR"
-    ):
+    toolbar_controls = ("CURL", "RAINBOW", "MARKER", "FILTER", "FOLD", "MULTICURSOR")
+    for control in toolbar_controls:
         control_id = f"IDC_CHECK_EXT_TOOLBAR_{control}"
         assert control_id in common and control_id in resources and control_id in resource_ids
     definitions = {
         name: int(value)
         for name, value in re.findall(r"^#define\s+(\w+)\s+(\d+)\s*$", resource_ids, re.M)
     }
-    controls = [f"IDC_CHECK_EXT_TOOLBAR_{name}" for name in (
-        "CURL", "RAINBOW", "MARKER", "FILTER", "CSV", "FOLD", "MULTICURSOR"
-    )]
+    controls = [f"IDC_CHECK_EXT_TOOLBAR_{name}" for name in toolbar_controls]
     control_values = [definitions[name] for name in controls]
-    assert control_values == list(range(1749, 1756))
+    assert control_values == [1749, 1750, 1751, 1752, 1754, 1755]
     assert len(set(control_values)) == len(control_values)
     feature_controls = [f"IDC_CHECK_EXT_FEATURE_{name}" for name in (
         "CURL", "RAINBOW", "MARKER", "FILTER", "CSV", "FOLD", "MULTICURSOR"
     )]
     feature_values = [definitions[name] for name in feature_controls]
     assert feature_values == list(range(1756, 1763))
-    assert len(set(control_values + feature_values)) == 14
+    assert len(set(control_values + feature_values)) == 13
     for name in feature_controls:
         assert name in common and name in resources
     assert definitions["_APS_NEXT_CONTROL_VALUE"] == 1763

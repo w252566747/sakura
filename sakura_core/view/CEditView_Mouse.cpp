@@ -1654,6 +1654,7 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 		GetCaret().ShowCaret_( GetHwnd() ); // 2002/07/22 novice
 
 		GetSelectionInfo().SelectEnd();
+		GetSelectionInfo().PrintSelectionInfoMsg(true);
 		if (!altClick && GetSelectionInfo().IsTextSelected()) {
 			CNativeW selected;
 			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {

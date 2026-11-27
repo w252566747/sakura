@@ -39,6 +39,9 @@ _GET_MENU_ITEM_RECT.argtypes = [
     ctypes.POINTER(wintypes.RECT),
 ]
 _GET_MENU_ITEM_RECT.restype = wintypes.BOOL
+_SEND_MESSAGE = USER32.SendMessageW
+_SEND_MESSAGE.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_SEND_MESSAGE.restype = wintypes.LRESULT
 
 
 def menu_item_rect(hwnd: int, menu: int, index: int) -> tuple[int, int, int, int]:
@@ -127,6 +130,14 @@ def main() -> int:
             for child in window.descendants()
             if child.class_name() == class_name and child.is_visible()
         ]
+
+    def status_bar_text(window) -> str:
+        for child in window.descendants():
+            if child.class_name() == "msctls_statusbar32" and child.is_visible():
+                buffer = ctypes.create_unicode_buffer(1024)
+                _SEND_MESSAGE(child.handle, 0x040D, 0, ctypes.addressof(buffer))  # SB_GETTEXTW
+                return buffer.value
+        raise AssertionError("the main window status bar was not found")
 
     def toolbar_button(window, command_id: int):
         for child in window.descendants():
@@ -411,6 +422,27 @@ def main() -> int:
         selection_image.save(output / "07-mouse-selection.png")
         if selected_text != "GUI_SMOKE_BASELINE":
             raise AssertionError(f"mouse drag did not select the intended full word: {selected_text!r}")
+        deadline = time.time() + 3
+        mouse_selection_status = status_bar_text(window)
+        while "合計 23 件" not in mouse_selection_status and time.time() < deadline:
+            time.sleep(0.05)
+            mouse_selection_status = status_bar_text(window)
+        if "合計 23 件" not in mouse_selection_status:
+            raise AssertionError(f"mouse selection did not show the 23 matching occurrences: {mouse_selection_status!r}")
+        window.capture_as_image().save(output / "07-mouse-selection-occurrence-count.png")
+
+        # Select the current line with the keyboard and ensure the count follows
+        # keyboard-created selections too, including subsequent paint refreshes.
+        window.click_input(coords=(200, 260))
+        window.type_keys("{HOME}+{END}")
+        deadline = time.time() + 3
+        keyboard_selection_status = status_bar_text(window)
+        while "合計 1 件" not in keyboard_selection_status and time.time() < deadline:
+            time.sleep(0.05)
+            keyboard_selection_status = status_bar_text(window)
+        if "合計 1 件" not in keyboard_selection_status:
+            raise AssertionError(f"keyboard selection did not show its occurrence count: {keyboard_selection_status!r}")
+        window.capture_as_image().save(output / "07-keyboard-selection-occurrence-count.png")
         marker_crop = selection_image.convert("RGB").crop((32, 90, 210, 108))
         warm_marker_pixels = sum(
             1 for red, green, blue in marker_crop.getdata()

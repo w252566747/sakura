@@ -17,6 +17,9 @@
 #include "env/CShareData.h"
 #include "env/DLLSHAREDATA.h"
 #include "types/CTypeSupport.h"
+#include "agent/CSearchAgent.h"
+#include <string>
+#include <cwchar>
 
 CViewSelect::CViewSelect(CEditView* pcEditView)
 : m_pcEditView(pcEditView)
@@ -43,6 +46,7 @@ void CViewSelect::CopySelectStatus(CViewSelect* pSelect) const
 	pSelect->m_sSelectBgn			= m_sSelectBgn;			//範囲選択(原点)
 	pSelect->m_sSelect				= m_sSelect;			//範囲選択
 	pSelect->m_sSelectOld			= m_sSelectOld;			//範囲選択
+	pSelect->m_bOccurrenceCountCacheValid = false;
 
 	pSelect->m_ptMouseRollPosOld	= m_ptMouseRollPosOld;	// マウス範囲選択前回位置(XY座標)
 }
@@ -269,7 +273,7 @@ void CViewSelect::DrawSelectArea(bool bDrawBracketCursorLine)
 	}
 
 	//	Jul. 9, 2005 genta 選択領域の情報を表示
-	PrintSelectionInfoMsg();
+	PrintSelectionInfoMsg(true);
 }
 
 /*!
@@ -632,7 +636,7 @@ void CViewSelect::GetSelectAreaLineFromRange(
 	@date 2006.06.06 ryoji 選択範囲の行が実在しない場合の対策を追加
 	@date 2006.06.28 syat バイト数カウントを追加
 */
-void CViewSelect::PrintSelectionInfoMsg() const
+void CViewSelect::PrintSelectionInfoMsg(bool includeOccurrenceCount) const
 {
 	const CEditView* pView=GetEditView();
 
@@ -642,6 +646,7 @@ void CViewSelect::PrintSelectionInfoMsg() const
 
 	CLayoutInt nLineCount = pView->m_pcEditDoc->m_cLayoutMgr.GetLineCount();
 	if( ! IsTextSelected() || m_sSelect.GetFrom().y >= nLineCount ){ // 先頭行が実在しない
+		m_bOccurrenceCountCacheValid = false;
 		const_cast<CEditView*>(pView)->GetCaret().m_bClearStatus = false;
 		if( IsBoxSelecting() ){
 			GetEditWnd().m_cStatusBar.SendStatusMessage2( L"box selecting" );
@@ -827,6 +832,57 @@ void CViewSelect::PrintSelectionInfoMsg() const
 		auto_sprintf( msg, L"%d %s (%d lines) selected.", select_sum, ( bCountByByte ? L"bytes" : L"chars" ), select_line );
 #endif
 	}
+	std::wstring statusMessage(msg);
+	// Count the selected literal only after a selection is stable. During mouse drag,
+	// DrawSelectArea runs for every movement; scanning the whole document there would stall large files.
+	CNativeW selectedText;
+	if (IsTextSelected() && const_cast<CEditView*>(pView)->GetSelectedDataSimple(selectedText)) {
+		const int selectedLength = selectedText.GetStringLength();
+		const wchar_t* selectedString = selectedText.GetStringPtr();
+		if (selectedString && selectedLength > 0 && selectedLength <= 256
+			&& wcschr(selectedString, L'\r') == nullptr && wcschr(selectedString, L'\n') == nullptr) {
+			const std::wstring selectedValue(selectedString, static_cast<size_t>(selectedLength));
+			CLogicPoint selectedStart;
+			pView->m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(m_sSelect.GetFrom(), &selectedStart);
+			size_t currentMatch = 0;
+			size_t totalMatches = 0;
+			if (includeOccurrenceCount && !IsBoxSelecting() && !IsMouseSelecting()) {
+				SSearchOption selectedOptions = pView->m_sCurSearchOption;
+				selectedOptions.bRegularExp = false;
+				selectedOptions.bWordOnly = false;
+				CSearchStringPattern selectedPattern;
+				if (selectedPattern.SetPattern(pView->GetHwnd(), selectedString, static_cast<size_t>(selectedLength), selectedOptions, nullptr)) {
+					CSearchAgent searchAgent(pView->m_pcEditDoc->m_cLayoutMgr.m_pcDocLineMgr);
+					CLogicPoint scanPosition(CLogicInt(0), CLogicInt(0));
+					CLogicRange match;
+					while (searchAgent.SearchWord(scanPosition, SEARCH_FORWARD, &match, selectedPattern)) {
+						++totalMatches;
+						if (match.GetFrom() == selectedStart) currentMatch = totalMatches;
+						const CLogicPoint matchStart = match.GetFrom();
+						scanPosition = match.GetTo();
+						if (matchStart == scanPosition) ++scanPosition.x;
+					}
+				}
+				m_bOccurrenceCountCacheValid = true;
+				m_sOccurrenceCountCacheText = selectedValue;
+				m_ptOccurrenceCountCacheStart = selectedStart;
+				m_nOccurrenceCountCacheCurrent = currentMatch;
+				m_nOccurrenceCountCacheTotal = totalMatches;
+			} else if (!IsBoxSelecting() && !IsMouseSelecting() && m_bOccurrenceCountCacheValid
+				&& m_sOccurrenceCountCacheText == selectedValue
+				&& m_ptOccurrenceCountCacheStart == selectedStart) {
+				currentMatch = m_nOccurrenceCountCacheCurrent;
+				totalMatches = m_nOccurrenceCountCacheTotal;
+			}
+			if (totalMatches > 0) {
+				statusMessage.append(L"  (");
+				statusMessage.append(std::to_wstring(currentMatch));
+				statusMessage.append(L" 番目 / 合計 ");
+				statusMessage.append(std::to_wstring(totalMatches));
+				statusMessage.append(L" 件)");
+			}
+		}
+	}
 	const_cast<CEditView*>(pView)->GetCaret().m_bClearStatus = false;
-	GetEditWnd().m_cStatusBar.SendStatusMessage2( msg );
+	GetEditWnd().m_cStatusBar.SendStatusMessage2( statusMessage.c_str() );
 }
