@@ -16,6 +16,7 @@
 #include "view/CEditView.h" // SColorStrategyInfo
 #include "view/colors/CColorStrategy.h"
 #include "view/colors/CWordMarker.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "curl/CurlSyntaxCheckService.h"
 #include "parse/CSVTableSettings.h"
 #include "plugin/CPlugin.h"
@@ -100,7 +101,11 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 
 	if( bRead ){
 		CEditView::SetMaxMultiCursors(CEditView::MAX_MULTI_CURSORS);
+		enhancementtoolbar::SetVisibilityMask(enhancementtoolbar::DEFAULT_VISIBILITY_MASK);
+		enhancementtoolbar::SetEnabledMask(enhancementtoolbar::DEFAULT_ENABLED_MASK);
+		curlsyntax::SetFeatureEnabled(true);
 		CEditView::SetRainbowUnmatchedHighlightEnabled(true);
+		CEditView::SetRainbowCurrentLevelHighlightEnabled(false);
 		CEditView::SetScrollBarMarkerVisibility(CScrollBarMarkerModel::VISIBILITY_MASK);
 		for (unsigned kind = 0; kind < CScrollBarMarkerModel::KIND_COUNT; ++kind)
 			CEditView::SetScrollBarMarkerColor(kind, 0xffffffffu);
@@ -120,6 +125,26 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 			}
 			return false;
 		}
+		std::wstring enhancementToolbarVisibility;
+		if (cProfile.GetProfileData(L"EnhancementToolbar", L"VisibilityMask", enhancementToolbarVisibility)) {
+			try {
+				std::size_t parsedLength = 0;
+				const auto parsedMask = std::stoul(enhancementToolbarVisibility, &parsedLength);
+				if (parsedLength == enhancementToolbarVisibility.size()) {
+					enhancementtoolbar::SetVisibilityMask(static_cast<std::uint32_t>(parsedMask));
+				}
+			} catch (...) { }
+		}
+		std::wstring enhancementFeatureMask;
+		if (cProfile.GetProfileData(L"EnhancementFeatures", L"EnabledMask", enhancementFeatureMask)) {
+			try {
+				std::size_t parsedLength = 0;
+				const auto parsedMask = std::stoul(enhancementFeatureMask, &parsedLength);
+				if (parsedLength == enhancementFeatureMask.size())
+					enhancementtoolbar::SetEnabledMask(static_cast<std::uint32_t>(parsedMask));
+			} catch (...) { }
+		}
+		curlsyntax::SetFeatureEnabled(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CurlSyntax));
 		std::wstring maxMultiCursorCount;
 		if (cProfile.GetProfileData(L"MultiCursor", L"MaxCount", maxMultiCursorCount)) {
 			try {
@@ -144,6 +169,11 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		if (cProfile.GetProfileData(L"RainbowBracket", L"HighlightUnmatched", rainbowUnmatchedHighlight)) {
 			CEditView::SetRainbowUnmatchedHighlightEnabled(
 				rainbowUnmatchedHighlight == L"1" || rainbowUnmatchedHighlight == L"true");
+		}
+		std::wstring rainbowCurrentLevelHighlight;
+		if (cProfile.GetProfileData(L"RainbowBracket", L"HighlightCurrentLevel", rainbowCurrentLevelHighlight)) {
+			CEditView::SetRainbowCurrentLevelHighlightEnabled(
+				rainbowCurrentLevelHighlight == L"1" || rainbowCurrentLevelHighlight == L"true");
 		}
 		std::wstring scrollBarMarkerColors;
 		if (cProfile.GetProfileData(L"ScrollBarMarker", L"Colors", scrollBarMarkerColors)) {
@@ -283,6 +313,10 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 	pcMenuDrawer = nullptr;
 
 	if( !bRead ){
+		cProfile.SetProfileData(L"EnhancementToolbar", L"VisibilityMask",
+			std::to_wstring(enhancementtoolbar::GetVisibilityMask()));
+		cProfile.SetProfileData(L"EnhancementFeatures", L"EnabledMask",
+			std::to_wstring(enhancementtoolbar::GetEnabledMask()));
 		const auto& markers = CWordMarker::Instance().Entries();
 		for (size_t i = 0; i < markers.size() && i < 32; ++i) {
 			cProfile.SetProfileData(L"WordMarker", std::to_wstring(i),
@@ -292,7 +326,7 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		cProfile.SetProfileData(L"WordMarker", L"Count", std::to_wstring(std::min<size_t>(markers.size(), 32)));
 		cProfile.SetProfileData(L"WordMarker", L"AutomaticEnabled", CWordMarker::Instance().IsAutomaticEnabled() ? L"1" : L"0");
 		cProfile.SetProfileData(L"WordMarker", L"ExtraWordChars", CWordMarker::Instance().AddedWordCharacters());
-		cProfile.SetProfileData(L"CurlSyntaxCheck", L"RealtimeEnabled", curlsyntax::IsRealtimeEnabled() ? L"1" : L"0");
+		cProfile.SetProfileData(L"CurlSyntaxCheck", L"RealtimeEnabled", curlsyntax::IsRealtimePreferenceEnabled() ? L"1" : L"0");
 		cProfile.SetProfileData(L"CurlSyntaxCheck", L"ErrorListHeight", std::to_wstring(curlsyntax::GetErrorListHeight()));
 		const auto& csvSettings = csvtable::GetUserSettings();
 		cProfile.SetProfileData(L"CSVTable", L"Delimiter",
@@ -308,8 +342,10 @@ bool CShareData_IO::ShareData_IO_2( bool bRead )
 		cProfile.SetProfileData(L"MultiCursor", L"MaxCount", std::to_wstring(CEditView::GetMaxMultiCursors()));
 		cProfile.SetProfileData(L"RainbowBracket", L"HighlightUnmatched",
 			CEditView::IsRainbowUnmatchedHighlightEnabled() ? L"1" : L"0");
+		cProfile.SetProfileData(L"RainbowBracket", L"HighlightCurrentLevel",
+			CEditView::IsRainbowCurrentLevelHighlightEnabled() ? L"1" : L"0");
 		cProfile.SetProfileData(L"ScrollBarMarker", L"VisibilityMask",
-			std::to_wstring(CEditView::GetScrollBarMarkerVisibility()));
+			std::to_wstring(CEditView::GetScrollBarMarkerConfiguredVisibility()));
 		std::wstring scrollBarMarkerColors;
 		for (unsigned kind = 0; kind < CScrollBarMarkerModel::KIND_COUNT; ++kind) {
 			if (!scrollBarMarkerColors.empty()) scrollBarMarkerColors.push_back(L',');

@@ -37,6 +37,7 @@
 #include "config/app_constants.h"
 #include "util/window.h"
 #include "parse/CodeFoldParser.h"
+#include "window/EnhancementToolbarSettings.h"
 #include <algorithm>
 #include <cwctype>
 #include <limits>
@@ -277,7 +278,7 @@ const CLayout* CLayoutMgr::SearchLineByLayoutY(CLayoutInt nLineLayout) const
 
 bool CLayoutMgr::IsCodeFoldSupported() const
 {
-	if (!m_pTypeConfig) return false;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding) || !m_pTypeConfig) return false;
 	auto lower = [](std::wstring value) {
 		std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
 		return value;
@@ -375,11 +376,18 @@ bool CLayoutMgr::IsCodeFoldCollapsedAtLine(CLogicInt logicLine) const
 
 bool CLayoutMgr::IsCodeFoldHiddenLine(CLogicInt logicLine) const
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) return false;
 	auto it = std::upper_bound(m_vFoldHiddenLogicalLines.begin(), m_vFoldHiddenLogicalLines.end(), logicLine,
 		[](CLogicInt line, const FoldLineRange& range) { return line < range.first; });
 	if (it == m_vFoldHiddenLogicalLines.begin()) return false;
 	--it;
 	return it->first <= logicLine && logicLine <= it->last;
+}
+
+bool CLayoutMgr::IsCodeFoldActive() const
+{
+	return enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)
+		&& !m_vCollapsedCodeFolds.empty();
 }
 
 size_t CLayoutMgr::GetCodeFoldHiddenLineCount(CLogicInt logicLine) const

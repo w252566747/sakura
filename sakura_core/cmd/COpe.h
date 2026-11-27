@@ -59,6 +59,8 @@ private:
 public:
 	CLogicPoint	m_ptCaretPos_PHY_Before;	//!< キャレット位置。文字単位。			[共通]
 	CLogicPoint	m_ptCaretPos_PHY_After;		//!< キャレット位置。文字単位。			[共通]
+	int			m_nMultiCursorSlot = -1;		//!< Multi-cursor slot; -1 for ordinary edits
+	bool		m_bMultiCursorStateMarker = false;
 };
 
 //!削除
@@ -116,5 +118,28 @@ public:
 		m_ptCaretPos_PHY_Before = ptCaretPos;
 		m_ptCaretPos_PHY_After = ptCaretPos;
 	}
+};
+
+//! Multi-cursor caret/selection state carried by the enclosing undo block.
+class CMultiCursorStateOpe final : public COpe {
+public:
+	CMultiCursorStateOpe(const CLogicPoint& caretBefore, const CLogicPoint& caretAfter,
+		const CLogicPoint& anchorBefore, const CLogicPoint& anchorAfter,
+		bool selectedBefore, bool selectedAfter)
+		: COpe(OPE_MOVECARET)
+		, m_ptAnchorBefore(anchorBefore)
+		, m_ptAnchorAfter(anchorAfter)
+		, m_bHasSelectionBefore(selectedBefore)
+		, m_bHasSelectionAfter(selectedAfter)
+	{
+		m_ptCaretPos_PHY_Before = caretBefore;
+		m_ptCaretPos_PHY_After = caretAfter;
+		m_bMultiCursorStateMarker = true;
+	}
+
+	CLogicPoint m_ptAnchorBefore;
+	CLogicPoint m_ptAnchorAfter;
+	bool m_bHasSelectionBefore;
+	bool m_bHasSelectionAfter;
 };
 #endif /* SAKURA_COPE_45A75845_2C52_4602_9236_743A423DF1DB_H_ */

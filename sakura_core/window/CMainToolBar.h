@@ -52,6 +52,8 @@ private:
 	void RefreshCurlSyntaxControl();
 	void UpdateMarkerVisibility();
 	void LayoutMarkerControls();
+	void ShowEnhancementToolbarMenu(POINT clientPoint);
+	void ShowMultiCursorMenu();
 	void HandleMarkerControl(UINT controlId);
 	void HandleMarkerColorChange(UINT controlId);
 	void ShowCSVOptionsMenu();

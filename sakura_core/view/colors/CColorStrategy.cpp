@@ -20,6 +20,7 @@
 #include "CColor_Heredoc.h"
 #include "doc/layout/CLayout.h"
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "types/CTypeSupport.h"
 
 bool _IsPosKeywordHead(const CStringRef& cStr, int nPos)
@@ -102,13 +103,19 @@ bool SColorStrategyInfo::CheckChangeColor(const CStringRef& cLineStr)
 		}
 	}
 
-	if (const CLayout* layout = GetLayout()) {
-		SRainbowBracketMark bracketMark;
-		if (layout->GetRainbowBracketMark(static_cast<int>(m_nPosInLogic), &bracketMark)) {
-			m_rainbowBracketColor = bracketMark.unmatched && CEditView::IsRainbowUnmatchedHighlightEnabled()
-				? COLORIDX_BRACKET_PAIR
-				: static_cast<EColorIndexType>(COLORIDX_RAINBOW_BRACKET1 + bracketMark.level % CBracketNestingState::COLOR_COUNT);
-			m_hasRainbowBracketColor = true;
+	if (enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)) {
+		if (const CLayout* layout = GetLayout()) {
+			SRainbowBracketMark bracketMark;
+			if (layout->GetRainbowBracketMark(static_cast<int>(m_nPosInLogic), &bracketMark)) {
+				const bool emphasize = ShouldHighlightRainbowBracketMark(bracketMark,
+					m_pcView ? m_pcView->GetCurrentRainbowBracketLevel() : -1,
+					CEditView::IsRainbowCurrentLevelHighlightEnabled(),
+					CEditView::IsRainbowUnmatchedHighlightEnabled());
+				m_rainbowBracketColor = emphasize
+					? COLORIDX_BRACKET_PAIR
+					: static_cast<EColorIndexType>(COLORIDX_RAINBOW_BRACKET1 + bracketMark.level % CBracketNestingState::COLOR_COUNT);
+				m_hasRainbowBracketColor = true;
+			}
 		}
 	}
 	if (hadRainbowBracketColor != m_hasRainbowBracketColor ||

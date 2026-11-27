@@ -212,7 +212,7 @@ public:
 	bool UnfoldAllCodeBlocks();
 	bool FoldCodeBlocksAtDepth(size_t depth);
 	bool FoldCodeBlocksToDepth(size_t oneBasedDepth);
-	bool IsCodeFoldActive() const { return !m_vCollapsedCodeFolds.empty(); }
+	bool IsCodeFoldActive() const;
 	CLayoutInt GetFirstCollapsedFoldDisplayLine() const;
 	void ResetCodeFolds();
 

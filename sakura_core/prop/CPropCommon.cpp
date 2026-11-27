@@ -23,6 +23,7 @@
 #include "StdAfx.h"
 #include "prop/CPropCommon.h"
 #include "view/colors/CWordMarker.h"
+#include "view/CEditView.h"
 #include "env/CShareData.h"
 #include "env/DLLSHAREDATA.h"
 #include "env/CDocTypeManager.h"
@@ -32,6 +33,9 @@
 #include "apiwrap/StdControl.h"
 #include "sakura_rc.h"
 #include "apiwrap/DarkMode.h"
+#include "window/EnhancementToolbarSettings.h"
+#include "curl/CurlSyntaxCheckService.h"
+#include <array>
 
 int	CPropCommon::SearchIntArr( int nKey, int* pnArr, int nArrNum )
 {
@@ -134,6 +138,7 @@ CPropCommon::CPropCommon()
 		static_assert( sizeof(CPropHelper)    - sizeof(CPropCommon) == 0 );
 		static_assert( sizeof(CPropMacro)     - sizeof(CPropCommon) == 0 );
 		static_assert( sizeof(CPropPlugin)    - sizeof(CPropCommon) == 0 );
+		static_assert( sizeof(CPropEnhancement) - sizeof(CPropCommon) == 0 );
 	}
 
 	/* 共有データ構造体のアドレスを返す */
@@ -209,6 +214,7 @@ INT_PTR CPropCommon::DoPropertySheet( int nPageNum, bool bTrayProc )
 		{ STR_PROPCOMMON_SUPPORT,	IDD_PROP_HELPER,	CPropHelper::DlgProc_page },
 		{ STR_PROPCOMMON_MACRO,		IDD_PROP_MACRO,		CPropMacro::DlgProc_page },
 		{ STR_PROPCOMMON_PLUGIN,	IDD_PROP_PLUGIN,	CPropPlugin::DlgProc_page },
+		{ STR_PROPCOMMON_EXTENSION, IDD_PROP_EXTENSION, CPropEnhancement::DlgProc_page },
 	};
 
 	std::wstring		sTabname[std::size(ComPropSheetInfoList)];
@@ -293,6 +299,9 @@ void CPropCommon::InitData( const int* tempTypeKeywordSet, const WCHAR* name, co
 	m_Common = m_pShareData->m_Common;
 	m_bWordMarkerAutomaticEnabled = CWordMarker::Instance().IsAutomaticEnabled();
 	m_addedWordCharacters = CWordMarker::Instance().AddedWordCharacters();
+	m_nMaxMultiCursors = CEditView::GetMaxMultiCursors();
+	m_uEnhancementToolbarVisibilityMask = enhancementtoolbar::GetVisibilityMask();
+	m_uEnhancementFeatureEnabledMask = enhancementtoolbar::GetEnabledMask();
 	m_tempTypeName[0] = L'\0';
 	m_tempTypeExts[0] = L'\0';
 
@@ -331,6 +340,10 @@ void CPropCommon::ApplyData( int* tempTypeKeywordSet )
 	m_pShareData->m_Common = m_Common;
 	CWordMarker::Instance().SetAutomaticEnabled(m_bWordMarkerAutomaticEnabled);
 	CWordMarker::Instance().SetAddedWordCharacters(m_addedWordCharacters);
+	CEditView::SetMaxMultiCursors(m_nMaxMultiCursors);
+	enhancementtoolbar::SetVisibilityMask(m_uEnhancementToolbarVisibilityMask);
+	enhancementtoolbar::SetEnabledMask(m_uEnhancementFeatureEnabledMask);
+	curlsyntax::SetFeatureEnabled(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CurlSyntax));
 
 	int i;
 	const int nSize = (int)m_Types_nKeyWordSetIdx.size();
@@ -478,4 +491,94 @@ HFONT CPropCommon::SetFontLabel( HWND hwndDlg, int idc_static, const LOGFONT& lf
 	ApiWrap::DlgItem_SetText( hwndDlg, idc_static, szFontName );
 
 	return hFont;
+}
+
+namespace {
+struct EnhancementToolbarControl {
+	int controlId;
+	enhancementtoolbar::Group group;
+};
+
+constexpr std::array<EnhancementToolbarControl, 7> g_enhancementToolbarControls{{
+	{ IDC_CHECK_EXT_TOOLBAR_CURL, enhancementtoolbar::Group::CurlSyntax },
+	{ IDC_CHECK_EXT_TOOLBAR_RAINBOW, enhancementtoolbar::Group::RainbowBracket },
+	{ IDC_CHECK_EXT_TOOLBAR_MARKER, enhancementtoolbar::Group::MarkerNavigation },
+	{ IDC_CHECK_EXT_TOOLBAR_FILTER, enhancementtoolbar::Group::RealtimeFilter },
+	{ IDC_CHECK_EXT_TOOLBAR_CSV, enhancementtoolbar::Group::CSVTable },
+	{ IDC_CHECK_EXT_TOOLBAR_FOLD, enhancementtoolbar::Group::CodeFolding },
+	{ IDC_CHECK_EXT_TOOLBAR_MULTICURSOR, enhancementtoolbar::Group::MultiCursor },
+}};
+
+constexpr std::array<EnhancementToolbarControl, 7> g_enhancementFeatureControls{{
+	{ IDC_CHECK_EXT_FEATURE_CURL, enhancementtoolbar::Group::CurlSyntax },
+	{ IDC_CHECK_EXT_FEATURE_RAINBOW, enhancementtoolbar::Group::RainbowBracket },
+	{ IDC_CHECK_EXT_FEATURE_MARKER, enhancementtoolbar::Group::MarkerNavigation },
+	{ IDC_CHECK_EXT_FEATURE_FILTER, enhancementtoolbar::Group::RealtimeFilter },
+	{ IDC_CHECK_EXT_FEATURE_CSV, enhancementtoolbar::Group::CSVTable },
+	{ IDC_CHECK_EXT_FEATURE_FOLD, enhancementtoolbar::Group::CodeFolding },
+	{ IDC_CHECK_EXT_FEATURE_MULTICURSOR, enhancementtoolbar::Group::MultiCursor },
+}};
+}
+
+INT_PTR CALLBACK CPropEnhancement::DlgProc_page(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	return DlgProc(reinterpret_cast<pDispatchPage>(&CPropEnhancement::DispatchEvent), hwndDlg, uMsg, wParam, lParam);
+}
+
+INT_PTR CPropEnhancement::DispatchEvent(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg) {
+	case WM_INITDIALOG:
+		SetData(hwndDlg);
+		::SetWindowLongPtr(hwndDlg, DWLP_USER, lParam);
+		return TRUE;
+	case WM_NOTIFY: {
+		const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+		if (!header) return FALSE;
+		if (header->code == PSN_KILLACTIVE) {
+			GetData(hwndDlg);
+			::SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT, FALSE);
+			return TRUE;
+		}
+		if (header->code == PSN_HELP) {
+			OnHelp(hwndDlg, IDD_PROP_EXTENSION);
+			return TRUE;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	return FALSE;
+}
+
+void CPropEnhancement::SetData(HWND hwndDlg)
+{
+	for (const auto& control : g_enhancementToolbarControls) {
+		const auto bit = static_cast<std::uint32_t>(control.group);
+		::CheckDlgButton(hwndDlg, control.controlId,
+			(m_uEnhancementToolbarVisibilityMask & bit) ? BST_CHECKED : BST_UNCHECKED);
+	}
+	for (const auto& control : g_enhancementFeatureControls) {
+		const auto bit = static_cast<std::uint32_t>(control.group);
+		::CheckDlgButton(hwndDlg, control.controlId,
+			(m_uEnhancementFeatureEnabledMask & bit) ? BST_CHECKED : BST_UNCHECKED);
+	}
+}
+
+int CPropEnhancement::GetData(HWND hwndDlg)
+{
+	std::uint32_t mask = 0;
+	for (const auto& control : g_enhancementToolbarControls) {
+		if (::IsDlgButtonChecked(hwndDlg, control.controlId) == BST_CHECKED)
+			mask |= static_cast<std::uint32_t>(control.group);
+	}
+	m_uEnhancementToolbarVisibilityMask = mask;
+	mask = 0;
+	for (const auto& control : g_enhancementFeatureControls) {
+		if (::IsDlgButtonChecked(hwndDlg, control.controlId) == BST_CHECKED)
+			mask |= static_cast<std::uint32_t>(control.group);
+	}
+	m_uEnhancementFeatureEnabledMask = mask;
+	return 1;
 }

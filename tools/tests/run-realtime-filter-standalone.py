@@ -72,6 +72,11 @@ int main() {
   options.logic = Logic::Or;
   Matcher orMatcher(options);
   assert(orMatcher.Matches(L"disk only"));
+  assert(!orMatcher.Matches(L"disk only ignore"));
+  options.caseSensitive = true;
+  Matcher caseSensitive(options);
+  assert(!caseSensitive.Matches(L"DISK only"));
+  assert(caseSensitive.Matches(L"disk only"));
 
   options = {};
   options.includeTerms = {L"^WARN", L"[0-9]+$"};

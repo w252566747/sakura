@@ -64,35 +64,38 @@ Matcher::~Matcher() = default;
 Matcher::Matcher(Matcher&&) noexcept = default;
 Matcher& Matcher::operator=(Matcher&&) noexcept = default;
 
-bool Matcher::MatchAny(const std::vector<std::unique_ptr<Term>>& terms, const std::wstring& line) const
-{
-	if (terms.empty()) return false;
-	if (m_regex) {
-		if (line.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
-		return std::any_of(terms.begin(), terms.end(), [&line](const std::unique_ptr<Term>& term) {
-			return term->regex && term->regex->Match(line.c_str(), static_cast<int>(line.size()));
-		});
-	}
-	const std::wstring haystack = m_caseSensitive ? line : FoldCase(line);
-	return std::any_of(terms.begin(), terms.end(), [&haystack](const std::unique_ptr<Term>& term) {
-		return haystack.find(term->literal) != std::wstring::npos;
-	});
-}
-
 bool Matcher::Matches(const std::wstring& line) const
 {
-	if (MatchAny(m_exclude, line)) return false;
-	if (m_include.empty()) return true;
-	if (m_logic == Logic::Or) return MatchAny(m_include, line);
 	if (m_regex) {
 		if (line.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
+		auto matchesAny = [&line](const std::vector<std::unique_ptr<Term>>& terms) {
+			return std::any_of(terms.begin(), terms.end(), [&line](const std::unique_ptr<Term>& term) {
+				return term->regex && term->regex->Match(line.c_str(), static_cast<int>(line.size()));
+			});
+		};
+		if (matchesAny(m_exclude)) return false;
+		if (m_include.empty()) return true;
+		if (m_logic == Logic::Or) return matchesAny(m_include);
 		return std::all_of(m_include.begin(), m_include.end(), [&line](const std::unique_ptr<Term>& term) {
 			return term->regex && term->regex->Match(line.c_str(), static_cast<int>(line.size()));
 		});
 	}
-	const std::wstring haystack = m_caseSensitive ? line : FoldCase(line);
-	return std::all_of(m_include.begin(), m_include.end(), [&haystack](const std::unique_ptr<Term>& term) {
-		return haystack.find(term->literal) != std::wstring::npos;
+	std::wstring folded;
+	std::wstring_view haystack(line);
+	if (!m_caseSensitive) {
+		folded = FoldCase(line);
+		haystack = folded;
+	}
+	auto matchesAny = [haystack](const std::vector<std::unique_ptr<Term>>& terms) {
+		return std::any_of(terms.begin(), terms.end(), [haystack](const std::unique_ptr<Term>& term) {
+			return haystack.find(term->literal) != std::wstring_view::npos;
+		});
+	};
+	if (matchesAny(m_exclude)) return false;
+	if (m_include.empty()) return true;
+	if (m_logic == Logic::Or) return matchesAny(m_include);
+	return std::all_of(m_include.begin(), m_include.end(), [haystack](const std::unique_ptr<Term>& term) {
+		return haystack.find(term->literal) != std::wstring_view::npos;
 	});
 }
 

@@ -133,6 +133,7 @@ public:
 	int				m_nCommandExecNum = 0;			//!< コマンド実行回数
 	uint64_t		m_uCurlSyntaxDocumentId = 0;	//!< Curl syntax result identity; process-local, not shared memory
 	uint64_t		m_uCurlSyntaxVersion = 0;	//!< Incremented after every content change
+	uint64_t		m_uCurlSyntaxDiagnosticsGeneration = 0;	//!< Incremented whenever the accepted diagnostics snapshot changes
 	bool			m_bCurlSyntaxResultStale = true;
 	std::vector<curlsyntax::Diagnostic> m_vCurlSyntaxDiagnostics;
 

@@ -13,9 +13,10 @@ from pathlib import Path
 import win32api
 import win32clipboard
 import win32con
+import win32gui
 from PIL import ImageChops
 from PIL import ImageStat
-from pywinauto import Application
+from pywinauto import Application, mouse
 
 
 def main() -> int:
@@ -62,6 +63,26 @@ def main() -> int:
             for child in window.descendants()
             if child.class_name() == class_name and child.is_visible()
         ]
+
+    def toolbar_button(window, command_id: int):
+        for child in window.descendants():
+            if child.class_name() != "ToolbarWindow32" or not child.is_visible():
+                continue
+            index = int(child.send_message(0x419, command_id))  # TB_COMMANDTOINDEX
+            if index >= 0:
+                return child, index
+        return None
+
+    def toolbar_state(toolbar, command_id: int) -> int:
+        return int(toolbar.send_message(0x411, command_id))  # TB_GETSTATE
+
+    def click_toolbar_button(toolbar, index: int) -> None:
+        # The generic ButtonWrapper exposes the toolbar HWND state, not fsState.
+        item = toolbar.button(index).rectangle()
+        owner = win32gui.GetWindowRect(toolbar.handle)
+        x = owner[0] + (item.left + item.right) // 2
+        y = owner[1] + (item.top + item.bottom) // 2
+        mouse.click(button="left", coords=(x, y))
 
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
@@ -114,7 +135,7 @@ def main() -> int:
 
         # Leave an unsaved edit in the original document before opening the filter.
         window.set_focus()
-        window.type_keys("^{END}")
+        window.click_input(coords=(100, 447))
         window.type_keys("GUI_SMOKE_FILTER_SAVE", with_spaces=True)
         filter_saved = original + b"GUI_SMOKE_FILTER_SAVE"
         if sample.read_bytes() != original:
@@ -154,8 +175,20 @@ def main() -> int:
         ]
         if len(result_lists) != 1 or int(result_lists[0].send_message(0x1004)) != 1:
             raise AssertionError("live filter did not populate exactly one result row")
+        filter_inputs = [
+            child for child in window.descendants()
+            if child.class_name() == "Edit" and child.is_visible()
+            and child.window_text() == "GUI_SMOKE_SELECTABLE_TOKEN"
+        ]
+        if len(filter_inputs) != 1:
+            raise AssertionError(
+                "could not uniquely identify the live-filter query edit before testing Ctrl+S: "
+                f"visible edit texts={visible_child_texts(window, 'Edit')!r}"
+            )
         if sample.read_bytes() != original:
             raise AssertionError("activating and using the live filter changed the source document")
+        filter_inputs[0].set_focus()
+        time.sleep(0.1)
         window.type_keys("^s")
         deadline = time.time() + 10
         while sample.read_bytes() != filter_saved and time.time() < deadline:
@@ -174,7 +207,8 @@ def main() -> int:
             raise AssertionError("Filter toolbar second click did not hide the results list")
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
-        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved))
+        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
+               focused_filter_edit=filter_inputs[0].handle)
 
         # Exercise actual mouse input against the editor's client area.
         window.double_click_input(coords=(90, 223))
@@ -285,6 +319,123 @@ def main() -> int:
         window.close()
         app.wait_for_process_exit(timeout=20)
         record("close_after_restart")
+
+        curl_sample = output / "gui-smoke.curl"
+        curl_source = (
+            '{TextField value = "ok"}\r\n'
+            '{TextFeld value = "x"}\r\n'
+            "{call (value]}\r\n"
+        )
+        curl_sample.write_text(curl_source, encoding="ascii", newline="")
+        app = Application(backend="win32").start(
+            f'"{exe}" "{curl_sample}"', timeout=30
+        )
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while curl_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if curl_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the Curl fixture: {window.window_text()!r}")
+        window.set_focus()
+        window.maximize()
+        time.sleep(0.5)
+        curl_open_image = window.capture_as_image()
+        curl_open_image.save(output / "12-curl-open.png")
+        curl_control = toolbar_button(window, 0x7CFF)
+        if curl_control is None:
+            raise AssertionError("Curl real-time syntax toolbar button was not found")
+        curl_toolbar, curl_index = curl_control
+        curl_state_before = toolbar_state(curl_toolbar, 0x7CFF)
+        if not curl_state_before & 0x01:
+            if not curl_state_before & 0x04:
+                raise AssertionError(f"Curl toolbar button is natively disabled: TB_GETSTATE=0x{curl_state_before:02x}")
+            click_toolbar_button(curl_toolbar, curl_index)
+        deadline = time.time() + 10
+        curl_state_after = toolbar_state(curl_toolbar, 0x7CFF)
+        while not curl_state_after & 0x01 and time.time() < deadline:
+            time.sleep(0.2)
+            curl_state_after = toolbar_state(curl_toolbar, 0x7CFF)
+        if not curl_state_after & 0x01:
+            raise AssertionError(
+                "Curl real-time syntax toolbar did not become checked after mouse click: "
+                f"TB_GETSTATE before=0x{curl_state_before:02x}, after=0x{curl_state_after:02x}, "
+                f"item_rect={curl_toolbar.button(curl_index).rectangle()}, "
+                f"toolbar_rect={win32gui.GetWindowRect(curl_toolbar.handle)}"
+            )
+        deadline = time.time() + 10
+        error_lists = [
+            child for child in window.descendants()
+            if child.class_name() == "SysListView32" and child.is_visible()
+        ]
+        while not error_lists and time.time() < deadline:
+            time.sleep(0.2)
+            error_lists = [
+                child for child in window.descendants()
+                if child.class_name() == "SysListView32" and child.is_visible()
+            ]
+        toolbar_error_rows = int(error_lists[0].send_message(0x1004)) if error_lists else 0
+        manual_error_rows = 0
+        if toolbar_error_rows == 0:
+            # Diagnostic only: distinguish a toolbar notification failure from
+            # a document/type/configuration problem without treating it as pass.
+            window.send_message(0x111, 31571, 0)  # WM_COMMAND / F_CURL_SYNTAX_RUN
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                error_lists = [
+                    child for child in window.descendants()
+                    if child.class_name() == "SysListView32" and child.is_visible()
+                ]
+                if error_lists:
+                    manual_error_rows = int(error_lists[0].send_message(0x1004))
+                    break
+                time.sleep(0.2)
+        curl_syntax_image = window.capture_as_image()
+        curl_syntax_image.save(output / "13-curl-realtime-syntax.png")
+        if toolbar_error_rows < 2:
+            raise AssertionError(
+                "Curl real-time syntax did not show the expected two diagnostics: "
+                f"toolbar_rows={toolbar_error_rows}, manual_command_rows={manual_error_rows}, "
+                f"TB_GETSTATE before=0x{curl_state_before:02x}, after=0x{curl_state_after:02x}, "
+                f"toolbar_hwnd={curl_toolbar.handle}, toolbar_rect={win32gui.GetWindowRect(curl_toolbar.handle)}"
+            )
+        record("curl_live_syntax_diagnostic_list", toolbar_checked=bool(curl_state_after & 0x01),
+               diagnostic_rows=toolbar_error_rows)
+
+        rainbow_control = toolbar_button(window, 0x7CFD)
+        if rainbow_control is None:
+            raise AssertionError("rainbow bracket toolbar button was not present")
+        rainbow_toolbar, rainbow_index = rainbow_control
+        rainbow_state = toolbar_state(rainbow_toolbar, 0x7CFD)
+        if not rainbow_state & 0x01:
+            if not rainbow_state & 0x04:
+                raise AssertionError(f"Rainbow toolbar button is natively disabled: TB_GETSTATE=0x{rainbow_state:02x}")
+            click_toolbar_button(rainbow_toolbar, rainbow_index)
+            time.sleep(0.5)
+            rainbow_state = toolbar_state(rainbow_toolbar, 0x7CFD)
+        if not rainbow_state & 0x01:
+            raise AssertionError("rainbow bracket toolbar did not become checked after mouse click")
+        rainbow_image = window.capture_as_image()
+        rainbow_image.save(output / "14-rainbow-brackets.png")
+        bracket_pixels = [
+            rainbow_image.convert("RGB").crop(box).getdata()
+            for box in ((32, 90, 48, 108), (186, 90, 202, 108))
+        ]
+        saturated_bracket_pixels = sum(
+            1 for pixels in bracket_pixels for red, green, blue in pixels
+            if max(red, green, blue) - min(red, green, blue) >= 80
+        )
+        if saturated_bracket_pixels < 4:
+            raise AssertionError(
+                "rainbow bracket colors were not visible on the real Curl source screenshot: "
+                f"saturated pixels={saturated_bracket_pixels}"
+            )
+        record("rainbow_bracket_toolbar_and_color_pixels", toolbar_checked=bool(rainbow_state & 0x01),
+               saturated_bracket_pixels=saturated_bracket_pixels)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+        record("close_curl_test_application")
         evidence["status"] = "passed"
         return 0
     except Exception as exc:  # retain failure evidence from the real runner

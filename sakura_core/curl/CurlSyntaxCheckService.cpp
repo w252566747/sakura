@@ -12,10 +12,17 @@
 namespace curlsyntax {
 namespace {
 std::atomic_bool g_realtimeEnabled = false;
+std::atomic_bool g_featureEnabled = true;
 std::atomic_int g_errorListHeight = 150;
 }
 
 bool IsRealtimeEnabled() noexcept
+{
+	return g_realtimeEnabled.load(std::memory_order_relaxed)
+		&& g_featureEnabled.load(std::memory_order_relaxed);
+}
+
+bool IsRealtimePreferenceEnabled() noexcept
 {
 	return g_realtimeEnabled.load(std::memory_order_relaxed);
 }
@@ -23,6 +30,11 @@ bool IsRealtimeEnabled() noexcept
 void SetRealtimeEnabled(bool enabled) noexcept
 {
 	g_realtimeEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+void SetFeatureEnabled(bool enabled) noexcept
+{
+	g_featureEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 int GetErrorListHeight() noexcept

@@ -22,6 +22,7 @@
 #include "doc/CEditDoc.h"
 #include "doc/layout/CLayout.h"
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "parse/CWordParse.h"
 #include "util/string_ex2.h"
 #ifdef USE_SSE2
@@ -615,7 +616,8 @@ void CEditView::OnPaint2( HDC _hdc, PAINTSTRUCT *pPs, BOOL bDrawFromComptibleBmp
 //	MY_RUNNINGTIMER( cRunningTimer, "CEditView::OnPaint" );
 	CGraphics gr(_hdc);
 	auto drawExtraCarets = [this](HDC hdc) {
-		if (m_vExtraCursors.empty() || GetEditWnd().GetActivePane() != m_nMyIndex) return;
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)
+			|| m_vExtraCursors.empty() || GetEditWnd().GetActivePane() != m_nMyIndex) return;
 		const CMySize size = GetCaret().GetCaretSize();
 		if (size.cx <= 0 || size.cy <= 0) return;
 		const int colorIndex = m_pTypeData->m_ColorInfoArr[COLORIDX_CARET_IME].m_bDisp && IsImeON()

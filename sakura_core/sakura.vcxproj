@@ -287,6 +287,7 @@
     <ClInclude Include="..\sakura_core\doc\CDocVisitor.h" />
     <ClInclude Include="..\sakura_core\doc\CEditDoc.h" />
     <ClInclude Include="..\sakura_core\curl\CurlSyntaxChecker.h" />
+    <ClInclude Include="..\sakura_core\curl\CurlRawRegion.h" />
     <ClInclude Include="..\sakura_core\curl\CurlSyntaxCheckService.h" />
     <ClInclude Include="..\sakura_core\doc\CLineComment.h" />
     <ClInclude Include="..\sakura_core\doc\layout\CLayout.h" />
@@ -300,6 +301,7 @@
     <ClInclude Include="..\sakura_core\parse\CSVTableQueryService.h" />
     <ClInclude Include="..\sakura_core\parse\CSVValidationService.h" />
     <ClInclude Include="..\sakura_core\parse\CSVTableSettings.h" />
+    <ClInclude Include="..\sakura_core\parse\CSVTableSnapshotChunk.h" />
     <ClInclude Include="..\sakura_core\parse\CodeFoldParser.h" />
     <ClInclude Include="..\sakura_core\parse\RealtimeTextFilter.h" />
     <ClInclude Include="..\sakura_core\doc\layout\CTsvModeInfo.h" />
@@ -442,6 +444,8 @@
     <ClInclude Include="..\sakura_core\util\zoom.h" />
     <ClInclude Include="..\sakura_core\view\CCaret.h" />
     <ClInclude Include="..\sakura_core\view\CEditView.h" />
+    <ClInclude Include="..\sakura_core\view\MultiCursorSettings.h" />
+    <ClInclude Include="..\sakura_core\view\MultiCursorUndoState.h" />
     <ClInclude Include="..\sakura_core\view\CEditView_Paint.h" />
     <ClInclude Include="..\sakura_core\view\CMiniMapView.h" />
     <ClInclude Include="..\sakura_core\view\colors\CColorStrategy.h" />
@@ -473,6 +477,7 @@
     <ClInclude Include="..\sakura_core\view\figures\CFigure_ZenSpace.h" />
     <ClInclude Include="..\sakura_core\window\CAutoScrollWnd.h" />
     <ClInclude Include="..\sakura_core\window\CEditWnd.h" />
+    <ClInclude Include="..\sakura_core\window\EnhancementToolbarSettings.h" />
     <ClInclude Include="..\sakura_core\window\CMainStatusBar.h" />
     <ClInclude Include="..\sakura_core\window\CMainToolBar.h" />
     <ClInclude Include="..\sakura_core\window\CSplitBoxWnd.h" />

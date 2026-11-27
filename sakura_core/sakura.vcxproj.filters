@@ -41,6 +41,9 @@
     <Filter Include="Cpp Source Files\mem">
       <UniqueIdentifier>{386f19de-1cd1-4146-b511-589eead7556e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Cpp Source Files\curl">
+      <UniqueIdentifier>{b0e2a607-3a5a-4b73-8c27-124be4b3fda1}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Cpp Source Files\parse">
       <UniqueIdentifier>{37e3a085-00ee-4ede-aec9-6e39a18844af}</UniqueIdentifier>
     </Filter>
@@ -583,6 +586,12 @@
     <ClInclude Include="..\sakura_core\view\CEditView.h">
       <Filter>Cpp Source Files\view</Filter>
     </ClInclude>
+    <ClInclude Include="..\sakura_core\view\MultiCursorSettings.h">
+      <Filter>Cpp Source Files\view</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\view\MultiCursorUndoState.h">
+      <Filter>Cpp Source Files\view</Filter>
+    </ClInclude>
     <ClInclude Include="..\sakura_core\view\CEditView_Paint.h">
       <Filter>Cpp Source Files\view</Filter>
     </ClInclude>
@@ -790,6 +799,12 @@
     <ClInclude Include="..\sakura_core\parse\CSVTableSettings.h">
       <Filter>Cpp Source Files\parse</Filter>
     </ClInclude>
+    <ClInclude Include="..\sakura_core\parse\CSVTableSnapshotChunk.h">
+      <Filter>Cpp Source Files\parse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\curl\CurlRawRegion.h">
+      <Filter>Cpp Source Files\curl</Filter>
+    </ClInclude>
     <ClInclude Include="..\sakura_core\parse\CodeFoldParser.h">
       <Filter>Cpp Source Files\parse</Filter>
     </ClInclude>
@@ -923,6 +938,9 @@
       <Filter>Cpp Source Files\window</Filter>
     </ClInclude>
     <ClInclude Include="..\sakura_core\window\CEditWnd.h">
+      <Filter>Cpp Source Files\window</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sakura_core\window\EnhancementToolbarSettings.h">
       <Filter>Cpp Source Files\window</Filter>
     </ClInclude>
     <ClInclude Include="..\sakura_core\window\CMainStatusBar.h">

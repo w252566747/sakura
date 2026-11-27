@@ -4,6 +4,7 @@
 	SPDX-License-Identifier: Zlib
 */
 #include "StdAfx.h"
+#include "curl/CurlRawRegion.h"
 #include "curl/CurlSyntaxChecker.h"
 
 #include <algorithm>
@@ -328,60 +329,26 @@ void AddDiagnostic(std::vector<Diagnostic>& out, const char* code,
 
 bool IsVerbatimStart(std::wstring_view s, size_t start)
 {
-	if (start + 1 >= s.size()) return false;
-	if (s[start + 1] == L'"') return true;
-	if (std::iswdigit(s[start + 1])) {
-		size_t p = start + 2;
-		while (p < s.size() && std::iswdigit(s[p])) ++p;
-		return p < s.size() && s[p] == L'"';
-	}
-	if (!std::iswalpha(s[start + 1]) && s[start + 1] != L'_') return false;
-	size_t p = start + 2;
-	while (p < s.size() && (std::iswalnum(s[p]) || s[p] == L'_' || s[p] == L'-')) ++p;
-	return p < s.size() && s[p] == L'"';
+	std::wstring terminator;
+	size_t bodyLength = 0;
+	size_t openerLength = 0;
+	return TryGetVerbatimTerminator(s, start, terminator, bodyLength, openerLength);
 }
 
 size_t FindVerbatimEnd(std::wstring_view s, size_t start, const std::atomic_bool* canceled)
 {
-	// Regular verbatim string: |" ... "|
-	if (start + 1 < s.size() && s[start + 1] == L'"') {
-		const size_t end = FindSequence(s, L"\"|", start + 2, canceled);
-		return end == std::wstring_view::npos ? end : end + 1;
-	}
-
-	// Length-specified form: |N" ... "N|.
-	size_t p = start + 1;
-	while (p < s.size() && std::iswdigit(s[p])) ++p;
-	if (p > start + 1 && p < s.size() && s[p] == L'"') {
-		std::wstring terminator = L"\"";
-		terminator.append(s.substr(start + 1, p - start - 1));
-		terminator.push_back(L'|');
-		size_t length = 0;
-		for (size_t i = start + 1; i < p; ++i) {
-			const unsigned digit = static_cast<unsigned>(s[i] - L'0');
-			if (length > (std::numeric_limits<size_t>::max() - digit) / 10) return std::wstring_view::npos;
-			length = length * 10 + digit;
-		}
-		const size_t body = p + 1;
-		if (length > s.size() - body) return std::wstring_view::npos;
-		const size_t end = body + length;
+	std::wstring terminator;
+	size_t bodyLength = std::numeric_limits<size_t>::max();
+	size_t openerLength = 0;
+	if (!TryGetVerbatimTerminator(s, start, terminator, bodyLength, openerLength)) return std::wstring_view::npos;
+	const size_t body = start + openerLength;
+	if (bodyLength != std::numeric_limits<size_t>::max()) {
+		if (bodyLength > s.size() - body) return std::wstring_view::npos;
+		const size_t end = body + bodyLength;
 		return s.substr(end, terminator.size()) == terminator ? end + terminator.size() - 1 : std::wstring_view::npos;
 	}
-
-	// Tagged verbatim form: |tag" ... "tag|.
-	p = start + 1;
-	if (p < s.size() && (std::iswalpha(s[p]) || s[p] == L'_')) {
-		const size_t tagStart = p++;
-		while (p < s.size() && (std::iswalnum(s[p]) || s[p] == L'_' || s[p] == L'-')) ++p;
-		if (p < s.size() && s[p] == L'"') {
-			std::wstring terminator = L"\"";
-			terminator.append(s.substr(tagStart, p - tagStart));
-			terminator.push_back(L'|');
-			const size_t end = FindSequence(s, terminator, p + 1, canceled);
-			return end == std::wstring_view::npos ? end : end + terminator.size() - 1;
-		}
-	}
-	return std::wstring_view::npos;
+	const size_t end = FindSequence(s, terminator, body, canceled);
+	return end == std::wstring_view::npos ? end : end + terminator.size() - 1;
 }
 
 } // namespace

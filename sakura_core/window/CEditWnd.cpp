@@ -32,7 +32,9 @@
 #include <string_view>
 
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "parse/CSVTableSettings.h"
+#include "parse/CSVTableSnapshotChunk.h"
 #include "parse/CSVStatistics.h"
 #include "_main/CControlTray.h"
 #include "_main/CCommandLine.h"	/// 2003/1/26 aroka
@@ -255,6 +257,7 @@ LRESULT CALLBACK CEditWndProc(
 
 CEditWnd::CEditWnd()
 {
+	m_bCurlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
 	const auto& csvSettings = csvtable::GetUserSettings();
 	m_chCSVDelimiter = csvSettings.delimiter;
 	m_bCSVAutoDetectDelimiter = csvSettings.autoDetectDelimiter;
@@ -273,6 +276,10 @@ CEditWnd::CEditWnd()
 
 CEditWnd::~CEditWnd()
 {
+	::KillTimer(m_hWnd, IDT_CSV_TABLE_SNAPSHOT);
+	m_pCSVTableSnapshotScanLine = nullptr;
+	m_nCSVTableSnapshotLineOffset = 0;
+	m_strCSVTableSnapshotText.clear();
 	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_DEBOUNCE);
 	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_SCAN);
 	if (m_pRealtimeFilterService) {
@@ -338,6 +345,7 @@ void CEditWnd::NotifyCurlSyntaxContentChanged(CEditDoc* document)
 {
 	if (!document) return;
 	++document->m_uCurlSyntaxVersion;
+	++document->m_uCurlSyntaxDiagnosticsGeneration;
 	document->m_bCurlSyntaxResultStale = true;
 	document->m_vCurlSyntaxDiagnostics.clear();
 	if (document == GetDocument() && (m_bCSVValidationListActive || m_bCSVValidationHasResult)) {
@@ -367,6 +375,7 @@ void CEditWnd::ToggleRealtimeFilter()
 		SendStatusMessage(L"CSV テーブル表示を終了してからフィルターを開いてください。");
 		return;
 	}
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RealtimeFilter)) return;
 	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
 	if (!m_hwndRealtimeFilterBar) {
 		auto destroyFilterControls = [this]() {
@@ -489,7 +498,34 @@ void CEditWnd::ToggleRealtimeFilter()
 
 void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
 {
-	if (!m_bRealtimeFilterMode || document != GetDocument()) return;
+	if (document != GetDocument()) return;
+	if (m_bCSVTableMode) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		FinishCSVCellEdit(false);
+		++m_uCSVQueryGeneration;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		m_nCSVSortPendingSourceRow = -1;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+		if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		m_vCSVTableViewRows.clear();
+		m_bCSVTableViewOrderIdentity = true;
+		m_bCSVValidationStale = true;
+		m_bCSVValidationHasResult = false;
+		m_vCSVValidationDiagnostics.clear();
+		if (m_hwndCSVTable) {
+			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+		}
+		RefreshCurlSyntaxErrorList();
+	}
+	if (!m_bRealtimeFilterMode) return;
 	m_bRealtimeFilterDocumentLoading = true;
 	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
 	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
@@ -525,6 +561,7 @@ void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
 void CEditWnd::NotifyRealtimeFilterDocumentLoadFinished(CEditDoc* document)
 {
 	if (document != GetDocument()) return;
+	if (m_bCSVTableMode) ScheduleCSVTableParse();
 	m_bRealtimeFilterDocumentLoading = false;
 	ScheduleRealtimeFilter(m_bRealtimeFilterAppendCachePending);
 }
@@ -967,6 +1004,10 @@ void CEditWnd::StartRealtimeFilterScan()
 void CEditWnd::ToggleCSVTableMode()
 {
 	if (m_bCSVTableMode) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
 		FinishCSVCellEdit(true);
 		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
 		m_nCSVSortPendingSourceRow = -1;
@@ -992,6 +1033,7 @@ void CEditWnd::ToggleCSVTableMode()
 		m_cToolbar.UpdateToolbar();
 		return;
 	}
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable)) return;
 	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
 	if (!m_hwndCSVTable) {
 		INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
@@ -1019,6 +1061,7 @@ void CEditWnd::ToggleCSVTableMode()
 
 void CEditWnd::RunCSVCheck()
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable)) return;
 	if (!m_bCSVTableMode) {
 		SendStatusMessage(L"CSVテーブル表示に切り替えてから CSV チェックを実行してください。");
 		return;
@@ -1162,69 +1205,133 @@ void CEditWnd::ToggleCSVHeader()
 void CEditWnd::ScheduleCSVTableParse()
 {
 	if (!m_bCSVTableMode || !GetDocument()) return;
+	::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
 	++m_uCSVQueryGeneration;
 	if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+	if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
 	m_csvTableModel.reset();
 	m_csvTableSnapshot.reset();
 	m_vCSVTableViewRows.clear();
 	m_bCSVTableViewOrderIdentity = true;
 	if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-	const auto clearTableProjection = [this]() {
-		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
-		m_csvTableModel.reset();
-		m_csvTableSnapshot.reset();
-		if (m_hwndCSVTable) {
-			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
-		}
-	};
 	const CEditDoc* document = GetDocument();
-	std::size_t length = 0;
-	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
-		const int lineLength = static_cast<int>(line->GetLengthWithEOL());
-		if (lineLength < 0 || static_cast<std::size_t>(lineLength) > static_cast<std::size_t>(std::numeric_limits<int>::max()) - length) {
-			clearTableProjection();
-			SendStatusMessage(L"文書が大きすぎるため CSV テーブル表示にできません。");
-			return;
-		}
-		length += static_cast<std::size_t>(lineLength);
+	m_uCSVTableSnapshotVersion = document->m_uCurlSyntaxVersion;
+	m_pCSVTableSnapshotScanLine = document->m_cDocLineMgr.GetDocLineTop();
+	m_nCSVTableSnapshotLineOffset = 0;
+	m_strCSVTableSnapshotText.clear();
+	if (!m_pCSVTableSnapshotScanLine) {
+		SubmitCSVTableParseSnapshot();
+		return;
 	}
-	std::wstring text;
+	if (!::SetTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT, 1, nullptr)) {
+		m_pCSVTableSnapshotScanLine = nullptr;
+		SendStatusMessage(L"CSV データの読み込みを開始できませんでした。");
+	}
+}
+
+void CEditWnd::ContinueCSVTableSnapshot()
+{
+	if (!m_bCSVTableMode || !GetDocument()) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		return;
+	}
+	if (GetDocument()->m_uCurlSyntaxVersion != m_uCSVTableSnapshotVersion) {
+		ScheduleCSVTableParse();
+		return;
+	}
+	const auto started = std::chrono::steady_clock::now();
+	std::size_t processedLines = 0;
 	try {
-		text.reserve(length);
-		for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+		while (m_pCSVTableSnapshotScanLine && processedLines < 2048 &&
+			std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
+			const CDocLine* line = m_pCSVTableSnapshotScanLine;
 			const int lineLength = static_cast<int>(line->GetLengthWithEOL());
-			if (lineLength > 0) text.append(line->GetPtr(), static_cast<std::size_t>(lineLength));
+			if (lineLength < 0 || !csvtable::snapshot::AppendNextChunk(
+				m_strCSVTableSnapshotText,
+				line->GetPtr(),
+				static_cast<std::size_t>(lineLength),
+				m_nCSVTableSnapshotLineOffset,
+				32768,
+				static_cast<std::size_t>(std::numeric_limits<int>::max()))) {
+				::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+				m_pCSVTableSnapshotScanLine = nullptr;
+				m_nCSVTableSnapshotLineOffset = 0;
+				m_strCSVTableSnapshotText.clear();
+				if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+				SendStatusMessage(L"文書が大きすぎるため CSV テーブル表示にできません。");
+				return;
+			}
+			const std::size_t totalLineLength = static_cast<std::size_t>(lineLength);
+			if (m_nCSVTableSnapshotLineOffset >= totalLineLength) {
+				m_pCSVTableSnapshotScanLine = line->GetNextLine();
+				m_nCSVTableSnapshotLineOffset = 0;
+				++processedLines;
+			}
 		}
 	} catch (...) {
-		clearTableProjection();
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
 		SendStatusMessage(L"CSV テーブル用のメモリを確保できませんでした。");
+		return;
+	}
+	if (m_pCSVTableSnapshotScanLine) {
+		if (!::SetTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT, 1, nullptr)) {
+			m_pCSVTableSnapshotScanLine = nullptr;
+			m_nCSVTableSnapshotLineOffset = 0;
+			m_strCSVTableSnapshotText.clear();
+			if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+			SendStatusMessage(L"CSV データの読み込みを継続できませんでした。");
+		}
+		return;
+	}
+	::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+	m_nCSVTableSnapshotLineOffset = 0;
+	SubmitCSVTableParseSnapshot();
+}
+
+void CEditWnd::SubmitCSVTableParseSnapshot()
+{
+	if (!m_bCSVTableMode || !GetDocument()) return;
+	if (GetDocument()->m_uCurlSyntaxVersion != m_uCSVTableSnapshotVersion) {
+		ScheduleCSVTableParse();
 		return;
 	}
 	try {
 		if (!m_pCSVTableParseService) m_pCSVTableParseService = std::make_unique<csvtable::CSVTableParseService>();
 	} catch (...) {
-		clearTableProjection();
+		m_strCSVTableSnapshotText.clear();
 		SendStatusMessage(L"CSV テーブル解析を開始できませんでした。");
 		return;
 	}
+	std::wstring text;
+	text.swap(m_strCSVTableSnapshotText);
 	csvtable::ParseOptions options;
 	options.delimiter = m_chCSVDelimiter;
 	options.autoDetectDelimiter = m_bCSVAutoDetectDelimiter;
-	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
-	const std::uint64_t version = document->m_uCurlSyntaxVersion;
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(GetDocument()));
+	const std::uint64_t version = m_uCSVTableSnapshotVersion;
 	const HWND resultWindow = GetHwnd();
-	m_pCSVTableParseService->Schedule(documentId, version, std::move(text), options,
-		[this, resultWindow](csvtable::TableParseResult result) {
-			{
-				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
-				m_csvTableMailbox = std::move(result);
-			}
-			if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_PARSE_RESULT, 0, 0)) {
-				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
-				m_csvTableMailbox.reset();
-			}
-		}, true);
+	try {
+		m_pCSVTableParseService->Schedule(documentId, version, std::move(text), options,
+			[this, resultWindow](csvtable::TableParseResult result) {
+				{
+					std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+					m_csvTableMailbox = std::move(result);
+				}
+				if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_PARSE_RESULT, 0, 0)) {
+					std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+					m_csvTableMailbox.reset();
+				}
+			}, true);
+	} catch (...) {
+		SendStatusMessage(L"CSV テーブル解析要求を作成できませんでした。");
+	}
 }
 
 void CEditWnd::AcceptCSVTableParseResult()
@@ -2118,11 +2225,18 @@ void CEditWnd::OnCurlSyntaxDocumentTypeChanged()
 void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 {
 	curlsyntax::SetRealtimeEnabled(enabled);
-	if (!enabled) {
+	m_bCurlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
+	RefreshCurlSyntaxRealtime();
+}
+
+void CEditWnd::RefreshCurlSyntaxRealtime()
+{
+	if (!curlsyntax::IsRealtimeEnabled()) {
 		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
 		if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
 		if (auto* document = GetDocument()) {
 			++document->m_uCurlSyntaxVersion;
+			++document->m_uCurlSyntaxDiagnosticsGeneration;
 			document->m_bCurlSyntaxResultStale = true;
 			document->m_vCurlSyntaxDiagnostics.clear();
 		}
@@ -2138,10 +2252,15 @@ void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 		m_cToolbar.UpdateToolbar();
 		return;
 	}
-	NotifyCurlSyntaxDocumentLoaded();
 	if (IsCurlSyntaxDocument()) {
-		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
-		RunCurlSyntaxCheck(false);
+		CEditDoc* document = GetDocument();
+		if (document && !document->m_bCurlSyntaxResultStale) {
+			if (GetHwnd()) ::SetTimer(GetHwnd(), IDT_CURL_SYNTAX, 500, nullptr);
+		} else {
+			NotifyCurlSyntaxDocumentLoaded();
+			::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+			RunCurlSyntaxCheck(false);
+		}
 	}
 	m_cToolbar.UpdateToolbar();
 }
@@ -2149,7 +2268,8 @@ void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 void CEditWnd::RunCurlSyntaxCheck(bool manual)
 {
 	CEditDoc* document = GetDocument();
-	if (!document || (!manual && !curlsyntax::IsRealtimeEnabled()) || !IsCurlSyntaxDocument()) return;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CurlSyntax)
+		|| !document || (!manual && !curlsyntax::IsRealtimeEnabled()) || !IsCurlSyntaxDocument()) return;
 	std::wstring snapshot;
 	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
 		const CLogicInt length = line->GetLengthWithEOL();
@@ -2188,6 +2308,7 @@ void CEditWnd::AcceptCurlSyntaxResult()
 	if (result->documentId != document->m_uCurlSyntaxDocumentId
 		|| result->version != document->m_uCurlSyntaxVersion) return;
 	document->m_vCurlSyntaxDiagnostics = std::move(result->diagnostics);
+	++document->m_uCurlSyntaxDiagnosticsGeneration;
 	document->m_bCurlSyntaxResultStale = false;
 	RefreshCurlSyntaxErrorList();
 	if (!document->m_vCurlSyntaxDiagnostics.empty()) {
@@ -3472,10 +3593,41 @@ void CEditWnd::MessageLoop( void )
 				-1 == m_cHokanMgr.KeyProc(msg.wParam, msg.lParam)) {
 						continue;	// 補完ウィンドウが処理を実行した
 			}
+			const HWND focusedWindow = ::GetFocus();
+			const bool realtimeFilterEditFocused = m_bRealtimeFilterMode &&
+				(focusedWindow == m_hwndRealtimeFilterInclude || focusedWindow == m_hwndRealtimeFilterExclude);
+			bool filterSaveHandled = false;
+			if (realtimeFilterEditFocused && msg.message == WM_KEYDOWN && m_hAccel &&
+				(::GetKeyState(VK_CONTROL) & 0x8000)) {
+				const int acceleratorCount = ::CopyAcceleratorTable(m_hAccel, nullptr, 0);
+				if (acceleratorCount > 0) {
+					std::vector<ACCEL> accelerators(static_cast<size_t>(acceleratorCount));
+					if (::CopyAcceleratorTable(m_hAccel, accelerators.data(), acceleratorCount) == acceleratorCount) {
+						BYTE modifiers = 0;
+						if (::GetKeyState(VK_SHIFT) & 0x8000) modifiers |= FSHIFT;
+						if (::GetKeyState(VK_CONTROL) & 0x8000) modifiers |= FCONTROL;
+						if (::GetKeyState(VK_MENU) & 0x8000) modifiers |= FALT;
+						for (const ACCEL& accelerator : accelerators) {
+							if (!(accelerator.fVirt & FVIRTKEY) || accelerator.key != msg.wParam ||
+								(accelerator.fVirt & (FSHIFT | FCONTROL | FALT)) != modifiers) continue;
+							const EFunctionCode function = CKeyBind::GetFuncCode(accelerator.cmd,
+								m_pShareData->m_Common.m_sKeyBind.m_nKeyNameArrNum,
+								(KEYDATA*)m_pShareData->m_Common.m_sKeyBind.m_pKeyNameArr);
+							if (function == F_FILESAVE) {
+								GetDocument()->HandleCommand(static_cast<EFunctionCode>(function | FA_FROMKEYBOARD));
+								filterSaveHandled = true;
+								break;
+							}
+						}
+					}
+				}
+			}
+			if (filterSaveHandled) continue;
 
 			HWND acceleratorTarget = msg.hwnd;
 			if (m_bRealtimeFilterMode &&
-				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude)) {
+				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude ||
+				::GetFocus() == m_hwndRealtimeFilterInclude || ::GetFocus() == m_hwndRealtimeFilterExclude)) {
 				acceleratorTarget = GetHwnd();
 			}
 			if( m_hAccel && TranslateAccelerator( acceleratorTarget, m_hAccel, &msg ) ){}
@@ -4305,6 +4457,24 @@ LRESULT CEditWnd::DispatchEvent(
 
 			//	Aug, 21, 2000 genta
 			GetDocument()->m_cAutoSaveAgent.ReloadAutoSaveParam();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RealtimeFilter) && m_bRealtimeFilterMode)
+				ToggleRealtimeFilter();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) && m_bCSVTableMode)
+				ToggleCSVTableMode();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding))
+				GetDocument()->m_cLayoutMgr.ResetCodeFolds();
+			const bool curlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
+			if (curlSyntaxRuntimeEnabled != m_bCurlSyntaxRuntimeEnabled) {
+				m_bCurlSyntaxRuntimeEnabled = curlSyntaxRuntimeEnabled;
+				RefreshCurlSyntaxRealtime();
+			}
+			for (int viewIndex = 0; viewIndex < GetAllViewCount(); ++viewIndex) {
+				auto& view = GetView(viewIndex);
+				view.RefreshScrollBarMarkerFeature();
+				if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor))
+					view.ClearExtraCursors();
+			}
+			m_cToolbar.UpdateToolbar();
 
 			GetDocument()->OnChangeSetting();	// ビューに設定変更を反映させる
 			GetDocument()->m_cDocType.SetDocumentIcon();	// Sep. 10, 2002 genta 文書アイコンの再設定
@@ -5503,6 +5673,9 @@ LRESULT CEditWnd::OnTimer( WPARAM wParam, [[maybe_unused]] LPARAM lParam )
 	case IDT_CSV_SELECTION_STATS:
 		::KillTimer(GetHwnd(), IDT_CSV_SELECTION_STATS);
 		UpdateCSVSelectionStatistics();
+		break;
+	case IDT_CSV_TABLE_SNAPSHOT:
+		ContinueCSVTableSnapshot();
 		break;
 	case IDT_REALTIME_FILTER_DEBOUNCE:
 		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);

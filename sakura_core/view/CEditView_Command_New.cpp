@@ -80,6 +80,7 @@ void CEditView::InsertData_CEditView(
 	int opeSeq;
 	if( !m_bDoing_UndoRedo ){	/* アンドゥ・リドゥの実行中か */
 		pcOpe = new CInsertOpe();
+		pcOpe->m_nMultiCursorSlot = m_nMultiCursorOpeSlot;
 		m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(
 			ptInsertPos,
 			&pcOpe->m_ptCaretPos_PHY_Before
@@ -376,6 +377,7 @@ void CEditView::DeleteData2(
 	CLayoutInt columnTo = LineIndexToColumn( pcLayout, nIdxFrom + nDelLen );
 	if( !m_bDoing_UndoRedo ){
 		pcOpe = new CDeleteOpe();
+		pcOpe->m_nMultiCursorSlot = m_nMultiCursorOpeSlot;
 		m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(
 			CLayoutPoint( columnFrom, _ptCaretPos.GetY2() ),
 			&pcOpe->m_ptCaretPos_PHY_Before
@@ -804,6 +806,7 @@ bool CEditView::ReplaceData_CEditView3(
 	CReplaceOpe* pcReplaceOpe = nullptr;	// 編集操作要素 COpe
 	if( pcOpeBlk ){
 		pcReplaceOpe = new CReplaceOpe();
+		pcReplaceOpe->m_nMultiCursorSlot = m_nMultiCursorOpeSlot;
 		pcReplaceOpe->m_ptCaretPos_PHY_Before = sDelRangeLogic.GetFrom();
 		pcReplaceOpe->m_ptCaretPos_PHY_To = sDelRangeLogic.GetTo();
 		pcReplaceOpe->m_ptCaretPos_PHY_After = pcReplaceOpe->m_ptCaretPos_PHY_Before;	// 操作後のキャレット位置

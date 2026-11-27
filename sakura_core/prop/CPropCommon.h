@@ -25,6 +25,8 @@
 
 #include "func/CFuncLookup.h"
 #include "env/CommonSetting.h"
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 struct DLLSHAREDATA;
@@ -55,6 +57,7 @@ enum PropComSheetOrder {
 	ID_PROPCOM_PAGENUM_HELPER,			//!< 支援
 	ID_PROPCOM_PAGENUM_MACRO,			//!< マクロ
 	ID_PROPCOM_PAGENUM_PLUGIN,			//!< プラグイン
+	ID_PROPCOM_PAGENUM_EXTENSION,		//!< 拡張機能
 	ID_PROPCOM_PAGENUM_MAX,
 };
 /*-----------------------------------------------------------------------
@@ -114,6 +117,9 @@ public:
 	CommonSetting	m_Common;
 	bool				m_bWordMarkerAutomaticEnabled = true;
 	std::wstring		m_addedWordCharacters = L"_-";
+	std::size_t		m_nMaxMultiCursors = 1000;
+	std::uint32_t		m_uEnhancementToolbarVisibilityMask = 0x7fu;
+	std::uint32_t		m_uEnhancementFeatureEnabledMask = 0x7fu;
 
 	// 2005.01.13 MIK セット数増加
 	struct SKeywordSetIndex{
@@ -527,5 +533,17 @@ private:
 	bool Check_MainMenu(HWND hwndTree, std::wstring& sErrMsg);						// メニューの検査
 	bool Check_MainMenu_Sub(HWND hwndTree, HTREEITEM htiTrg, int nLevel, std::wstring& sErrMsg);	// メニューの検査
 	static LRESULT CALLBACK TreeViewProc(HWND hwndTree, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+};
+
+//==============================================================
+//! 拡張機能ページ（ツールバー表示）
+class CPropEnhancement final : CPropCommon
+{
+public:
+	static INT_PTR CALLBACK DlgProc_page(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+protected:
+	INT_PTR DispatchEvent(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	void SetData(HWND hwndDlg);
+	int GetData(HWND hwndDlg);
 };
 #endif /* SAKURA_CPROPCOMMON_82053028_AB71_4E4C_AE50_0E46E173828C_H_ */

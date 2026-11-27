@@ -4,10 +4,12 @@
 	SPDX-License-Identifier: Zlib
 */
 #include "StdAfx.h"
+#include "curl/CurlRawRegion.h"
 #include "parse/CodeFoldParser.h"
 
 #include <algorithm>
 #include <cwctype>
+#include <limits>
 #include <utility>
 
 namespace codefold {
@@ -17,6 +19,19 @@ struct OpenBlock {
 	size_t depth;
 	std::wstring kind;
 };
+
+struct CurlTextExpressionContext {
+	size_t baseDepth;
+	wchar_t quote;
+};
+
+bool IsCurlBraceEscaped(std::wstring_view line, size_t position)
+{
+	if (position >= line.size() || (line[position] != L'{' && line[position] != L'}')) return false;
+	size_t backslashes = 0;
+	while (position > backslashes && line[position - backslashes - 1] == L'\\') ++backslashes;
+	return (backslashes & 1u) != 0;
+}
 
 std::wstring TrimmedPrefix(std::wstring_view line, size_t maxLength = 48)
 {
@@ -50,8 +65,12 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 {
 	std::vector<Region> regions;
 	std::vector<OpenBlock> stack;
+	std::vector<CurlTextExpressionContext> curlTextExpressions;
 	bool blockComment = false;
 	std::wstring rawStringEnd;
+	std::size_t curlRawOpenerRemaining = 0;
+	bool curlRawLengthSpecified = false;
+	std::size_t curlRawRemaining = 0;
 	wchar_t continuedQuote = 0;
 	bool continuedLineComment = false;
 
@@ -68,9 +87,20 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 		for (size_t i = 0; i < line.size(); ++i) {
 			const wchar_t ch = line[i];
 			if (!rawStringEnd.empty()) {
+				if (language == Language::Curl && curlRawOpenerRemaining > 0) {
+					--curlRawOpenerRemaining;
+					continue;
+				}
+				if (language == Language::Curl && curlRawLengthSpecified && curlRawRemaining > 0) {
+					--curlRawRemaining;
+					continue;
+				}
 				if (line.substr(i).substr(0, rawStringEnd.size()) == rawStringEnd) {
 					i += rawStringEnd.size() - 1;
 					rawStringEnd.clear();
+					curlRawLengthSpecified = false;
+					curlRawRemaining = 0;
+					curlRawOpenerRemaining = 0;
 				}
 				continue;
 			}
@@ -82,12 +112,30 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 				continue;
 			}
 			if (quote) {
-				if (escaped) escaped = false;
-				else if (ch == L'\\') escaped = true;
-				else if (ch == quote) quote = 0;
-				continue;
+				if (escaped) { escaped = false; continue; }
+				if (ch == L'\\') { escaped = true; continue; }
+				if (ch == quote) { quote = 0; continue; }
+				if (language == Language::Curl && quote == L'"' && ch == L'{') {
+					curlTextExpressions.push_back({ stack.size(), quote });
+					quote = 0;
+				} else {
+					continue;
+				}
 			}
 			if (language == Language::Curl && ch == L'|' && i + 1 < line.size() && line[i + 1] == L'|') break;
+			if (language == Language::Curl && ch == L'|') {
+				std::size_t bodyLength = std::numeric_limits<std::size_t>::max();
+				std::size_t openerLength = 0;
+				std::wstring terminator;
+				if (curlsyntax::TryGetCommentTerminator(line, i, terminator, bodyLength, openerLength) ||
+					curlsyntax::TryGetVerbatimTerminator(line, i, terminator, bodyLength, openerLength)) {
+					rawStringEnd = std::move(terminator);
+					curlRawLengthSpecified = bodyLength != std::numeric_limits<std::size_t>::max();
+					curlRawRemaining = bodyLength;
+					curlRawOpenerRemaining = openerLength - 1;
+					continue;
+				}
+			}
 			if (language != Language::Curl && ch == L'/' && i + 1 < line.size()) {
 				if (line[i + 1] == L'/') {
 					lineCommentContinues = !line.empty() && line.back() == L'\\';
@@ -114,16 +162,22 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 				escaped = false;
 				continue;
 			}
-			if (ch == L'{') {
+			if (ch == L'{' && !(language == Language::Curl && IsCurlBraceEscaped(line, i))) {
 				stack.push_back({ lineNo, stack.size(), BraceKind(line, language) });
-			} else if (ch == L'}' && !stack.empty()) {
+			} else if (ch == L'}' && !stack.empty() && !(language == Language::Curl && IsCurlBraceEscaped(line, i))) {
 				const OpenBlock open = std::move(stack.back());
 				stack.pop_back();
 				AddClosedRegion(regions, open, lineNo);
+				if (language == Language::Curl && !curlTextExpressions.empty() &&
+					stack.size() == curlTextExpressions.back().baseDepth) {
+					quote = curlTextExpressions.back().quote;
+					curlTextExpressions.pop_back();
+				}
 			}
 		}
 		continuedQuote = 0;
-		if (quote == L'`' || (language != Language::Curl && quote && escaped)) {
+		if (quote == L'`' || (language == Language::Curl && quote == L'"') ||
+			(language != Language::Curl && quote && escaped)) {
 			continuedQuote = quote;
 		}
 		continuedLineComment = lineCommentContinues;
@@ -205,11 +259,23 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 	std::vector<OpenBlock> stack;
 	bool blockComment = false;
 	wchar_t quote = 0;
+	wchar_t alternativeQuoteEnd = 0;
+	std::vector<std::wstring> tokens;
+	tokens.reserve(16);
 	for (size_t lineNo = 0; lineNo < lines.size(); ++lineNo) {
-		std::vector<std::wstring> tokens;
+		tokens.clear();
 		const auto line = lines[lineNo];
 		for (size_t i = 0; i < line.size();) {
 			const wchar_t ch = line[i];
+			if (alternativeQuoteEnd) {
+				if (ch == alternativeQuoteEnd && i + 1 < line.size() && line[i + 1] == L'\'') {
+					alternativeQuoteEnd = 0;
+					i += 2;
+				} else {
+					++i;
+				}
+				continue;
+			}
 			if (blockComment) {
 				if (ch == L'*' && i + 1 < line.size() && line[i + 1] == L'/') { blockComment = false; i += 2; }
 				else ++i;
@@ -226,6 +292,20 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 			}
 			if (ch == L'-' && i + 1 < line.size() && line[i + 1] == L'-') break;
 			if (ch == L'/' && i + 1 < line.size() && line[i + 1] == L'*') { blockComment = true; i += 2; continue; }
+			if ((ch == L'q' || ch == L'Q') && i + 2 < line.size() && line[i + 1] == L'\'') {
+				const wchar_t delimiter = line[i + 2];
+				if (!std::iswspace(delimiter) && delimiter != L'\'') {
+					switch (delimiter) {
+					case L'[': alternativeQuoteEnd = L']'; break;
+					case L'{': alternativeQuoteEnd = L'}'; break;
+					case L'(': alternativeQuoteEnd = L')'; break;
+					case L'<': alternativeQuoteEnd = L'>'; break;
+					default: alternativeQuoteEnd = delimiter; break;
+					}
+					i += 3;
+					continue;
+				}
+			}
 			if (ch == L'\'' || ch == L'"') {
 				quote = ch;
 				++i;
@@ -258,6 +338,7 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 				stack.push_back({ lineNo, stack.size(), token });
 			}
 		}
+		if (tokens.capacity() > 1024) std::vector<std::wstring>().swap(tokens);
 	}
 	return regions;
 }
