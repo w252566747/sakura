@@ -3576,6 +3576,38 @@ void CEditWnd::MessageLoop( void )
 		ret = GetMessage(&msg,nullptr,0,0);
 		if(ret== 0)break; //WM_QUIT
 		if(ret==-1)break; //GetMessage失敗
+		// A filter edit is not a dialog. Resolve its configured save accelerator
+		// before IsDialogMessage or toolbar preprocessing can consume the key.
+		const HWND focusedWindow = ::GetFocus();
+		const bool realtimeFilterEditFocused = m_bRealtimeFilterMode &&
+			(focusedWindow == m_hwndRealtimeFilterInclude || focusedWindow == m_hwndRealtimeFilterExclude);
+		bool filterSaveHandled = false;
+		if (realtimeFilterEditFocused && msg.message == WM_KEYDOWN && m_hAccel &&
+			(::GetKeyState(VK_CONTROL) & 0x8000)) {
+			const int acceleratorCount = ::CopyAcceleratorTable(m_hAccel, nullptr, 0);
+			if (acceleratorCount > 0) {
+				std::vector<ACCEL> accelerators(static_cast<size_t>(acceleratorCount));
+				if (::CopyAcceleratorTable(m_hAccel, accelerators.data(), acceleratorCount) == acceleratorCount) {
+					BYTE modifiers = 0;
+					if (::GetKeyState(VK_SHIFT) & 0x8000) modifiers |= FSHIFT;
+					if (::GetKeyState(VK_CONTROL) & 0x8000) modifiers |= FCONTROL;
+					if (::GetKeyState(VK_MENU) & 0x8000) modifiers |= FALT;
+					for (const ACCEL& accelerator : accelerators) {
+						if (!(accelerator.fVirt & FVIRTKEY) || accelerator.key != msg.wParam ||
+							(accelerator.fVirt & (FSHIFT | FCONTROL | FALT)) != modifiers) continue;
+						const EFunctionCode function = CKeyBind::GetFuncCode(accelerator.cmd,
+							m_pShareData->m_Common.m_sKeyBind.m_nKeyNameArrNum,
+							(KEYDATA*)m_pShareData->m_Common.m_sKeyBind.m_pKeyNameArr);
+						if (function == F_FILESAVE) {
+							GetDocument()->HandleCommand(static_cast<EFunctionCode>(function | FA_FROMKEYBOARD));
+							filterSaveHandled = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+		if (filterSaveHandled) continue;
 
 		//ダイアログメッセージ
 		     if( MyIsDialogMessage( CPrintPreview::GetPrintPreviewBarHANDLE_Safe(m_pPrintPreview.get()),	&msg ) ){}	//!< 印刷プレビュー 操作バー
@@ -3593,37 +3625,6 @@ void CEditWnd::MessageLoop( void )
 				-1 == m_cHokanMgr.KeyProc(msg.wParam, msg.lParam)) {
 						continue;	// 補完ウィンドウが処理を実行した
 			}
-			const HWND focusedWindow = ::GetFocus();
-			const bool realtimeFilterEditFocused = m_bRealtimeFilterMode &&
-				(focusedWindow == m_hwndRealtimeFilterInclude || focusedWindow == m_hwndRealtimeFilterExclude);
-			bool filterSaveHandled = false;
-			if (realtimeFilterEditFocused && msg.message == WM_KEYDOWN && m_hAccel &&
-				(::GetKeyState(VK_CONTROL) & 0x8000)) {
-				const int acceleratorCount = ::CopyAcceleratorTable(m_hAccel, nullptr, 0);
-				if (acceleratorCount > 0) {
-					std::vector<ACCEL> accelerators(static_cast<size_t>(acceleratorCount));
-					if (::CopyAcceleratorTable(m_hAccel, accelerators.data(), acceleratorCount) == acceleratorCount) {
-						BYTE modifiers = 0;
-						if (::GetKeyState(VK_SHIFT) & 0x8000) modifiers |= FSHIFT;
-						if (::GetKeyState(VK_CONTROL) & 0x8000) modifiers |= FCONTROL;
-						if (::GetKeyState(VK_MENU) & 0x8000) modifiers |= FALT;
-						for (const ACCEL& accelerator : accelerators) {
-							if (!(accelerator.fVirt & FVIRTKEY) || accelerator.key != msg.wParam ||
-								(accelerator.fVirt & (FSHIFT | FCONTROL | FALT)) != modifiers) continue;
-							const EFunctionCode function = CKeyBind::GetFuncCode(accelerator.cmd,
-								m_pShareData->m_Common.m_sKeyBind.m_nKeyNameArrNum,
-								(KEYDATA*)m_pShareData->m_Common.m_sKeyBind.m_pKeyNameArr);
-							if (function == F_FILESAVE) {
-								GetDocument()->HandleCommand(static_cast<EFunctionCode>(function | FA_FROMKEYBOARD));
-								filterSaveHandled = true;
-								break;
-							}
-						}
-					}
-				}
-			}
-			if (filterSaveHandled) continue;
-
 			HWND acceleratorTarget = msg.hwnd;
 			if (m_bRealtimeFilterMode &&
 				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude ||
