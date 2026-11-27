@@ -52,15 +52,27 @@ def main() -> int:
         steps.append({"step": name, "result": "passed", **values})
 
     def select_settings_control(settings, control_id: int, class_name: str):
-        for _ in range(19):
-            locator = settings.child_window(control_id=control_id, class_name=class_name)
-            if locator.exists(timeout=0.1):
+        # The enhancement page is the final common-settings page (index 18).
+        # Select it through the PropertySheet API instead of sending a rapid
+        # Ctrl+Tab sequence, which can be dropped by a busy Windows runner.
+        settings.send_message(0x465, 0, 18)  # PSM_SETCURSEL
+        deadline = time.time() + 5
+        locator = settings.child_window(control_id=control_id, class_name=class_name)
+        while time.time() < deadline:
+            if locator.exists(timeout=0.2):
                 control = locator.wrapper_object()
                 if control.is_visible():
                     return control
-            settings.type_keys("^{TAB}")
-            time.sleep(0.05)
-        raise AssertionError(f"could not find settings control {control_id}")
+            time.sleep(0.1)
+        visible_controls = [
+            (child.control_id(), child.class_name(), child.window_text())
+            for child in settings.descendants()
+            if child.is_visible()
+        ]
+        raise AssertionError(
+            f"could not find settings control {control_id} after selecting page 18; "
+            f"visible controls={visible_controls}"
+        )
 
     def visible_child_by_class(window, class_name: str) -> bool:
         return any(
