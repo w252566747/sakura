@@ -214,9 +214,18 @@ def main() -> int:
         if settings.child_window(control_id=1753, class_name="Button").exists(timeout=0):
             raise AssertionError("the obsolete CSV toolbar visibility checkbox is still present")
         curl_enabled_before = int(curl_feature.get_check_state())
-        curl_feature.click()
-        if int(curl_feature.get_check_state()) == curl_enabled_before:
-            raise AssertionError("the Curl feature setting checkbox did not toggle")
+        curl_feature.click_input()
+        deadline = time.time() + 2
+        curl_enabled_after_click = int(curl_feature.get_check_state())
+        while curl_enabled_after_click == curl_enabled_before and time.time() < deadline:
+            time.sleep(0.05)
+            curl_enabled_after_click = int(curl_feature.get_check_state())
+        if curl_enabled_after_click == curl_enabled_before:
+            raise AssertionError(
+                "the Curl feature setting checkbox did not toggle after a real mouse click: "
+                f"state={curl_enabled_before}, visible={curl_feature.is_visible()}, "
+                f"enabled={curl_feature.is_enabled()}, rect={curl_feature.rectangle()}"
+            )
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
 
@@ -227,9 +236,21 @@ def main() -> int:
         curl_enabled_saved = int(curl_feature.get_check_state())
         if curl_enabled_saved == curl_enabled_before:
             raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
-        curl_feature.click()
-        if int(curl_feature.get_check_state()) != curl_enabled_before:
-            raise AssertionError("could not restore the original Curl feature setting")
+        curl_enabled_before_restore = int(curl_feature.get_check_state())
+        curl_feature.click_input()
+        deadline = time.time() + 2
+        curl_enabled_restored = int(curl_feature.get_check_state())
+        while curl_enabled_restored != curl_enabled_before and time.time() < deadline:
+            time.sleep(0.05)
+            curl_enabled_restored = int(curl_feature.get_check_state())
+        if curl_enabled_restored != curl_enabled_before:
+            raise AssertionError(
+                "could not restore the original Curl feature setting after a real mouse click: "
+                f"initial={curl_enabled_before}, saved_on_reopen={curl_enabled_saved}, "
+                f"before_restore={curl_enabled_before_restore}, after_restore={curl_enabled_restored}, "
+                f"visible={curl_feature.is_visible()}, enabled={curl_feature.is_enabled()}, "
+                f"rect={curl_feature.rectangle()}"
+            )
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
         record("common_settings_enhancement_page_toggle_save_reopen_restore",
