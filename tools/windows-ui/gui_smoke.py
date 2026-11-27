@@ -18,7 +18,7 @@ import win32con
 import win32gui
 from PIL import ImageChops
 from PIL import ImageStat, ImageGrab
-from pywinauto import Application, mouse
+from pywinauto import Application, Desktop, mouse
 
 
 USER32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -39,9 +39,6 @@ _GET_MENU_ITEM_RECT.argtypes = [
     ctypes.POINTER(wintypes.RECT),
 ]
 _GET_MENU_ITEM_RECT.restype = wintypes.BOOL
-_SEND_MESSAGE = USER32.SendMessageW
-_SEND_MESSAGE.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-_SEND_MESSAGE.restype = ctypes.c_ssize_t
 
 
 def menu_item_rect(hwnd: int, menu: int, index: int) -> tuple[int, int, int, int]:
@@ -132,19 +129,15 @@ def main() -> int:
         ]
 
     def status_bar_text(parent_hwnd: int) -> str:
-        status_hwnds: list[int] = []
-
-        def collect_child(child_hwnd: int, _lparam: int) -> bool:
-            if win32gui.GetClassName(child_hwnd) == "msctls_statusbar32" and win32gui.IsWindowVisible(child_hwnd):
-                status_hwnds.append(child_hwnd)
-            return True
-
-        win32gui.EnumChildWindows(parent_hwnd, collect_child, 0)
-        for status_hwnd in status_hwnds:
-            buffer = ctypes.create_unicode_buffer(1024)
-            _SEND_MESSAGE(status_hwnd, 0x040D, 0, ctypes.addressof(buffer))  # SB_GETTEXTW
-            return buffer.value
-        raise AssertionError("the main window status bar was not found")
+        # Bind by the stable native HWND. Application.top_window() can retain
+        # stale search criteria after property sheets and popup menus close.
+        status = (
+            Desktop(backend="win32")
+            .window(handle=parent_hwnd)
+            .child_window(class_name="msctls_statusbar32")
+            .wrapper_object()
+        )
+        return " | ".join(status.texts())
 
     def toolbar_button(window, command_id: int):
         for child in window.descendants():
