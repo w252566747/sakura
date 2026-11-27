@@ -492,11 +492,11 @@ def main() -> int:
             time.sleep(0.05)
         if not popup or not win32gui.IsWindowVisible(popup):
             raise AssertionError("multi-cursor toolbar did not open its native popup menu")
-        popup_menu = win32gui.GetMenu(popup)
-        if not popup_menu or win32gui.GetMenuItemID(popup_menu, 0) != 31590:
-            raise AssertionError("first multi-cursor menu item is not Select Next Occurrence (31590)")
-        left, top, right, bottom = win32gui.GetMenuItemRect(popup, popup_menu, 0)
-        mouse.click(button="left", coords=((left + right) // 2, (top + bottom) // 2))
+        left, top, right, bottom = win32gui.GetWindowRect(popup)
+        # TrackPopupMenu uses a native #32768 popup window; its HMENU is not
+        # exposed by GetMenu(popup). Click the first visible item by screen
+        # coordinates, then validate its actual edit effect below.
+        mouse.click(button="left", coords=(left + min(120, (right - left) // 2), top + 10))
         time.sleep(0.2)
         window.type_keys("OMEGA", with_spaces=True)
         window.type_keys("^s")
