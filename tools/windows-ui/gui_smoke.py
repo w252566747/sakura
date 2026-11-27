@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import sys
@@ -17,6 +19,24 @@ import win32gui
 from PIL import ImageChops
 from PIL import ImageStat
 from pywinauto import Application, mouse
+
+
+USER32 = ctypes.WinDLL("user32", use_last_error=True)
+_GET_MENU_STRING = USER32.GetMenuStringW
+_GET_MENU_STRING.argtypes = [
+    wintypes.HMENU,
+    wintypes.UINT,
+    wintypes.LPWSTR,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+_GET_MENU_STRING.restype = ctypes.c_int
+
+
+def menu_item_text(menu: int, index: int) -> str:
+    buffer = ctypes.create_unicode_buffer(512)
+    _GET_MENU_STRING(menu, index, buffer, len(buffer), win32con.MF_BYPOSITION)
+    return buffer.value
 
 
 def main() -> int:
@@ -691,7 +711,7 @@ def main() -> int:
             raise AssertionError("one or more CSV commands are still shown as enhancement-toolbar buttons")
         main_menu = win32gui.GetMenu(window.handle)
         top_level_labels = [
-            win32gui.GetMenuString(main_menu, index, win32con.MF_BYPOSITION)
+            menu_item_text(main_menu, index)
             .replace("&", "").strip().removesuffix("(V)").removesuffix("(H)")
             for index in range(win32gui.GetMenuItemCount(main_menu))
         ]
@@ -699,7 +719,7 @@ def main() -> int:
             raise AssertionError(f"CSV top-level menu is not immediately to the right of Help: {top_level_labels!r}")
         csv_menu = win32gui.GetSubMenu(main_menu, top_level_labels.index("CSV"))
         csv_menu_labels = [
-            win32gui.GetMenuString(csv_menu, index, win32con.MF_BYPOSITION).replace("&", "").strip()
+            menu_item_text(csv_menu, index).replace("&", "").strip()
             for index in range(win32gui.GetMenuItemCount(csv_menu))
         ]
         expected_csv_items = [
