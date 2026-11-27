@@ -4325,7 +4325,7 @@ LRESULT CEditWnd::DispatchEvent(
 	case MYWM_CHANGESETTING:
 		/* 設定変更の通知 */
 		switch( (e_PM_CHANGESETTING_SELECT)lParam ){
-		case PM_CHANGESETTING_ALL:
+		case PM_CHANGESETTING_ALL: {
 			/* ダークモード設定を反映する */
 			{
 				if( (m_pShareData->m_Common.m_sWindow.m_bDarkMode != FALSE) != IsDarkModeActive() ){
@@ -4480,6 +4480,7 @@ LRESULT CEditWnd::DispatchEvent(
 			GetDocument()->m_cDocType.SetDocumentIcon();	// Sep. 10, 2002 genta 文書アイコンの再設定
 
 			break;
+		}
 		case PM_CHANGESETTING_FONT:
 			GetDocument()->OnChangeSetting( true );	// フォントで文字幅が変わるので、レイアウト再構築
 			delete [] m_posSaveAry;
