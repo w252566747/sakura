@@ -6018,7 +6018,7 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		const int logicWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 22 / 100), DpiScaleX(128), DpiScaleX(184)));
 		const int caseWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 14 / 100), DpiScaleX(88), DpiScaleX(112)));
 		const int regexWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 12 / 100), DpiScaleX(76), DpiScaleX(100)));
-		const int includeMaximum = std::max(DpiScaleX(140), cx - margin * 2 - labelWidth - logicWidth - caseWidth - regexWidth - smallGap * 5);
+		const int includeMaximum = (std::max)(DpiScaleX(140), cx - margin * 2 - labelWidth - logicWidth - caseWidth - regexWidth - smallGap * 5);
 		const int includeWidth = includeMaximum;
 		const int includeX = margin + labelWidth;
 		moveControl(IDC_REALTIME_FILTER_INCLUDE_LABEL, margin, row1 + DpiScaleY(5), labelWidth - smallGap, DpiScaleY(20));
@@ -6029,7 +6029,7 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		moveControl(IDC_REALTIME_FILTER_CASE, x, row1, caseWidth, rowHeight);
 		x += caseWidth + DpiScaleX(4);
 		moveControl(IDC_REALTIME_FILTER_REGEX, x, row1, regexWidth, rowHeight);
-		const int excludeMaximum = std::max(DpiScaleX(140), cx - margin * 2 - labelWidth - DpiScaleX(106 + 134 + 142) - smallGap * 4 - DpiScaleX(120));
+		const int excludeMaximum = (std::max)(DpiScaleX(140), cx - margin * 2 - labelWidth - DpiScaleX(106 + 134 + 142) - smallGap * 4 - DpiScaleX(120));
 		const int excludeWidth = std::min(excludeMaximum,
 			static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 32 / 100), DpiScaleX(140), DpiScaleX(420))));
 		const int excludeX = margin + labelWidth;
@@ -6046,7 +6046,7 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		const int buttonIds[] = { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
 			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CANCEL, IDC_REALTIME_FILTER_CLOSE };
 		moveControl(IDC_REALTIME_FILTER_STATS, margin, row3 + DpiScaleY(2),
-			std::max(DpiScaleX(80), cx - margin * 2), DpiScaleY(24));
+			(std::max)(DpiScaleX(80), cx - margin * 2), DpiScaleY(24));
 		int buttonX = cx - margin;
 		for (int index = static_cast<int>(std::size(buttonIds)) - 1; index >= 0; --index) {
 			buttonX -= buttonWidths[index];
