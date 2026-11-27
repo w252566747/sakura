@@ -55,7 +55,7 @@ def main() -> int:
         # The enhancement page is the final common-settings page (index 18).
         # Select it through the PropertySheet API instead of sending a rapid
         # Ctrl+Tab sequence, which can be dropped by a busy Windows runner.
-        settings.send_message(0x465, 0, 18)  # PSM_SETCURSEL
+        settings.send_message(0x465, 18, 0)  # PSM_SETCURSEL: wParam is the page index
         deadline = time.time() + 5
         locator = settings.child_window(control_id=control_id, class_name=class_name)
         while time.time() < deadline:
