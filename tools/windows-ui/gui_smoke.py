@@ -154,11 +154,27 @@ def main() -> int:
         if sum(menu_delta) < 5000:
             raise AssertionError("File menu click did not visibly open a menu")
         window.type_keys("{ESC}")
-        window.click_input(coords=(780, 63))
-        time.sleep(0.5)
+        filter_control = toolbar_button(window, 0x7CF6)  # REALTIME_FILTER_BUTTON
+        if filter_control is None:
+            raise AssertionError("real-time filter toolbar button was not found by command ID")
+        filter_toolbar, filter_index = filter_control
+        filter_state_before = toolbar_state(filter_toolbar, 0x7CF6)
+        if not (filter_state_before & 0x04):
+            raise AssertionError(
+                f"real-time filter toolbar button is disabled: TB_GETSTATE=0x{filter_state_before:02x}"
+            )
+        click_toolbar_button(filter_toolbar, filter_index)
+        filter_deadline = time.time() + 5
+        while not visible_child_by_class(window, "SysListView32") and time.time() < filter_deadline:
+            time.sleep(0.1)
+        filter_state_after = toolbar_state(filter_toolbar, 0x7CF6)
         window.capture_as_image().save(output / "03-filter-toolbar-on.png")
         if not visible_child_by_class(window, "SysListView32"):
-            raise AssertionError("Filter toolbar click did not show the real-time results list")
+            raise AssertionError(
+                "real filter toolbar click did not show the results list: "
+                f"before=0x{filter_state_before:02x}, after=0x{filter_state_after:02x}, "
+                f"button_rect={filter_toolbar.button(filter_index).rectangle()}"
+            )
         window.type_keys("GUI_SMOKE_SELECTABLE_TOKEN", with_spaces=True)
         deadline = time.time() + 10
         stats_texts: list[str] = []
@@ -199,8 +215,14 @@ def main() -> int:
                 f"expected {filter_saved!r}, got {sample.read_bytes()!r}"
             )
         window.capture_as_image().save(output / "04-filter-results.png")
-        window.click_input(coords=(780, 63))
-        time.sleep(0.2)
+        filter_control = toolbar_button(window, 0x7CF6)
+        if filter_control is None:
+            raise AssertionError("real-time filter toolbar button disappeared while filtering")
+        filter_toolbar, filter_index = filter_control
+        click_toolbar_button(filter_toolbar, filter_index)
+        filter_deadline = time.time() + 5
+        while visible_child_by_class(window, "SysListView32") and time.time() < filter_deadline:
+            time.sleep(0.1)
         filter_off = window.capture_as_image()
         filter_off.save(output / "05-filter-toolbar-off.png")
         if visible_child_by_class(window, "SysListView32"):
