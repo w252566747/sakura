@@ -169,9 +169,14 @@ def main() -> int:
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
         try:
-            if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                return ""
-            return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT):
+                value = win32clipboard.GetClipboardData(win32con.CF_TEXT)
+                if isinstance(value, bytes):
+                    return value.decode("mbcs", errors="replace")
+                return str(value)
+            return ""
         finally:
             win32clipboard.CloseClipboard()
 
