@@ -51,6 +51,17 @@ def main() -> int:
     def record(name: str, **values: object) -> None:
         steps.append({"step": name, "result": "passed", **values})
 
+    def select_enhancement_settings_page(settings):
+        for _ in range(19):
+            curl_locator = settings.child_window(control_id=1756, class_name="Button")
+            if curl_locator.exists(timeout=0.1):
+                curl_feature = curl_locator.wrapper_object()
+                if curl_feature.is_visible():
+                    return curl_feature
+            settings.type_keys("^{TAB}")
+            time.sleep(0.05)
+        raise AssertionError("could not select the enhancement settings page")
+
     def visible_child_by_class(window, class_name: str) -> bool:
         return any(
             child.class_name() == class_name and child.is_visible()
@@ -138,9 +149,7 @@ def main() -> int:
         window.menu_select("Option->Common Settings")
         settings = app.window(title="Common Setting")
         settings.wait("visible enabled", timeout=15)
-        for _ in range(18):
-            settings.type_keys("^{TAB}")
-            time.sleep(0.05)
+        curl_feature = select_enhancement_settings_page(settings)
         settings.capture_as_image().save(output / "02-settings-extension.png")
         feature_controls = [
             settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
@@ -148,7 +157,6 @@ def main() -> int:
         ]
         if not all(control.is_visible() for control in feature_controls):
             raise AssertionError("the enhancement settings page did not expose all 14 toolbar and feature checkboxes")
-        curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
         curl_enabled_before = int(curl_feature.get_check_state())
         curl_feature.click()
         if int(curl_feature.get_check_state()) == curl_enabled_before:
@@ -159,10 +167,7 @@ def main() -> int:
         window.menu_select("Option->Common Settings")
         settings = app.window(title="Common Setting")
         settings.wait("visible enabled", timeout=15)
-        for _ in range(18):
-            settings.type_keys("^{TAB}")
-            time.sleep(0.05)
-        curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
+        curl_feature = select_enhancement_settings_page(settings)
         curl_enabled_saved = int(curl_feature.get_check_state())
         if curl_enabled_saved == curl_enabled_before:
             raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
