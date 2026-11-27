@@ -205,7 +205,9 @@ def main() -> int:
             raise AssertionError("activating and using the live filter changed the source document")
         filter_inputs[0].set_focus()
         time.sleep(0.1)
-        window.type_keys("^s")
+        if not filter_inputs[0].has_focus():
+            raise AssertionError("the live-filter query edit did not retain keyboard focus for Ctrl+S")
+        filter_inputs[0].type_keys("^s")
         deadline = time.time() + 10
         while sample.read_bytes() != filter_saved and time.time() < deadline:
             time.sleep(0.2)
