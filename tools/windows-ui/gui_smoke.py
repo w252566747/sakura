@@ -833,11 +833,28 @@ def main() -> int:
         record("csv_menu_commands_and_validation_panel",
                popup_commands=popup_commands, visible_list_views=len(visible_lists))
 
+        list_views_before_toggle = [
+            child for child in window.descendants()
+            if child.class_name() == "SysListView32" and child.is_visible()
+        ]
         click_menu_position(window.handle, main_menu, csv_top_index)
         click_menu_position(window.handle, csv_menu, expected_csv_ids.index(31996))
-        time.sleep(0.3)
-        if any(child.is_visible() for child in window.descendants() if child.class_name() == "SysListView32"):
-            raise AssertionError("CSV table toggle did not return to the text editor")
+        deadline = time.time() + 5
+        list_views_after_toggle = list_views_before_toggle
+        while time.time() < deadline:
+            list_views_after_toggle = [
+                child for child in window.descendants()
+                if child.class_name() == "SysListView32" and child.is_visible()
+            ]
+            if len(list_views_after_toggle) < len(list_views_before_toggle):
+                break
+            time.sleep(0.1)
+        if len(list_views_after_toggle) >= len(list_views_before_toggle):
+            raise AssertionError(
+                "CSV table toggle did not remove its table control from the text editor: "
+                f"list views before={len(list_views_before_toggle)}, "
+                f"after={len(list_views_after_toggle)}"
+            )
         if csv_sample.read_bytes() != csv_original:
             raise AssertionError("leaving CSV table mode rewrote the source document")
         record("csv_table_view_rows_columns_toggle_and_source_preservation",
