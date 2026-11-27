@@ -2184,7 +2184,7 @@ void CShareData_IO::ShareData_IO_MainMenu( CDataProfile& cProfile )
 	const WCHAR*	pszSecName = L"MainMenu";
 	int& nVersion = GetDllShareData().m_Common.m_sMainMenu.m_nVersion;
 	// ※メニュー定義を追加したらnCurrentVerを修正
-	const int nCurrentVer = 2;
+	const int nCurrentVer = 3;
 	nVersion = nCurrentVer;
 	if( cProfile.IOProfileData(pszSecName, L"nMainMenuVer", nVersion) ){
 	}else{
@@ -2290,6 +2290,62 @@ void CShareData_IO::ShareData_IO_MainMenu( CDataProfile& cProfile )
 				}
 			}
 		}
+	}
+	if (cProfile.IsReadingMode()) {
+		CommonSetting_MainMenu& mainmenu = GetDllShareData().m_Common.m_sMainMenu;
+		bool hasCSVMenu = false;
+		for (int i = 0; i < mainmenu.m_nMainMenuNum; ++i) {
+			if (mainmenu.m_cMainMenuTbl[i].m_nLevel == 0 &&
+				mainmenu.m_cMainMenuTbl[i].m_nFunc == F_CSV_TOPMENU) {
+				hasCSVMenu = true;
+				break;
+			}
+		}
+		if (!hasCSVMenu) {
+			int topCount = 0;
+			while (topCount < MAX_MAINMENU_TOP && mainmenu.m_nMenuTopIdx[topCount] >= 0) ++topCount;
+			constexpr int csvMenuItemCount = 7;
+			if (topCount < MAX_MAINMENU_TOP &&
+				mainmenu.m_nMainMenuNum + csvMenuItemCount <= static_cast<int>(std::size(mainmenu.m_cMainMenuTbl))) {
+				int insertionTop = topCount;
+				for (int i = 0; i < topCount; ++i) {
+					const int topIndex = mainmenu.m_nMenuTopIdx[i];
+					if (mainmenu.m_cMainMenuTbl[topIndex].m_nFunc == F_HELP_TOPMENU) {
+						insertionTop = i + 1;
+						break;
+					}
+				}
+				const int insertIndex = insertionTop < topCount
+					? mainmenu.m_nMenuTopIdx[insertionTop] : mainmenu.m_nMainMenuNum;
+				for (int i = mainmenu.m_nMainMenuNum - 1; i >= insertIndex; --i) {
+					mainmenu.m_cMainMenuTbl[i + csvMenuItemCount] = mainmenu.m_cMainMenuTbl[i];
+				}
+				for (int i = topCount; i > insertionTop; --i) {
+					mainmenu.m_nMenuTopIdx[i] = mainmenu.m_nMenuTopIdx[i - 1] + csvMenuItemCount;
+				}
+				mainmenu.m_nMenuTopIdx[insertionTop] = insertIndex;
+
+				auto initializeCSVMenuItem = [](CMainMenu& item, EMainMenuType type, int level, int function) {
+					item.m_nType = type;
+					item.m_nFunc = static_cast<EFunctionCode>(function);
+					item.m_nLevel = level;
+					item.m_sName[0] = L'\0';
+					item.m_sKey[0] = L'\0';
+					item.m_sKey[1] = L'\0';
+				};
+				initializeCSVMenuItem(mainmenu.m_cMainMenuTbl[insertIndex], T_NODE, 0, F_CSV_TOPMENU);
+				const int csvCommands[] = {
+					F_CSV_TABLE_VIEW, F_CSV_OPTIONS, F_CSV_CHECK,
+					F_CSV_FILTER, F_CSV_SORT, F_CSV_EDIT,
+				};
+				for (int i = 0; i < static_cast<int>(std::size(csvCommands)); ++i) {
+					initializeCSVMenuItem(mainmenu.m_cMainMenuTbl[insertIndex + 1 + i], T_LEAF, 1, csvCommands[i]);
+				}
+				mainmenu.m_nMainMenuNum += csvMenuItemCount;
+				hasCSVMenu = true;
+			}
+		}
+		if (hasCSVMenu) nVersion = nCurrentVer;
 	}
 }
 

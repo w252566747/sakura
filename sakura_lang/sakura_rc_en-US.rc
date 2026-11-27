@@ -1616,9 +1616,8 @@ BEGIN
     CONTROL         "Rainbow Brackets",IDC_CHECK_EXT_TOOLBAR_RAINBOW,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,51,129,12
     CONTROL         "Marker Navigation",IDC_CHECK_EXT_TOOLBAR_MARKER,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,73,129,12
     CONTROL         "Real-time Filter",IDC_CHECK_EXT_TOOLBAR_FILTER,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,95,132,12
-    CONTROL         "CSV Table",IDC_CHECK_EXT_TOOLBAR_CSV,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,117,129,12
-    CONTROL         "Code Folding",IDC_CHECK_EXT_TOOLBAR_FOLD,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,139,129,12
-    CONTROL         "Multi-cursor",IDC_CHECK_EXT_TOOLBAR_MULTICURSOR,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,161,129,12
+    CONTROL         "Code Folding",IDC_CHECK_EXT_TOOLBAR_FOLD,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,117,129,12
+    CONTROL         "Multi-cursor",IDC_CHECK_EXT_TOOLBAR_MULTICURSOR,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,139,129,12
     CONTROL         "Curl Syntax Check",IDC_CHECK_EXT_FEATURE_CURL,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,155,29,128,12
     CONTROL         "Rainbow Brackets",IDC_CHECK_EXT_FEATURE_RAINBOW,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,155,51,128,12
     CONTROL         "Marker Navigation",IDC_CHECK_EXT_FEATURE_MARKER,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,155,73,128,12
@@ -2307,6 +2306,13 @@ BEGIN
     F_OPTION_TOPMENU        "Option"
     F_WINDOW_TOPMENU        "Window"
     F_HELP_TOPMENU          "Help"
+    F_CSV_TOPMENU            "CSV"
+    F_CSV_TABLE_VIEW         "Toggle CSV table view"
+    F_CSV_OPTIONS            "CSV display options..."
+    F_CSV_CHECK              "Validate CSV"
+    F_CSV_FILTER             "Filter current column..."
+    F_CSV_SORT               "Sort current column..."
+    F_CSV_EDIT               "Edit rows and columns..."
     F_WINDOW_LIST_SUBMENU   "Window List"
 END
 

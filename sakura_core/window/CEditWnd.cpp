@@ -5366,6 +5366,24 @@ void CEditWnd::InitMenu_Function(HMENU hMenu, EFunctionCode eFunc, const wchar_t
 				}
 			}
 			break;
+		case F_CSV_TABLE_VIEW:
+			m_cMenuDrawer.MyAppendMenu(hMenu,
+				MF_BYPOSITION | MF_STRING |
+				(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) ? 0 : MF_GRAYED) |
+				(IsCSVTableMode() ? MF_CHECKED : 0),
+				eFunc, pszName, pszKey);
+			break;
+		case F_CSV_OPTIONS:
+		case F_CSV_CHECK:
+		case F_CSV_FILTER:
+		case F_CSV_SORT:
+		case F_CSV_EDIT:
+			m_cMenuDrawer.MyAppendMenu(hMenu,
+				MF_BYPOSITION | MF_STRING |
+				(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) && IsCSVTableMode()
+					? 0 : MF_GRAYED),
+				eFunc, pszName, pszKey);
+			break;
 		default:
 			m_cMenuDrawer.MyAppendMenu( hMenu, MF_BYPOSITION | MF_STRING, eFunc,
 				pszName, pszKey );

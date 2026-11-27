@@ -499,12 +499,11 @@ struct EnhancementToolbarControl {
 	enhancementtoolbar::Group group;
 };
 
-constexpr std::array<EnhancementToolbarControl, 7> g_enhancementToolbarControls{{
+constexpr std::array<EnhancementToolbarControl, 6> g_enhancementToolbarControls{{
 	{ IDC_CHECK_EXT_TOOLBAR_CURL, enhancementtoolbar::Group::CurlSyntax },
 	{ IDC_CHECK_EXT_TOOLBAR_RAINBOW, enhancementtoolbar::Group::RainbowBracket },
 	{ IDC_CHECK_EXT_TOOLBAR_MARKER, enhancementtoolbar::Group::MarkerNavigation },
 	{ IDC_CHECK_EXT_TOOLBAR_FILTER, enhancementtoolbar::Group::RealtimeFilter },
-	{ IDC_CHECK_EXT_TOOLBAR_CSV, enhancementtoolbar::Group::CSVTable },
 	{ IDC_CHECK_EXT_TOOLBAR_FOLD, enhancementtoolbar::Group::CodeFolding },
 	{ IDC_CHECK_EXT_TOOLBAR_MULTICURSOR, enhancementtoolbar::Group::MultiCursor },
 }};

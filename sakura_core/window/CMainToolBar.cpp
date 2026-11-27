@@ -50,19 +50,18 @@ constexpr UINT RAINBOW_BRACKET_BUTTON = 0x7CFD;
 constexpr UINT CODEFOLD_BUTTON = F_CODEFOLD_TOGGLE;
 constexpr UINT RAINBOW_UNMATCHED_MENU = 0x7CDE;
 constexpr UINT RAINBOW_CURRENT_LEVEL_MENU = 0x7CDD;
-constexpr UINT CSV_TABLE_BUTTON = 0x7CFC;
-constexpr UINT CSV_CHECK_BUTTON = 0x7CFB;
-constexpr UINT CSV_OPTIONS_BUTTON = 0x7CFA;
-constexpr UINT CSV_FILTER_BUTTON = 0x7CF9;
-constexpr UINT CSV_SORT_BUTTON = 0x7CF8;
-constexpr UINT CSV_EDIT_BUTTON = 0x7CF7;
+constexpr UINT CSV_TABLE_COMMAND = F_CSV_TABLE_VIEW;
+constexpr UINT CSV_CHECK_COMMAND = F_CSV_CHECK;
+constexpr UINT CSV_OPTIONS_COMMAND = F_CSV_OPTIONS;
+constexpr UINT CSV_FILTER_COMMAND = F_CSV_FILTER;
+constexpr UINT CSV_SORT_COMMAND = F_CSV_SORT;
+constexpr UINT CSV_EDIT_COMMAND = F_CSV_EDIT;
 constexpr UINT REALTIME_FILTER_BUTTON = 0x7CF6;
 constexpr UINT ENHANCEMENT_TOOLBAR_ID = 0x7CFE;
 constexpr UINT TOOLBAR_MENU_CURL_SYNTAX = 0x7CF1;
 constexpr UINT TOOLBAR_MENU_RAINBOW = 0x7CF2;
 constexpr UINT TOOLBAR_MENU_MARKER = 0x7CF3;
 constexpr UINT TOOLBAR_MENU_FILTER = 0x7CF4;
-constexpr UINT TOOLBAR_MENU_CSV = 0x7CF5;
 constexpr UINT MULTICURSOR_BUTTON = 0x7CDC;
 constexpr UINT CSV_MENU_AUTO = 1;
 constexpr UINT CSV_MENU_COMMA = 2;
@@ -188,8 +187,12 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc(HWND hWnd, UINT msg, WPARAM wParam
 	auto* self = reinterpret_cast<CMainToolBar*>(dwRefData);
 	switch (msg) {
 	case WM_COMMAND:
-		if (self && reinterpret_cast<HWND>(lParam) == self->m_hwndEnhancementToolBar && HIWORD(wParam) == 0) {
+		if (self && HIWORD(wParam) == 0) {
 			const UINT command = LOWORD(wParam);
+			const bool fromEnhancementToolbar = reinterpret_cast<HWND>(lParam) == self->m_hwndEnhancementToolBar;
+			const bool fromCSVMenu = hWnd == self->m_pOwner->GetHwnd() && lParam == 0 &&
+				command >= CSV_EDIT_COMMAND && command <= CSV_TABLE_COMMAND;
+			if (!fromEnhancementToolbar && !fromCSVMenu) break;
 			if (command == CURL_SYNTAX_BUTTON) {
 				if (!self->m_pOwner->IsCurlSyntaxDocument()) {
 					self->m_pOwner->SendStatusMessage(L"Curl ソースでのみ構文チェックを実行できます。");
@@ -218,7 +221,7 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc(HWND hWnd, UINT msg, WPARAM wParam
 				self->ShowMultiCursorMenu();
 				return 0;
 			}
-			if (command == CSV_TABLE_BUTTON) {
+			if (command == CSV_TABLE_COMMAND) {
 				self->m_pOwner->ToggleCSVTableMode();
 				self->RefreshCurlSyntaxControl();
 				return 0;
@@ -228,20 +231,20 @@ LRESULT CALLBACK CMainToolBar::ToolBarWndProc(HWND hWnd, UINT msg, WPARAM wParam
 				self->RefreshCurlSyntaxControl();
 				return 0;
 			}
-			if (command == CSV_CHECK_BUTTON) {
+			if (command == CSV_CHECK_COMMAND) {
 				self->m_pOwner->RunCSVCheck();
 				self->RefreshCurlSyntaxControl();
 				return 0;
 			}
-			if (command == CSV_OPTIONS_BUTTON) {
+			if (command == CSV_OPTIONS_COMMAND) {
 				self->ShowCSVOptionsMenu();
 				return 0;
 			}
-			if (command == CSV_FILTER_BUTTON || command == CSV_SORT_BUTTON) {
+			if (command == CSV_FILTER_COMMAND || command == CSV_SORT_COMMAND) {
 				self->m_pOwner->ShowCSVColumnMenuForCurrentColumn();
 				return 0;
 			}
-			if (command == CSV_EDIT_BUTTON) {
+			if (command == CSV_EDIT_COMMAND) {
 				self->m_pOwner->ShowCSVTableEditMenu();
 				return 0;
 			}
@@ -1086,22 +1089,10 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		labels.push_back(L'\0');
 		labels.append(L"フィルター");
 		labels.push_back(L'\0');
-		labels.append(L"CSVテーブル");
-		labels.push_back(L'\0');
-		labels.append(L"CSV設定");
-		labels.push_back(L'\0');
-		labels.append(L"CSVチェック");
-		labels.push_back(L'\0');
-		labels.append(L"絞り込み");
-		labels.push_back(L'\0');
-		labels.append(L"並べ替え");
-		labels.push_back(L'\0');
-		labels.append(L"行・列編集");
-		labels.push_back(L'\0');
 		labels.push_back(L'\0');
 		const int stringBase = static_cast<int>(::SendMessageW(m_hwndEnhancementToolBar,
 			TB_ADDSTRINGW, 0, reinterpret_cast<LPARAM>(labels.c_str())));
-		TBBUTTON buttons[16]{};
+		TBBUTTON buttons[10]{};
 		buttons[0].iBitmap = DpiScaleX(3);
 		buttons[0].fsStyle = BTNS_SEP;
 		buttons[1].iBitmap = I_IMAGENONE;
@@ -1141,41 +1132,11 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 		buttons[8].fsState = TBSTATE_ENABLED;
 		buttons[8].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
 		buttons[8].iString = stringBase + 6;
-		buttons[9].iBitmap = I_IMAGENONE;
-		buttons[9].idCommand = CSV_TABLE_BUTTON;
-		buttons[9].fsState = TBSTATE_ENABLED;
-		buttons[9].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[9].iString = stringBase + 7;
-		buttons[10].iBitmap = I_IMAGENONE;
-		buttons[10].fsState = TBSTATE_ENABLED;
-		buttons[10].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[10].idCommand = CSV_OPTIONS_BUTTON;
-		buttons[10].iString = stringBase + 8;
-		buttons[11].iBitmap = I_IMAGENONE;
-		buttons[11].idCommand = CSV_CHECK_BUTTON;
-		buttons[11].fsState = TBSTATE_ENABLED;
-		buttons[11].fsStyle = BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[11].iString = stringBase + 9;
-		buttons[12].iBitmap = I_IMAGENONE;
-		buttons[12].idCommand = CSV_FILTER_BUTTON;
-		buttons[12].fsState = TBSTATE_ENABLED;
-		buttons[12].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[12].iString = stringBase + 10;
-		buttons[13].iBitmap = I_IMAGENONE;
-		buttons[13].idCommand = CSV_SORT_BUTTON;
-		buttons[13].fsState = TBSTATE_ENABLED;
-		buttons[13].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[13].iString = stringBase + 11;
-		buttons[14].iBitmap = I_IMAGENONE;
-		buttons[14].idCommand = CSV_EDIT_BUTTON;
-		buttons[14].fsState = TBSTATE_ENABLED;
-		buttons[14].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT;
-		buttons[14].iString = stringBase + 12;
-		buttons[15].iBitmap = DpiScaleX(3);
-		buttons[15].idCommand = WORDMARKER_SPACER_BUTTON;
-		buttons[15].fsStyle = BTNS_SEP;
-		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 16, reinterpret_cast<LPARAM>(buttons));
-		m_nEnhancementMarkerStart = 16;
+		buttons[9].iBitmap = DpiScaleX(3);
+		buttons[9].idCommand = WORDMARKER_SPACER_BUTTON;
+		buttons[9].fsStyle = BTNS_SEP;
+		::SendMessage(m_hwndEnhancementToolBar, TB_ADDBUTTONS, 10, reinterpret_cast<LPARAM>(buttons));
+		m_nEnhancementMarkerStart = 10;
 		::SendMessage(m_hwndEnhancementToolBar, TB_AUTOSIZE, 0, 0);
 	}
 	if (!m_hwndEnhancementToolBar) return;
@@ -1190,10 +1151,6 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 	setGroupVisibility(WORDMARKER_PREVIOUS_BUTTON, enhancementtoolbar::Group::MarkerNavigation);
 	setGroupVisibility(WORDMARKER_NEXT_BUTTON, enhancementtoolbar::Group::MarkerNavigation);
 	setGroupVisibility(REALTIME_FILTER_BUTTON, enhancementtoolbar::Group::RealtimeFilter);
-	for (const UINT command : { CSV_TABLE_BUTTON, CSV_OPTIONS_BUTTON, CSV_CHECK_BUTTON,
-		CSV_FILTER_BUTTON, CSV_SORT_BUTTON, CSV_EDIT_BUTTON }) {
-		setGroupVisibility(command, enhancementtoolbar::Group::CSVTable);
-	}
 	const bool supported = m_pOwner->IsCurlSyntaxDocument();
 	const bool enabled = curlsyntax::IsRealtimeEnabled();
 	const CEditDoc* document = m_pOwner->GetActiveView().GetDocument();
@@ -1201,7 +1158,6 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 	const bool rainbowFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket);
 	const bool markerFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MarkerNavigation);
 	const bool filterFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RealtimeFilter);
-	const bool csvFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable);
 	const bool foldFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding);
 	const bool multiCursorFeatureEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor);
 	const bool rainbowEnabled = rainbowFeatureEnabled && document
@@ -1222,15 +1178,6 @@ void CMainToolBar::RefreshCurlSyntaxControl()
 	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, REALTIME_FILTER_BUTTON, filterFeatureEnabled);
 	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, REALTIME_FILTER_BUTTON,
 		MAKELONG(m_pOwner->IsRealtimeFilterEnabled(), 0));
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_TABLE_BUTTON, csvFeatureEnabled);
-	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, CSV_TABLE_BUTTON, MAKELONG(m_pOwner->IsCSVTableMode(), 0));
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_CHECK_BUTTON, csvFeatureEnabled && m_pOwner->IsCSVTableMode());
-	::SendMessage(m_hwndEnhancementToolBar, TB_CHECKBUTTON, CSV_CHECK_BUTTON,
-		MAKELONG(m_pOwner->IsCSVValidationPanelVisible(), 0));
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_OPTIONS_BUTTON, csvFeatureEnabled && m_pOwner->IsCSVTableMode());
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_FILTER_BUTTON, csvFeatureEnabled && m_pOwner->IsCSVTableMode());
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_SORT_BUTTON, csvFeatureEnabled && m_pOwner->IsCSVTableMode());
-	::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, CSV_EDIT_BUTTON, csvFeatureEnabled && m_pOwner->IsCSVTableMode());
 	for (const UINT command : { WORDMARKER_PREVIOUS_BUTTON, WORDMARKER_NEXT_BUTTON })
 		::SendMessage(m_hwndEnhancementToolBar, TB_ENABLEBUTTON, command, markerFeatureEnabled);
 	LayoutMarkerControls();
@@ -1248,7 +1195,6 @@ void CMainToolBar::ShowEnhancementToolbarMenu(POINT clientPoint)
 	addItem(TOOLBAR_MENU_RAINBOW, enhancementtoolbar::Group::RainbowBracket, L"括弧色分けを表示");
 	addItem(TOOLBAR_MENU_MARKER, enhancementtoolbar::Group::MarkerNavigation, L"Markerを表示");
 	addItem(TOOLBAR_MENU_FILTER, enhancementtoolbar::Group::RealtimeFilter, L"フィルターを表示");
-	addItem(TOOLBAR_MENU_CSV, enhancementtoolbar::Group::CSVTable, L"CSV機能を表示");
 	::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 	addItem(0x7CD9, enhancementtoolbar::Group::CodeFolding, L"コード折りたたみを表示");
 	addItem(0x7CDA, enhancementtoolbar::Group::MultiCursor, L"マルチカーソルを表示");
@@ -1262,7 +1208,6 @@ void CMainToolBar::ShowEnhancementToolbarMenu(POINT clientPoint)
 	case TOOLBAR_MENU_RAINBOW: group = enhancementtoolbar::Group::RainbowBracket; break;
 	case TOOLBAR_MENU_MARKER: group = enhancementtoolbar::Group::MarkerNavigation; break;
 	case TOOLBAR_MENU_FILTER: group = enhancementtoolbar::Group::RealtimeFilter; break;
-	case TOOLBAR_MENU_CSV: group = enhancementtoolbar::Group::CSVTable; break;
 	case 0x7CD9: group = enhancementtoolbar::Group::CodeFolding; break;
 	case 0x7CDA: group = enhancementtoolbar::Group::MultiCursor; break;
 	default: return;
@@ -1335,12 +1280,11 @@ void CMainToolBar::ShowCSVOptionsMenu()
 	::CheckMenuItem(menu, CSV_MENU_HEADER,
 		MF_BYCOMMAND | (m_pOwner->IsCSVHeaderEnabled() ? MF_CHECKED : MF_UNCHECKED));
 
-	RECT rect{};
-	::SendMessageW(m_hwndEnhancementToolBar, TB_GETRECT, CSV_OPTIONS_BUTTON, reinterpret_cast<LPARAM>(&rect));
-	::MapWindowPoints(m_hwndEnhancementToolBar, nullptr, reinterpret_cast<POINT*>(&rect), 2);
+	POINT point{};
+	::GetCursorPos(&point);
 	::SetForegroundWindow(m_pOwner->GetHwnd());
 	const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-		rect.left, rect.bottom, 0, m_pOwner->GetHwnd(), nullptr);
+		point.x, point.y, 0, m_pOwner->GetHwnd(), nullptr);
 	::DestroyMenu(menu);
 	switch (command) {
 	case CSV_MENU_AUTO: m_pOwner->SetCSVDelimiter(delimiter, true); break;
@@ -1385,20 +1329,8 @@ bool CMainToolBar::GetEnhancementTooltipText(HWND hwndTooltip, UINT_PTR idFrom, 
 		text = L"現在のブロックを折りたたむ／展開する";
 	} else if (id == MULTICURSOR_BUTTON) {
 		text = L"同一単語選択、上下行への追加などのマルチカーソル操作";
-	} else if (id == CSV_TABLE_BUTTON) {
-		text = L"テキスト表示と CSV テーブル表示を切り替えます";
 	} else if (id == REALTIME_FILTER_BUTTON) {
 		text = L"文書を変更せず、条件に一致する行だけを表示します";
-	} else if (id == CSV_CHECK_BUTTON) {
-		text = L"CSV の形式エラーを一覧で確認します";
-	} else if (id == CSV_OPTIONS_BUTTON) {
-		text = L"区切り文字、ヘッダーの有無、列幅を設定します";
-	} else if (id == CSV_FILTER_BUTTON) {
-		text = L"現在の列にフィルター条件を設定します";
-	} else if (id == CSV_SORT_BUTTON) {
-		text = L"現在の列の並べ替え方式を選びます。Shift+列クリックで複数列";
-	} else if (id == CSV_EDIT_BUTTON) {
-		text = L"現在の行・列を追加／削除します";
 	} else if (id == WORDMARKER_PREVIOUS_BUTTON) {
 		text = L"前へ：前の自動 Marker に移動";
 	} else if (id == WORDMARKER_NEXT_BUTTON) {

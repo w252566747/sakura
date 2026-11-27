@@ -151,12 +151,15 @@ def main() -> int:
         settings.wait("visible enabled", timeout=15)
         curl_feature = select_settings_control(settings, 1756, "Button")
         settings.capture_as_image().save(output / "02-settings-extension.png")
+        settings_control_ids = [1749, 1750, 1751, 1752, 1754, 1755, *range(1756, 1763)]
         feature_controls = [
             settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
-            for control_id in range(1749, 1763)
+            for control_id in settings_control_ids
         ]
         if not all(control.is_visible() for control in feature_controls):
-            raise AssertionError("the enhancement settings page did not expose all 14 toolbar and feature checkboxes")
+            raise AssertionError("the enhancement settings page is missing a remaining toolbar or feature checkbox")
+        if settings.child_window(control_id=1753, class_name="Button").exists(timeout=0):
+            raise AssertionError("the obsolete CSV toolbar visibility checkbox is still present")
         curl_enabled_before = int(curl_feature.get_check_state())
         curl_feature.click()
         if int(curl_feature.get_check_state()) == curl_enabled_before:
@@ -177,7 +180,7 @@ def main() -> int:
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
         record("common_settings_enhancement_page_toggle_save_reopen_restore",
-               visible_control_ids=list(range(1749, 1763)),
+               visible_control_ids=settings_control_ids,
                curl_enabled_before=bool(curl_enabled_before),
                curl_enabled_after_reopen=bool(curl_enabled_saved))
 
@@ -658,11 +661,29 @@ def main() -> int:
         if csv_sample.name.casefold() not in window.window_text().casefold():
             raise AssertionError(f"Sakura did not open the CSV fixture: {window.window_text()!r}")
         window.maximize()
-        csv_control = toolbar_button(window, 0x7CFC)  # CSV_TABLE_BUTTON
-        if csv_control is None:
-            raise AssertionError("CSV table toolbar button was not found")
-        csv_toolbar, csv_index = csv_control
-        click_toolbar_button(csv_toolbar, csv_index)
+        csv_command_ids = [31996, 31994, 31995, 31993, 31992, 31991]
+        if any(toolbar_button(window, command_id) is not None for command_id in csv_command_ids):
+            raise AssertionError("one or more CSV commands are still shown as enhancement-toolbar buttons")
+        main_menu = win32gui.GetMenu(window.handle)
+        top_level_labels = [
+            win32gui.GetMenuString(main_menu, index, win32con.MF_BYPOSITION)
+            .replace("&", "").strip().removesuffix("(V)").removesuffix("(H)")
+            for index in range(win32gui.GetMenuItemCount(main_menu))
+        ]
+        if "CSV" not in top_level_labels or top_level_labels.index("CSV") != top_level_labels.index("Help") + 1:
+            raise AssertionError(f"CSV top-level menu is not immediately to the right of Help: {top_level_labels!r}")
+        csv_menu = win32gui.GetSubMenu(main_menu, top_level_labels.index("CSV"))
+        csv_menu_labels = [
+            win32gui.GetMenuString(csv_menu, index, win32con.MF_BYPOSITION).replace("&", "").strip()
+            for index in range(win32gui.GetMenuItemCount(csv_menu))
+        ]
+        expected_csv_items = [
+            "Toggle CSV table view", "CSV display options...", "Validate CSV",
+            "Filter current column...", "Sort current column...", "Edit rows and columns...",
+        ]
+        if csv_menu_labels != expected_csv_items:
+            raise AssertionError(f"CSV menu commands differ from the expected set/order: {csv_menu_labels!r}")
+        window.menu_select("CSV->Toggle CSV table view")
         deadline = time.time() + 10
         csv_tables = []
         csv_row_count = 0
@@ -687,7 +708,34 @@ def main() -> int:
         window.capture_as_image().save(output / "18-csv-table.png")
         if csv_sample.read_bytes() != csv_original:
             raise AssertionError("opening the CSV table rewrote the source document")
-        click_toolbar_button(csv_toolbar, csv_index)
+
+        popup_commands = [31994, 31993, 31992, 31991]
+        for command_id in popup_commands:
+            win32gui.PostMessage(window.handle, win32con.WM_COMMAND, command_id, 0)
+            time.sleep(0.2)
+            win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_ESCAPE, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.15)
+            if not any(child.class_name() == "SysListView32" and child.is_visible()
+                       for child in window.descendants()):
+                raise AssertionError(f"CSV menu command 0x{command_id:04x} did not return to the table")
+
+        window.menu_select("CSV->Validate CSV")
+        deadline = time.time() + 10
+        visible_lists = []
+        while time.time() < deadline:
+            visible_lists = [child for child in window.descendants()
+                             if child.class_name() == "SysListView32" and child.is_visible()]
+            if len(visible_lists) >= 2:
+                break
+            time.sleep(0.2)
+        if len(visible_lists) < 2:
+            raise AssertionError("CSV validation menu did not show its validation result list")
+        window.capture_as_image().save(output / "19-csv-validation-menu.png")
+        record("csv_menu_commands_and_validation_panel",
+               popup_commands=popup_commands, visible_list_views=len(visible_lists))
+
+        window.menu_select("CSV->Toggle CSV table view")
         time.sleep(0.3)
         if any(child.is_visible() for child in window.descendants() if child.class_name() == "SysListView32"):
             raise AssertionError("CSV table toggle did not return to the text editor")
