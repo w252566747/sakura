@@ -133,6 +133,49 @@ def main() -> int:
             raise AssertionError("Sakura window screenshot is blank or uniform")
         record("launch_and_window_capture", width=launch_image.width, height=launch_image.height)
 
+        # Exercise the newly added common-settings page in the real editor.
+        # Ctrl+Tab follows the native property-sheet page order to its final tab.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        for _ in range(18):
+            settings.type_keys("^{TAB}")
+            time.sleep(0.05)
+        settings.capture_as_image().save(output / "02-settings-extension.png")
+        feature_controls = [
+            settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
+            for control_id in range(1749, 1763)
+        ]
+        if not all(control.is_visible() for control in feature_controls):
+            raise AssertionError("the enhancement settings page did not expose all 14 toolbar and feature checkboxes")
+        curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
+        curl_enabled_before = int(curl_feature.check_state())
+        curl_feature.click()
+        if int(curl_feature.check_state()) == curl_enabled_before:
+            raise AssertionError("the Curl feature setting checkbox did not toggle")
+        settings.child_window(control_id=1).click()
+        settings.wait_not("visible", timeout=10)
+
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        for _ in range(18):
+            settings.type_keys("^{TAB}")
+            time.sleep(0.05)
+        curl_feature = settings.child_window(control_id=1756, class_name="Button").wrapper_object()
+        curl_enabled_saved = int(curl_feature.check_state())
+        if curl_enabled_saved == curl_enabled_before:
+            raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
+        curl_feature.click()
+        if int(curl_feature.check_state()) != curl_enabled_before:
+            raise AssertionError("could not restore the original Curl feature setting")
+        settings.child_window(control_id=1).click()
+        settings.wait_not("visible", timeout=10)
+        record("common_settings_enhancement_page_toggle_save_reopen_restore",
+               visible_control_ids=[control.control_id() for control in feature_controls],
+               curl_enabled_before=bool(curl_enabled_before),
+               curl_enabled_after_reopen=bool(curl_enabled_saved))
+
         # Leave an unsaved edit in the original document before opening the filter.
         window.set_focus()
         window.click_input(coords=(100, 447))
