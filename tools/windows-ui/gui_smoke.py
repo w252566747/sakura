@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import sys
@@ -15,8 +17,46 @@ import win32clipboard
 import win32con
 import win32gui
 from PIL import ImageChops
-from PIL import ImageStat
-from pywinauto import Application, mouse
+from PIL import ImageStat, ImageGrab
+from pywinauto import Application, Desktop, mouse
+
+
+USER32 = ctypes.WinDLL("user32", use_last_error=True)
+_GET_MENU_STRING = USER32.GetMenuStringW
+_GET_MENU_STRING.argtypes = [
+    wintypes.HMENU,
+    wintypes.UINT,
+    wintypes.LPWSTR,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+_GET_MENU_STRING.restype = ctypes.c_int
+_GET_MENU_ITEM_RECT = USER32.GetMenuItemRect
+_GET_MENU_ITEM_RECT.argtypes = [
+    wintypes.HWND,
+    wintypes.HMENU,
+    wintypes.UINT,
+    ctypes.POINTER(wintypes.RECT),
+]
+_GET_MENU_ITEM_RECT.restype = wintypes.BOOL
+
+
+def menu_item_rect(hwnd: int, menu: int, index: int) -> tuple[int, int, int, int]:
+    rect = wintypes.RECT()
+    if not _GET_MENU_ITEM_RECT(hwnd, menu, index, ctypes.byref(rect)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def click_menu_position(hwnd: int, menu: int, index: int) -> None:
+    left, top, right, bottom = menu_item_rect(hwnd, menu, index)
+    mouse.click(button="left", coords=((left + right) // 2, (top + bottom) // 2))
+
+
+def menu_item_text(menu: int, index: int) -> str:
+    buffer = ctypes.create_unicode_buffer(512)
+    _GET_MENU_STRING(menu, index, buffer, len(buffer), win32con.MF_BYPOSITION)
+    return buffer.value
 
 
 def main() -> int:
@@ -51,6 +91,30 @@ def main() -> int:
     def record(name: str, **values: object) -> None:
         steps.append({"step": name, "result": "passed", **values})
 
+    def select_settings_control(settings, control_id: int, class_name: str):
+        # Common Settings has 19 pages. Select each page through the native
+        # PropertySheet API so this works for both General and Enhancement
+        # controls without relying on timing-sensitive Ctrl+Tab keystrokes.
+        locator = settings.child_window(control_id=control_id, class_name=class_name)
+        for page_index in range(19):
+            settings.send_message(0x465, page_index, 0)  # PSM_SETCURSEL
+            deadline = time.time() + 1
+            while time.time() < deadline:
+                if locator.exists(timeout=0.1):
+                    control = locator.wrapper_object()
+                    if control.is_visible():
+                        return control
+                time.sleep(0.05)
+        visible_controls = [
+            (child.control_id(), child.class_name(), child.window_text())
+            for child in settings.descendants()
+            if child.is_visible()
+        ]
+        raise AssertionError(
+            f"could not find settings control {control_id} on any of 19 pages; "
+            f"visible controls={visible_controls}"
+        )
+
     def visible_child_by_class(window, class_name: str) -> bool:
         return any(
             child.class_name() == class_name and child.is_visible()
@@ -64,6 +128,17 @@ def main() -> int:
             if child.class_name() == class_name and child.is_visible()
         ]
 
+    def status_bar_text(parent_hwnd: int) -> str:
+        # Bind by the stable native HWND. Application.top_window() can retain
+        # stale search criteria after property sheets and popup menus close.
+        status = (
+            Desktop(backend="win32")
+            .window(handle=parent_hwnd)
+            .child_window(class_name="msctls_statusbar32")
+            .wrapper_object()
+        )
+        return " | ".join(status.texts())
+
     def toolbar_button(window, command_id: int):
         for child in window.descendants():
             if child.class_name() != "ToolbarWindow32" or not child.is_visible():
@@ -74,7 +149,7 @@ def main() -> int:
         return None
 
     def toolbar_state(toolbar, command_id: int) -> int:
-        return int(toolbar.send_message(0x411, command_id))  # TB_GETSTATE
+        return int(toolbar.send_message(0x412, command_id))  # TB_GETSTATE (WM_USER + 18)
 
     def click_toolbar_button(toolbar, index: int) -> None:
         # The generic ButtonWrapper exposes the toolbar HWND state, not fsState.
@@ -87,9 +162,14 @@ def main() -> int:
     def clipboard_text() -> str:
         win32clipboard.OpenClipboard()
         try:
-            if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                return ""
-            return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_TEXT):
+                value = win32clipboard.GetClipboardData(win32con.CF_TEXT)
+                if isinstance(value, bytes):
+                    return value.decode("mbcs", errors="replace")
+                return str(value)
+            return ""
         finally:
             win32clipboard.CloseClipboard()
 
@@ -133,11 +213,84 @@ def main() -> int:
             raise AssertionError("Sakura window screenshot is blank or uniform")
         record("launch_and_window_capture", width=launch_image.width, height=launch_image.height)
 
+        # Exercise the newly added common-settings page in the real editor.
+        # Ctrl+Tab follows the native property-sheet page order to its final tab.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        curl_feature = select_settings_control(settings, 1756, "Button")
+        settings.capture_as_image().save(output / "02-settings-extension.png")
+        settings_control_ids = [1749, 1750, 1751, 1752, 1754, 1755, *range(1756, 1763)]
+        feature_controls = [
+            settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
+            for control_id in settings_control_ids
+        ]
+        if not all(control.is_visible() for control in feature_controls):
+            raise AssertionError("the enhancement settings page is missing a remaining toolbar or feature checkbox")
+        if settings.child_window(control_id=1753, class_name="Button").exists(timeout=0):
+            raise AssertionError("the obsolete CSV toolbar visibility checkbox is still present")
+        curl_enabled_before = int(curl_feature.get_check_state())
+        curl_feature.click_input()
+        deadline = time.time() + 2
+        curl_enabled_after_click = int(curl_feature.get_check_state())
+        while curl_enabled_after_click == curl_enabled_before and time.time() < deadline:
+            time.sleep(0.05)
+            curl_enabled_after_click = int(curl_feature.get_check_state())
+        if curl_enabled_after_click == curl_enabled_before:
+            raise AssertionError(
+                "the Curl feature setting checkbox did not toggle after a real mouse click: "
+                f"state={curl_enabled_before}, visible={curl_feature.is_visible()}, "
+                f"enabled={curl_feature.is_enabled()}, rect={curl_feature.rectangle()}"
+            )
+        settings.child_window(control_id=1).click()
+        settings.wait_not("visible", timeout=10)
+
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        curl_feature = select_settings_control(settings, 1756, "Button")
+        curl_enabled_saved = int(curl_feature.get_check_state())
+        if curl_enabled_saved == curl_enabled_before:
+            raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
+        curl_enabled_before_restore = int(curl_feature.get_check_state())
+        curl_feature.click_input()
+        deadline = time.time() + 2
+        curl_enabled_restored = int(curl_feature.get_check_state())
+        while curl_enabled_restored != curl_enabled_before and time.time() < deadline:
+            time.sleep(0.05)
+            curl_enabled_restored = int(curl_feature.get_check_state())
+        if curl_enabled_restored != curl_enabled_before:
+            raise AssertionError(
+                "could not restore the original Curl feature setting after a real mouse click: "
+                f"initial={curl_enabled_before}, saved_on_reopen={curl_enabled_saved}, "
+                f"before_restore={curl_enabled_before_restore}, after_restore={curl_enabled_restored}, "
+                f"visible={curl_feature.is_visible()}, enabled={curl_feature.is_enabled()}, "
+                f"rect={curl_feature.rectangle()}"
+            )
+        settings.child_window(control_id=1).click()
+        settings.wait_not("visible", timeout=10)
+        record("common_settings_enhancement_page_toggle_save_reopen_restore",
+               visible_control_ids=settings_control_ids,
+               curl_enabled_before=bool(curl_enabled_before),
+               curl_enabled_after_reopen=bool(curl_enabled_saved))
+
         # Leave an unsaved edit in the original document before opening the filter.
         window.set_focus()
         window.click_input(coords=(100, 447))
+        window.type_keys("^{END}")
         window.type_keys("GUI_SMOKE_FILTER_SAVE", with_spaces=True)
-        filter_saved = original + b"GUI_SMOKE_FILTER_SAVE"
+        window.type_keys("^a")
+        window.type_keys("^c")
+        edited_document = clipboard_text()
+        expected_edited_document = original_text + "GUI_SMOKE_FILTER_SAVE"
+        if edited_document != expected_edited_document:
+            raise AssertionError(
+                "could not establish the unsaved full-document edit before filtering: "
+                f"expected suffix='GUI_SMOKE_FILTER_SAVE', length={len(expected_edited_document)}, "
+                f"copied length={len(edited_document)}, copied suffix={edited_document[-80:]!r}"
+            )
+        window.type_keys("^{END}")
+        filter_saved = edited_document.encode("ascii")
         if sample.read_bytes() != original:
             raise AssertionError("the filter Ctrl+S scenario was saved before the filter was opened")
 
@@ -154,11 +307,28 @@ def main() -> int:
         if sum(menu_delta) < 5000:
             raise AssertionError("File menu click did not visibly open a menu")
         window.type_keys("{ESC}")
-        window.click_input(coords=(780, 63))
-        time.sleep(0.5)
+        filter_control = toolbar_button(window, 0x7CF6)  # REALTIME_FILTER_BUTTON
+        if filter_control is None:
+            raise AssertionError("real-time filter toolbar button was not found by command ID")
+        filter_toolbar, filter_index = filter_control
+        filter_state_before = toolbar_state(filter_toolbar, 0x7CF6)
+        if not (filter_state_before & 0x04):
+            raise AssertionError(
+                f"real-time filter toolbar button is disabled: TB_GETSTATE=0x{filter_state_before:02x}"
+            )
+        click_toolbar_button(filter_toolbar, filter_index)
+        filter_deadline = time.time() + 5
+        while not any("一致 1 行" in text for text in visible_child_texts(window, "Static")) and time.time() < filter_deadline:
+            time.sleep(0.1)
+        filter_state_after = toolbar_state(filter_toolbar, 0x7CF6)
         window.capture_as_image().save(output / "03-filter-toolbar-on.png")
-        if not visible_child_by_class(window, "SysListView32"):
-            raise AssertionError("Filter toolbar click did not show the real-time results list")
+        if visible_child_by_class(window, "SysListView32") or not visible_child_by_class(window, "SakuraView"):
+            raise AssertionError(
+                "real filter toolbar click did not keep the original editor surface visible: "
+                f"before=0x{filter_state_before:02x}, after=0x{filter_state_after:02x}, "
+                f"button_rect={filter_toolbar.button(filter_index).rectangle()}"
+            )
+        source_view_before_filter = window.capture_as_image()
         window.type_keys("GUI_SMOKE_SELECTABLE_TOKEN", with_spaces=True)
         deadline = time.time() + 10
         stats_texts: list[str] = []
@@ -169,12 +339,14 @@ def main() -> int:
             time.sleep(0.2)
         else:
             raise AssertionError(f"live filter did not report the single matching line: {stats_texts!r}")
-        result_lists = [
-            child for child in window.descendants()
-            if child.class_name() == "SysListView32" and child.is_visible()
-        ]
-        if len(result_lists) != 1 or int(result_lists[0].send_message(0x1004)) != 1:
-            raise AssertionError("live filter did not populate exactly one result row")
+        source_view_after_filter = window.capture_as_image()
+        editor_top = min(source_view_before_filter.height - 1, 210)
+        editor_delta = sum(ImageStat.Stat(ImageChops.difference(
+            source_view_before_filter.convert("RGB").crop((0, editor_top, source_view_before_filter.width, source_view_before_filter.height)),
+            source_view_after_filter.convert("RGB").crop((0, editor_top, source_view_after_filter.width, source_view_after_filter.height)),
+        )).sum)
+        if editor_delta < 5000:
+            raise AssertionError("filter query did not visibly hide the nonmatching source lines")
         filter_inputs = [
             child for child in window.descendants()
             if child.class_name() == "Edit" and child.is_visible()
@@ -189,7 +361,9 @@ def main() -> int:
             raise AssertionError("activating and using the live filter changed the source document")
         filter_inputs[0].set_focus()
         time.sleep(0.1)
-        window.type_keys("^s")
+        if not filter_inputs[0].has_focus():
+            raise AssertionError("the live-filter query edit did not retain keyboard focus for Ctrl+S")
+        filter_inputs[0].type_keys("^s")
         deadline = time.time() + 10
         while sample.read_bytes() != filter_saved and time.time() < deadline:
             time.sleep(0.2)
@@ -199,16 +373,35 @@ def main() -> int:
                 f"expected {filter_saved!r}, got {sample.read_bytes()!r}"
             )
         window.capture_as_image().save(output / "04-filter-results.png")
-        window.click_input(coords=(780, 63))
-        time.sleep(0.2)
+        filter_control = toolbar_button(window, 0x7CF6)
+        if filter_control is None:
+            raise AssertionError("real-time filter toolbar button disappeared while filtering")
+        filter_toolbar, filter_index = filter_control
+        click_toolbar_button(filter_toolbar, filter_index)
         filter_off = window.capture_as_image()
         filter_off.save(output / "05-filter-toolbar-off.png")
         if visible_child_by_class(window, "SysListView32"):
-            raise AssertionError("Filter toolbar second click did not hide the results list")
+            raise AssertionError("Filter mode exposed the obsolete results list")
         if not window.is_visible():
             raise AssertionError("menu/toolbar input left the main window unavailable")
-        record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
+        record("source_view_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
+               editor_pixel_delta=editor_delta,
                focused_filter_edit=filter_inputs[0].handle)
+
+        # Set custom word boundaries explicitly so this scenario is independent
+        # of runner profile defaults, and enable automatic same-word highlighting.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        word_chars = select_settings_control(settings, 1742, "Edit")
+        auto_marker = select_settings_control(settings, 1741, "Button")
+        original_word_chars = word_chars.window_text()
+        original_auto_marker = int(auto_marker.get_check_state())
+        word_chars.set_edit_text("_-")
+        if original_auto_marker != 1:
+            auto_marker.click()
+        settings.child_window(control_id=1, class_name="Button").click()
+        settings.wait_not("visible", timeout=10)
 
         # Exercise actual mouse input against the editor's client area.
         window.double_click_input(coords=(90, 223))
@@ -235,6 +428,27 @@ def main() -> int:
         selection_image.save(output / "07-mouse-selection.png")
         if selected_text != "GUI_SMOKE_BASELINE":
             raise AssertionError(f"mouse drag did not select the intended full word: {selected_text!r}")
+        deadline = time.time() + 3
+        mouse_selection_status = status_bar_text(hwnd)
+        while "合計 23 件" not in mouse_selection_status and time.time() < deadline:
+            time.sleep(0.05)
+            mouse_selection_status = status_bar_text(hwnd)
+        if "合計 23 件" not in mouse_selection_status:
+            raise AssertionError(f"mouse selection did not show the 23 matching occurrences: {mouse_selection_status!r}")
+        window.capture_as_image().save(output / "07-mouse-selection-occurrence-count.png")
+
+        # Select the current line with the keyboard and ensure the count follows
+        # keyboard-created selections too, including subsequent paint refreshes.
+        window.click_input(coords=(200, 260))
+        window.type_keys("{HOME}+{END}")
+        deadline = time.time() + 3
+        keyboard_selection_status = status_bar_text(hwnd)
+        while "合計 1 件" not in keyboard_selection_status and time.time() < deadline:
+            time.sleep(0.05)
+            keyboard_selection_status = status_bar_text(hwnd)
+        if "合計 1 件" not in keyboard_selection_status:
+            raise AssertionError(f"keyboard selection did not show its occurrence count: {keyboard_selection_status!r}")
+        window.capture_as_image().save(output / "07-keyboard-selection-occurrence-count.png")
         marker_crop = selection_image.convert("RGB").crop((32, 90, 210, 108))
         warm_marker_pixels = sum(
             1 for red, green, blue in marker_crop.getdata()
@@ -245,12 +459,25 @@ def main() -> int:
                 "automatic same-word highlighting was not visible in the real editor screenshot: "
                 f"warm marker pixels={warm_marker_pixels}"
             )
+        # Restore the runner's original values after proving the feature.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        word_chars = select_settings_control(settings, 1742, "Edit")
+        auto_marker = select_settings_control(settings, 1741, "Button")
+        word_chars.set_edit_text(original_word_chars)
+        if int(auto_marker.get_check_state()) != original_auto_marker:
+            auto_marker.click()
+        settings.child_window(control_id=1, class_name="Button").click()
+        settings.wait_not("visible", timeout=10)
         record(
             "custom_word_boundaries_and_automatic_same_word_highlight",
+            configured_word_chars="_-",
             hyphen_double_click=hyphen_word,
             underscore_double_click=underscore_word,
             dragged_text=selected_text,
             warm_marker_pixels=warm_marker_pixels,
+            original_values_restored=True,
         )
 
         window.set_focus()
@@ -436,6 +663,284 @@ def main() -> int:
         window.close()
         app.wait_for_process_exit(timeout=20)
         record("close_curl_test_application")
+
+        multicursor_sample = output / "gui-smoke-multicursor.txt"
+        multicursor_original = b"alpha + alpha\r\nbeta + beta\r\n"
+        multicursor_sample.write_bytes(multicursor_original)
+        app = Application(backend="win32").start(
+            f'"{exe}" "{multicursor_sample}"', timeout=30
+        )
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while multicursor_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if multicursor_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the multi-cursor fixture: {window.window_text()!r}")
+        window.maximize()
+        window.click_input(coords=(47, 92))
+        window.double_click_input(coords=(47, 92))
+        multicursor_control = toolbar_button(window, 0x7CDC)  # MULTICURSOR_BUTTON
+        if multicursor_control is None:
+            raise AssertionError("multi-cursor toolbar menu button was not found")
+        multicursor_toolbar, multicursor_index = multicursor_control
+        click_toolbar_button(multicursor_toolbar, multicursor_index)
+        popup = 0
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            popup = win32gui.FindWindow("#32768", None)
+            if popup and win32gui.IsWindowVisible(popup):
+                break
+            time.sleep(0.05)
+        if not popup or not win32gui.IsWindowVisible(popup):
+            raise AssertionError("multi-cursor toolbar did not open its native popup menu")
+        left, top, right, bottom = win32gui.GetWindowRect(popup)
+        # TrackPopupMenu uses a native #32768 popup window; its HMENU is not
+        # exposed by GetMenu(popup). Click the first visible item by screen
+        # coordinates, then validate its actual edit effect below.
+        mouse.click(button="left", coords=(left + min(120, (right - left) // 2), top + 10))
+        time.sleep(0.2)
+        window.type_keys("OMEGA", with_spaces=True)
+        window.type_keys("^s")
+        expected_multicursor = b"OMEGA + OMEGA\r\nbeta + beta\r\n"
+        deadline = time.time() + 10
+        while multicursor_sample.read_bytes() != expected_multicursor and time.time() < deadline:
+            time.sleep(0.2)
+        if multicursor_sample.read_bytes() != expected_multicursor:
+            raise AssertionError(
+                "multi-cursor select-next did not replace exactly both matching words: "
+                f"got={multicursor_sample.read_bytes()!r}"
+            )
+        multicursor_image = window.capture_as_image()
+        multicursor_image.save(output / "15-multicursor-edit.png")
+        record("multi_cursor_menu_select_next_and_edit", saved_bytes=len(expected_multicursor))
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+
+        fold_sample = output / "gui-smoke-fold.cpp"
+        fold_original = (
+            "int main() {\r\n"
+            "    int value = 1;\r\n"
+            "    if (value) {\r\n"
+            "        value = 2;\r\n"
+            "    }\r\n"
+            "    return value;\r\n"
+            "}\r\n"
+        ).encode("ascii")
+        fold_sample.write_bytes(fold_original)
+        app = Application(backend="win32").start(f'"{exe}" "{fold_sample}"', timeout=30)
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while fold_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if fold_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the code-fold fixture: {window.window_text()!r}")
+        window.maximize()
+        window.click_input(coords=(90, 92))
+        fold_control = toolbar_button(window, 31575)  # F_CODEFOLD_TOGGLE
+        if fold_control is None:
+            raise AssertionError("code-fold toolbar button was not found")
+        fold_toolbar, fold_index = fold_control
+        fold_before = window.capture_as_image()
+        # The native +/− control is drawn in the first gutter cell on a fold header.
+        window.click_input(coords=(5, 92))
+        time.sleep(0.3)
+        gutter_collapsed = window.capture_as_image()
+        gutter_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((0, 80, 700, 300)),
+            gutter_collapsed.convert("RGB").crop((0, 80, 700, 300)),
+        )).sum)
+        if gutter_change < 1000:
+            raise AssertionError(f"clicking the visible fold gutter did not collapse the block: {gutter_change}")
+        window.click_input(coords=(5, 92))
+        time.sleep(0.3)
+        gutter_expanded = window.capture_as_image()
+        gutter_restore_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((0, 80, 700, 300)),
+            gutter_expanded.convert("RGB").crop((0, 80, 700, 300)),
+        )).sum)
+        if gutter_restore_change > gutter_change:
+            raise AssertionError("clicking the expanded fold gutter did not restore the block")
+        if fold_sample.read_bytes() != fold_original:
+            raise AssertionError("gutter folding changed the source file")
+        click_toolbar_button(fold_toolbar, fold_index)
+        time.sleep(0.5)
+        fold_collapsed = window.capture_as_image()
+        fold_collapsed.save(output / "16-codefold-collapsed.png")
+        fold_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((25, 80, 700, 300)),
+            fold_collapsed.convert("RGB").crop((25, 80, 700, 300)),
+        )).sum)
+        if fold_change < 1000:
+            raise AssertionError(f"code-fold toolbar action did not visibly change the editor: {fold_change}")
+        if fold_sample.read_bytes() != fold_original:
+            raise AssertionError("collapsing a block changed the saved source text")
+        click_toolbar_button(fold_toolbar, fold_index)
+        time.sleep(0.3)
+        fold_expanded = window.capture_as_image()
+        fold_expanded.save(output / "17-codefold-expanded.png")
+        fold_restore_change = sum(ImageStat.Stat(ImageChops.difference(
+            fold_before.convert("RGB").crop((25, 80, 700, 300)),
+            fold_expanded.convert("RGB").crop((25, 80, 700, 300)),
+        )).sum)
+        if fold_restore_change > fold_change:
+            raise AssertionError("code-fold expand action did not restore the original editor view")
+        record("code_fold_collapse_expand_and_source_preservation",
+               collapsed_pixel_delta=fold_change, expanded_pixel_delta=fold_restore_change)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
+
+        csv_sample = output / "gui-smoke.csv"
+        csv_original = b"Name,Value\r\nalpha,1\r\nbeta,2\r\n"
+        csv_sample.write_bytes(csv_original)
+        app = Application(backend="win32").start(f'"{exe}" "{csv_sample}"', timeout=30)
+        window = app.top_window()
+        window.wait("visible enabled", timeout=45)
+        deadline = time.time() + 10
+        while csv_sample.name.casefold() not in window.window_text().casefold() and time.time() < deadline:
+            time.sleep(0.2)
+            window = app.top_window()
+        if csv_sample.name.casefold() not in window.window_text().casefold():
+            raise AssertionError(f"Sakura did not open the CSV fixture: {window.window_text()!r}")
+        window.maximize()
+        csv_command_ids = [31996, 31994, 31995, 31993, 31992, 31991]
+        if any(toolbar_button(window, command_id) is not None for command_id in csv_command_ids):
+            raise AssertionError("one or more CSV commands are still shown as enhancement-toolbar buttons")
+        main_menu = win32gui.GetMenu(window.handle)
+        top_level_labels = [
+            menu_item_text(main_menu, index)
+            .replace("&", "").strip().removesuffix("(V)").removesuffix("(H)")
+            for index in range(win32gui.GetMenuItemCount(main_menu))
+        ]
+        if "CSV" not in top_level_labels or top_level_labels.index("CSV") != top_level_labels.index("Help") + 1:
+            raise AssertionError(f"CSV top-level menu is not immediately to the right of Help: {top_level_labels!r}")
+        csv_top_index = top_level_labels.index("CSV")
+        csv_menu = win32gui.GetSubMenu(main_menu, csv_top_index)
+        if not csv_menu:
+            raise AssertionError("CSV top-level menu has no native popup handle")
+        # Sakura builds owner-drawn submenu entries on WM_INITMENUPOPUP. Open
+        # the actual menu before inspecting its command IDs or taking evidence.
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        deadline = time.time() + 5
+        while win32gui.GetMenuItemCount(csv_menu) != 6 and time.time() < deadline:
+            time.sleep(0.05)
+        expected_csv_items = [
+            "Toggle CSV table view", "CSV display options...", "Validate CSV",
+            "Filter current column...", "Sort current column...", "Edit rows and columns...",
+        ]
+        expected_csv_ids = [31996, 31994, 31995, 31993, 31992, 31991]
+        csv_command_ids_in_menu = [
+            win32gui.GetMenuItemID(csv_menu, index)
+            for index in range(win32gui.GetMenuItemCount(csv_menu))
+        ]
+        if csv_command_ids_in_menu != expected_csv_ids:
+            raise AssertionError(
+                "CSV menu command IDs/order differ from the expected commands: "
+                f"{csv_command_ids_in_menu!r}"
+            )
+        item_rects = [menu_item_rect(window.handle, csv_menu, index) for index in range(6)]
+        menu_screenshot = ImageGrab.grab().convert("RGB")
+        menu_bounds = (
+            min(rect[0] for rect in item_rects) - 8,
+            min(rect[1] for rect in item_rects) - 4,
+            max(rect[2] for rect in item_rects) + 8,
+            max(rect[3] for rect in item_rects) + 4,
+        )
+        menu_crop = menu_screenshot.crop(menu_bounds)
+        menu_crop.save(output / "18-csv-menu-open.png")
+        if max(ImageStat.Stat(menu_crop).stddev) < 4:
+            raise AssertionError("the opened CSV submenu screenshot is blank or uniform")
+        # Command labels are owner-drawn and GetMenuStringW is intentionally
+        # empty for those entries; clicking by their native IDs verifies each
+        # rendered entry while the real dropdown screenshot retains the text.
+        click_menu_position(window.handle, csv_menu, 0)
+        deadline = time.time() + 10
+        csv_tables = []
+        csv_row_count = 0
+        csv_column_count = 0
+        while time.time() < deadline:
+            csv_tables = [child for child in window.descendants()
+                          if child.class_name() == "SysListView32" and child.is_visible()]
+            if csv_tables:
+                csv_row_count = int(csv_tables[0].send_message(0x1004))  # LVM_GETITEMCOUNT
+                csv_header = int(csv_tables[0].send_message(0x101F))  # LVM_GETHEADER
+                csv_column_count = int(win32gui.SendMessage(csv_header, 0x1200, 0, 0)) if csv_header else 0
+                # The default CSV settings treat the first line as data and
+                # the table adds a leading row-number column labeled "#".
+                if csv_row_count == 3 and csv_column_count == 3:
+                    break
+            time.sleep(0.2)
+        if not csv_tables or csv_row_count != 3 or csv_column_count != 3:
+            raise AssertionError(
+                "CSV table did not display three source rows and the row-number plus two data columns: "
+                f"rows={csv_row_count}, columns={csv_column_count}"
+            )
+        window.capture_as_image().save(output / "19-csv-table.png")
+        if csv_sample.read_bytes() != csv_original:
+            raise AssertionError("opening the CSV table rewrote the source document")
+
+        popup_commands = [31994, 31993, 31992, 31991]
+        for command_id in popup_commands:
+            click_menu_position(window.handle, main_menu, csv_top_index)
+            if win32gui.GetMenuItemCount(csv_menu) != 6:
+                raise AssertionError("CSV submenu was not populated when reopened")
+            item_index = expected_csv_ids.index(command_id)
+            click_menu_position(window.handle, csv_menu, item_index)
+            time.sleep(0.2)
+            win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_ESCAPE, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.15)
+            if not any(child.class_name() == "SysListView32" and child.is_visible()
+                       for child in window.descendants()):
+                raise AssertionError(f"CSV menu command 0x{command_id:04x} did not return to the table")
+
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        click_menu_position(window.handle, csv_menu, expected_csv_ids.index(31995))
+        deadline = time.time() + 10
+        visible_lists = []
+        while time.time() < deadline:
+            visible_lists = [child for child in window.descendants()
+                             if child.class_name() == "SysListView32" and child.is_visible()]
+            if len(visible_lists) >= 2:
+                break
+            time.sleep(0.2)
+        if len(visible_lists) < 2:
+            raise AssertionError("CSV validation menu did not show its validation result list")
+        window.capture_as_image().save(output / "20-csv-validation-menu.png")
+        record("csv_menu_commands_and_validation_panel",
+               popup_commands=popup_commands, visible_list_views=len(visible_lists))
+
+        list_views_before_toggle = [
+            child for child in window.descendants()
+            if child.class_name() == "SysListView32" and child.is_visible()
+        ]
+        click_menu_position(window.handle, main_menu, csv_top_index)
+        click_menu_position(window.handle, csv_menu, expected_csv_ids.index(31996))
+        deadline = time.time() + 5
+        list_views_after_toggle = list_views_before_toggle
+        while time.time() < deadline:
+            list_views_after_toggle = [
+                child for child in window.descendants()
+                if child.class_name() == "SysListView32" and child.is_visible()
+            ]
+            if len(list_views_after_toggle) < len(list_views_before_toggle):
+                break
+            time.sleep(0.1)
+        if len(list_views_after_toggle) >= len(list_views_before_toggle):
+            raise AssertionError(
+                "CSV table toggle did not remove its table control from the text editor: "
+                f"list views before={len(list_views_before_toggle)}, "
+                f"after={len(list_views_after_toggle)}"
+            )
+        if csv_sample.read_bytes() != csv_original:
+            raise AssertionError("leaving CSV table mode rewrote the source document")
+        record("csv_table_view_rows_columns_toggle_and_source_preservation",
+               rows=csv_row_count, columns=csv_column_count)
+        window.close()
+        app.wait_for_process_exit(timeout=20)
         evidence["status"] = "passed"
         return 0
     except Exception as exc:  # retain failure evidence from the real runner

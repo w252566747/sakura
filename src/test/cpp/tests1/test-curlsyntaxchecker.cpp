@@ -30,8 +30,14 @@ TEST(CurlSyntaxChecker, IgnoresBracketsInStringsAndComments)
 		L"|# {comment, [ignored]} #|\n"
 		L"|tag# {tagged comment, {ignored}} #tag|\n"
 		L"|3#{} #3|\n"
-		L"|txt\"{tagged verbatim, {ignored}}\"txt|\n"
+		L"|txt\"{tagged verbatim, {ignored}}\"|txt|\n"
 		L"|21\"{ignored, (brackets)}\"21|");
+	EXPECT_TRUE(diagnostics.empty());
+}
+
+TEST(CurlSyntaxChecker, ClosesTaggedVerbatimWithPipeBeforeTag)
+{
+	const auto diagnostics = curlsyntax::Check(L"{call |tag\"{ignored, [brackets]}\"|tag| }");
 	EXPECT_TRUE(diagnostics.empty());
 }
 

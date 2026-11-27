@@ -74,6 +74,7 @@
 #define IDC_CHECK_WORDMARKER_AUTO        1741
 #define IDC_EDIT_ADDED_WORD_CHARS        1742
 #define IDC_BUTTON_WORD_CHARS_RESET      1743
+#define IDC_EDIT_MULTICURSOR_MAXCOUNT    1744
 #define IDC_BUTTON_CLEAR_MRU_FOLDER     1011
 #define IDC_BUTTON_RELEASE              1012
 #define IDC_COMBO_TEXT                  1013
@@ -799,6 +800,20 @@
 #define IDC_PYTHONDIR                   1739
 #define IDC_PYTHONDIRREF                1740
 #define IDC_CHECK_bDarkMode             1741
+#define IDC_CHECK_EXT_TOOLBAR_CURL      1749
+#define IDC_CHECK_EXT_TOOLBAR_RAINBOW   1750
+#define IDC_CHECK_EXT_TOOLBAR_MARKER    1751
+#define IDC_CHECK_EXT_TOOLBAR_FILTER    1752
+#define IDC_CHECK_EXT_TOOLBAR_CSV       1753
+#define IDC_CHECK_EXT_TOOLBAR_FOLD      1754
+#define IDC_CHECK_EXT_TOOLBAR_MULTICURSOR 1755
+#define IDC_CHECK_EXT_FEATURE_CURL      1756
+#define IDC_CHECK_EXT_FEATURE_RAINBOW   1757
+#define IDC_CHECK_EXT_FEATURE_MARKER    1758
+#define IDC_CHECK_EXT_FEATURE_FILTER    1759
+#define IDC_CHECK_EXT_FEATURE_CSV       1760
+#define IDC_CHECK_EXT_FEATURE_FOLD      1761
+#define IDC_CHECK_EXT_FEATURE_MULTICURSOR 1762
 #define IDS_AUTHOR_PAGE                 4054
 #define IDS_ABOUT_DESCRIPTION           4056
 #define IDD_TYPELIST                    5000
@@ -829,6 +844,7 @@
 #define IDD_PROP_MACRO                  5215
 #define IDD_PROP_PLUGIN                 5216
 #define IDD_PROP_MAINMENU               5217
+#define IDD_PROP_EXTENSION              5218
 #define IDD_WINPOSSIZE                  5220
 #define IDD_PLUGIN_OPTION               5221
 #define IDD_PROFILEMGR                  5222
@@ -892,9 +908,16 @@
 #define F_TOOL_TOPMENU                  34056
 #define F_OPTION_TOPMENU                34057
 #define F_CURL_SYNTAX_SUBMENU           34061
+#define F_CSV_TOPMENU                   34062
 #define F_WINDOW_TOPMENU                34058
 #define F_HELP_TOPMENU                  34059
 #define F_WINDOW_LIST_SUBMENU           34060
+#define F_CSV_TABLE_VIEW                31996
+#define F_CSV_CHECK                     31995
+#define F_CSV_OPTIONS                   31994
+#define F_CSV_FILTER                    31993
+#define F_CSV_SORT                      31992
+#define F_CSV_EDIT                      31991
 #define STR_SELLANG_NAME                34080
 #define STR_SELLANG_LANGID              34081
 #define STR_SQLERR_EXEC_BUT_NOT_RUN     34085
@@ -1574,6 +1597,7 @@
 #define STR_PROPCOMMON_PLUGIN           34761
 #define STR_PROPCOMMON_MAINMENU         34762
 #define STR_PROPCOMMON_STATBAR          34763
+#define STR_PROPCOMMON_EXTENSION        34765
 #define STR_SPECIAL_FUNC                34764
 #define STR_WRAP_WIDTH_FULL             34771
 #define STR_WRAP_WIDTH_WINDOW           34772
@@ -1869,7 +1893,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        35057
 #define _APS_NEXT_COMMAND_VALUE         101
-#define _APS_NEXT_CONTROL_VALUE         1742
+#define _APS_NEXT_CONTROL_VALUE         1763
 #define _APS_NEXT_SYMED_VALUE           10000
 #endif
 #endif

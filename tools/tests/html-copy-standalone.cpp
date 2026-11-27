@@ -81,6 +81,7 @@ struct CLayoutMgr {
  std::vector<std::unique_ptr<CLayout>> rows; std::set<int> hidden;
  bool IsCodeFoldActive() const { return !hidden.empty(); }
  bool IsCodeFoldHiddenLine(int n) const { return hidden.count(n) != 0; }
+	bool IsDisplayHiddenLine(int n) const { return IsCodeFoldHiddenLine(n); }
  const CLayout* GetTopLayout() const { return rows.empty()?nullptr:rows.front().get(); }
  const wchar_t* GetLineStr(int y, int* length, const CLayout** out) const {
   *out = nullptr;

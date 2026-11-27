@@ -38,6 +38,7 @@
 #include "view/CRuler.h"
 #include "view/CTextArea.h"
 #include "view/CScrollBarMarkerModel.h"
+#include "view/MultiCursorSettings.h"
 #include "view/CViewFont.h"
 #include "CViewCalc.h" // parent
 #include "CEditView_Paint.h"	// parent
@@ -205,6 +206,7 @@ public:
 	void DrawBackImage(HDC hdc, RECT& rcPaint, HDC hdcBgImg);
 	void OnTimer(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
 	void UpdateScrollBarMarkerScan();
+	void RefreshScrollBarMarkerFeature();
 	void ResetScrollBarMarkerScan();
 	void DrawScrollBarMarkers(HDC hdc);
 	bool NavigateScrollBarMarker(int x, int y);
@@ -673,18 +675,25 @@ public:
 		bool wordSelection = false;
 	};
 	SAltClickSnapshot m_sMultiCursorAltClick;
+	// Set while ApplyToAllCursors executes a command so undo records retain cursor ownership.
+	int m_nMultiCursorOpeSlot = -1;
 	bool ResolveExtraCursor(const SExtraCursor& extra, CLayoutPoint* out) const;
 	bool ResolveExtraCursorAnchor(const SExtraCursor& extra, CLayoutPoint* out) const;
 	CLayoutRange ResolveExtraCursorSelectAreaLine(const SExtraCursor& extra, CLayoutInt line) const;
 	bool ToggleExtraCursorAt(const CLayoutPoint& point);
 	void ClearExtraCursors();
-	static constexpr std::size_t MAX_MULTI_CURSORS = 1000;
+	static constexpr std::size_t MAX_MULTI_CURSORS = multicursor::MAX_CURSOR_COUNT;
 	static std::size_t GetMaxMultiCursors() noexcept;
 	static std::size_t GetMaxExtraCursors() noexcept;
 	static void SetMaxMultiCursors(std::size_t count) noexcept;
 	static bool IsRainbowUnmatchedHighlightEnabled() noexcept;
 	static void SetRainbowUnmatchedHighlightEnabled(bool enabled) noexcept;
+	static bool IsRainbowCurrentLevelHighlightEnabled() noexcept;
+	static void SetRainbowCurrentLevelHighlightEnabled(bool enabled) noexcept;
+	int GetCurrentRainbowBracketLevel() const noexcept { return m_nCurrentRainbowBracketLevel; }
+	void SetCurrentRainbowBracketLevel(int level) noexcept { m_nCurrentRainbowBracketLevel = level; }
 	static unsigned GetScrollBarMarkerVisibility() noexcept;
+	static unsigned GetScrollBarMarkerConfiguredVisibility() noexcept;
 	static void SetScrollBarMarkerVisibility(unsigned mask) noexcept;
 	static unsigned GetScrollBarMarkerColor(unsigned kind) noexcept;
 	static void SetScrollBarMarkerColor(unsigned kind, unsigned color) noexcept;
@@ -757,6 +766,7 @@ public:
 	//括弧
 	CLogicPoint		m_ptBracketCaretPos_PHY;	// 前カーソル位置の括弧の位置 (改行単位行先頭からのバイト数(0開始), 改行単位行の行番号(0開始))
 	CLogicPoint		m_ptBracketPairPos_PHY;		// 対括弧の位置 (改行単位行先頭からのバイト数(0開始), 改行単位行の行番号(0開始))
+	int				m_nCurrentRainbowBracketLevel = -1;
 	BOOL			m_bDrawBracketPairFlag;		/* 対括弧の強調表示を行なうか */						// 03/02/18 ai
 
 	//マウス

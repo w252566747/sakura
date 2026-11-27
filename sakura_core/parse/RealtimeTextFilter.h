@@ -77,7 +77,6 @@ namespace textfilter {
 
 	private:
 		struct Term;
-		bool MatchAny(const std::vector<std::unique_ptr<Term>>& terms, const std::wstring& line) const;
 		std::vector<std::unique_ptr<Term>> m_include;
 		std::vector<std::unique_ptr<Term>> m_exclude;
 		Logic m_logic;

@@ -33,6 +33,7 @@
 //@@@ 2002.2.2 YAZAKI マクロはCSMacroMgrに統一
 #include "macro/CSMacroMgr.h"
 #include "CEditApp.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "plugin/CJackManager.h"
 #include "apiwrap/StdApi.h"
 #include "CSelectLang.h"
@@ -616,7 +617,8 @@ BOOL CViewCommander::HandleCommand(
 	/* 設定系 */
 	case F_SHOWTOOLBAR:		Command_SHOWTOOLBAR();break;	/* ツールバーの表示/非表示 */
 	case F_CURL_SYNTAX_TOGGLE:
-		GetEditWindow()->SetCurlSyntaxRealtime(!curlsyntax::IsRealtimeEnabled());
+		if (enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CurlSyntax))
+			GetEditWindow()->SetCurlSyntaxRealtime(!curlsyntax::IsRealtimeEnabled());
 		break;
 	case F_CURL_SYNTAX_RUN:
 		GetEditWindow()->RunCurlSyntaxCheckNow();
@@ -631,6 +633,7 @@ BOOL CViewCommander::HandleCommand(
 		GetEditWindow()->NavigateCurlSyntaxError(false);
 		break;
 	case F_CODEFOLD_TOGGLE: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) break;
 		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
 		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
 		const auto* regionPtr = layoutMgr.FindCodeFoldContainingLine(caretLine);
@@ -646,6 +649,7 @@ BOOL CViewCommander::HandleCommand(
 		break;
 	}
 	case F_CODEFOLD_ALL: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) break;
 		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
 		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
 		if (layoutMgr.FoldAllCodeBlocks()) {
@@ -655,11 +659,13 @@ BOOL CViewCommander::HandleCommand(
 		break;
 	}
 	case F_CODEFOLD_EXPAND_ALL: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) break;
 		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
 		if (layoutMgr.UnfoldAllCodeBlocks()) RefreshCodeFoldViews(GetEditWindow(), layoutMgr);
 		break;
 	}
 	case F_CODEFOLD_CURRENT_DEPTH: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) break;
 		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
 		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
 		const auto* regionPtr = layoutMgr.FindCodeFoldContainingLine(caretLine);
@@ -670,6 +676,7 @@ BOOL CViewCommander::HandleCommand(
 		break;
 	}
 	case F_CODEFOLD_TO_DEPTH: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding)) break;
 		auto& layoutMgr = m_pCommanderView->m_pcEditDoc->m_cLayoutMgr;
 		const CLogicInt caretLine = GetCaret().GetCaretLogicPos().y;
 		const size_t depth = lparam1 > 0 ? static_cast<size_t>(lparam1) : 1u;

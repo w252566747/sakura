@@ -28,10 +28,72 @@
 #include "plugin/CSmartIndentIfObj.h"
 #include "debug/CRunningTimer.h"
 #include "view/MultiCursorPointTransform.h"
+#include "view/MultiCursorUndoState.h"
+#include "window/EnhancementToolbarSettings.h"
 #include <algorithm>
+#include <array>
 #include <string_view>
 #include <vector>
 #include "apiwrap/CommonControl.h"
+
+namespace {
+	using MultiCursorUndoPositions = std::array<multicursor::UndoPosition<CLogicPoint>, CEditView::MAX_MULTI_CURSORS>;
+	void SetMultiCursorSelection(CEditView& view, const CLogicPoint& caret,
+		const CLogicPoint& anchor, bool selected);
+
+	MultiCursorUndoPositions CaptureMultiCursorUndoPositions(COpeBlk* opeBlk, bool redo)
+	{
+		MultiCursorUndoPositions positions{};
+		if (!opeBlk) return positions;
+		for (int i = 0; i < opeBlk->GetNum(); ++i) {
+			COpe* ope = opeBlk->GetOpe(i);
+			if (!ope || ope->m_nMultiCursorSlot < 0
+				|| static_cast<std::size_t>(ope->m_nMultiCursorSlot) >= positions.size()) continue;
+			CLogicPoint anchorBefore = ope->m_ptCaretPos_PHY_Before;
+			CLogicPoint anchorAfter = ope->m_ptCaretPos_PHY_After;
+			bool selectedBefore = false;
+			bool selectedAfter = false;
+			bool stateMarker = false;
+			if (ope->m_bMultiCursorStateMarker) {
+				const auto* cursorOpe = static_cast<const CMultiCursorStateOpe*>(ope);
+				anchorBefore = cursorOpe->m_ptAnchorBefore;
+				anchorAfter = cursorOpe->m_ptAnchorAfter;
+				selectedBefore = cursorOpe->m_bHasSelectionBefore;
+				selectedAfter = cursorOpe->m_bHasSelectionAfter;
+				stateMarker = cursorOpe->m_bMultiCursorStateMarker;
+			}
+			multicursor::RecordUndoPosition(positions, ope->m_nMultiCursorSlot,
+				ope->m_ptCaretPos_PHY_Before, ope->m_ptCaretPos_PHY_After,
+				anchorBefore, anchorAfter, selectedBefore, selectedAfter, stateMarker, redo);
+		}
+		return positions;
+	}
+
+	void RestoreMultiCursorUndoPositions(CEditView& view, const MultiCursorUndoPositions& positions)
+	{
+		const bool hasTaggedPosition = std::any_of(positions.begin(), positions.end(),
+			[](const auto& slot) { return slot.valid; });
+		if (!hasTaggedPosition) {
+			view.ClearExtraCursors();
+			return;
+		}
+
+		if (positions[0].valid) {
+			SetMultiCursorSelection(view, positions[0].caret, positions[0].anchor, positions[0].hasSelection);
+			view.GetCaret().m_nCaretPosX_Prev = view.GetCaret().GetCaretLayoutPos().GetX2();
+		}
+		view.m_vExtraCursors.clear();
+		for (std::size_t slot = 1; slot < positions.size(); ++slot) {
+			if (!positions[slot].valid) continue;
+			CEditView::SExtraCursor extra;
+			extra.caret = positions[slot].caret;
+			extra.anchor = positions[slot].anchor;
+			extra.bHasSelection = positions[slot].hasSelection;
+			view.m_vExtraCursors.push_back(extra);
+		}
+		view.Redraw();
+	}
+}
 
 /* wchar_t1個分の文字を入力 */
 void CViewCommander::Command_WCHAR( wchar_t wcChar, bool bConvertEOL )
@@ -309,6 +371,7 @@ void CViewCommander::Command_UNDO( void )
 	int			nOpeBlkNum;
 	int			i;
 	bool		bIsModified;
+	MultiCursorUndoPositions multiCursorPositions{};
 //	int			nNewLine;	/* 挿入された部分の次の位置の行 */
 //	int			nNewPos;	/* 挿入された部分の次の位置のデータ位置 */
 
@@ -318,11 +381,14 @@ void CViewCommander::Command_UNDO( void )
 
 	/* 各種モードの取り消し */
 	Command_CANCEL_MODE();
+	// Keep stale post-edit positions out of redraws; tagged OPE records rebuild them after replay.
+	m_pCommanderView->ClearExtraCursors();
 
 	m_pCommanderView->m_bDoing_UndoRedo = true;	/* アンドゥ・リドゥの実行中か */
 
 	/* 現在のUndo対象の操作ブロックを返す */
 	if( nullptr != ( pcOpeBlk = GetDocument()->m_cDocEditor.m_cOpeBuf.DoUndo( &bIsModified ) ) ){
+		multiCursorPositions = CaptureMultiCursorUndoPositions(pcOpeBlk, false);
 		nOpeBlkNum = pcOpeBlk->GetNum();
 		bool bDraw = (nOpeBlkNum < 5) && m_pCommanderView->GetDrawSwitch();
 		bool bDrawAll = false;
@@ -501,6 +567,7 @@ void CViewCommander::Command_UNDO( void )
 
 		/* Undo後の変更フラグ */
 		GetDocument()->m_cDocEditor.SetModified(bIsModified,true);	//	Jan. 22, 2002 genta
+		RestoreMultiCursorUndoPositions(*m_pCommanderView, multiCursorPositions);
 
 		m_pCommanderView->m_bDoing_UndoRedo = false;	/* アンドゥ・リドゥの実行中か */
 
@@ -570,6 +637,7 @@ void CViewCommander::Command_REDO( void )
 //	int			nNewLine;	/* 挿入された部分の次の位置の行 */
 //	int			nNewPos;	/* 挿入された部分の次の位置のデータ位置 */
 	bool		bIsModified;
+	MultiCursorUndoPositions multiCursorPositions{};
 
 	CLayoutPoint ptCaretPos_Before;
 	CLayoutPoint ptCaretPos_To;
@@ -577,11 +645,14 @@ void CViewCommander::Command_REDO( void )
 
 	/* 各種モードの取り消し */
 	Command_CANCEL_MODE();
+	// Keep stale pre-edit positions out of redraws; tagged OPE records rebuild them after replay.
+	m_pCommanderView->ClearExtraCursors();
 
 	m_pCommanderView->m_bDoing_UndoRedo = true;	/* アンドゥ・リドゥの実行中か */
 
 	/* 現在のRedo対象の操作ブロックを返す */
 	if( nullptr != ( pcOpeBlk = GetDocument()->m_cDocEditor.m_cOpeBuf.DoRedo( &bIsModified ) ) ){
+		multiCursorPositions = CaptureMultiCursorUndoPositions(pcOpeBlk, true);
 		nOpeBlkNum = pcOpeBlk->GetNum();
 		bool bDraw = (nOpeBlkNum < 5) && m_pCommanderView->GetDrawSwitch();
 		bool bDrawAll = false;
@@ -751,6 +822,7 @@ void CViewCommander::Command_REDO( void )
 
 		/* Redo後の変更フラグ */
 		GetDocument()->m_cDocEditor.SetModified(bIsModified,true);	//	Jan. 22, 2002 genta
+		RestoreMultiCursorUndoPositions(*m_pCommanderView, multiCursorPositions);
 
 		m_pCommanderView->m_bDoing_UndoRedo = false;	/* アンドゥ・リドゥの実行中か */
 
@@ -882,7 +954,10 @@ namespace {
 struct SMultiCursorState {
 	CLogicPoint caret;
 	CLogicPoint anchor;
+	CLogicPoint initialCaret;
+	CLogicPoint initialAnchor;
 	bool hasSelection = false;
+	bool initialHasSelection = false;
 	bool primary = false;
 	size_t extraIndex = 0;
 };
@@ -1026,7 +1101,8 @@ bool MultiCursorRangeAlreadySelected(CEditView& view, const CLogicPoint& start, 
 
 bool AddMultiCursorWordSelection(CEditView& view, const CLogicPoint& start, const CLogicPoint& end)
 {
-	if (view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)
+		|| view.m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()
 		|| MultiCursorRangeAlreadySelected(view, start, end)) return false;
 	CEditView::SExtraCursor extra;
 	extra.caret = end;
@@ -1079,6 +1155,7 @@ void ForEachMultiCursorWordOccurrence(CEditView& view, std::wstring_view word, b
 
 bool AddExtraCursorAt(CEditView& view, const CLayoutPoint& point)
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) return false;
 	CEditDoc* document = view.GetDocument();
 	if (!document) return false;
 	CLogicPoint logical;
@@ -1119,6 +1196,7 @@ bool RemoveUnresolvableExtraCursors(CEditView& view)
 
 void CViewCommander::Command_AddCursorUp(void)
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) return;
 	if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) m_pCommanderView->GetSelectionInfo().DisableSelectArea(true);
 	if (m_pCommanderView->m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) { ErrorBeep(); return; }
 	CLayoutPoint top = GetCaret().GetCaretLayoutPos();
@@ -1135,6 +1213,7 @@ void CViewCommander::Command_AddCursorUp(void)
 
 void CViewCommander::Command_AddCursorDown(void)
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) return;
 	if (m_pCommanderView->GetSelectionInfo().IsBoxSelecting()) m_pCommanderView->GetSelectionInfo().DisableSelectArea(true);
 	if (m_pCommanderView->m_vExtraCursors.size() >= CEditView::GetMaxExtraCursors()) { ErrorBeep(); return; }
 	CLayoutPoint bottom = GetCaret().GetCaretLayoutPos();
@@ -1151,6 +1230,7 @@ void CViewCommander::Command_AddCursorDown(void)
 
 void CViewCommander::Command_SelectNextOccurrence(void)
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) return;
 	auto& view = *m_pCommanderView;
 	auto& selection = view.GetSelectionInfo();
 	if (selection.IsBoxSelecting() || selection.IsMouseSelecting()) { ErrorBeep(); return; }
@@ -1230,6 +1310,7 @@ void CViewCommander::Command_SelectNextOccurrence(void)
 
 void CViewCommander::Command_SelectAllOccurrences(void)
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) return;
 	auto& view = *m_pCommanderView;
 	auto& selection = view.GetSelectionInfo();
 	if (selection.IsBoxSelecting() || selection.IsMouseSelecting()) { ErrorBeep(); return; }
@@ -1348,6 +1429,11 @@ void CViewCommander::ApplyMovementToAllCursors(const std::function<void()>& comm
 void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMultiCursorEditKind editKind)
 {
 	auto& view = *m_pCommanderView;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor)) {
+		view.ClearExtraCursors();
+		command();
+		return;
+	}
 	RemoveUnresolvableExtraCursors(view);
 	auto& layoutMgr = GetDocument()->m_cLayoutMgr;
 	std::vector<SMultiCursorState> states;
@@ -1355,10 +1441,13 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 
 	SMultiCursorState primary;
 	primary.caret = GetCaret().GetCaretLogicPos();
+	primary.initialCaret = primary.caret;
 	primary.anchor = primary.caret;
 	primary.primary = true;
 	primary.hasSelection = view.GetSelectionInfo().IsTextSelected();
 	if (primary.hasSelection) layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &primary.anchor);
+	primary.initialAnchor = primary.anchor;
+	primary.initialHasSelection = primary.hasSelection;
 	states.push_back(primary);
 
 	for (size_t i = 0; i < view.m_vExtraCursors.size(); ++i) {
@@ -1366,6 +1455,7 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 		if (!view.ResolveExtraCursor(view.m_vExtraCursors[i], &caretLayout)) continue;
 		SMultiCursorState state;
 		layoutMgr.LayoutToLogic(caretLayout, &state.caret);
+		state.initialCaret = state.caret;
 		state.anchor = state.caret;
 		state.extraIndex = i;
 		CLayoutPoint anchorLayout;
@@ -1373,6 +1463,8 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 			layoutMgr.LayoutToLogic(anchorLayout, &state.anchor);
 			state.hasSelection = true;
 		}
+		state.initialAnchor = state.anchor;
+		state.initialHasSelection = state.hasSelection;
 		states.push_back(state);
 	}
 	if (editKind == EMultiCursorEditKind::Overwrite
@@ -1410,6 +1502,9 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 		}
 	}
 
+	COpeBlk* opeBlkBeforeMultiCursor = view.m_cCommander.GetOpeBlk();
+	const int opeCountBeforeMultiCursor = opeBlkBeforeMultiCursor ? opeBlkBeforeMultiCursor->GetNum() : 0;
+
 	for (size_t i = 0; i < states.size(); ++i) {
 		auto& state = states[i];
 		if (editKind == EMultiCursorEditKind::SelectedOnly && !state.hasSelection) continue;
@@ -1429,7 +1524,10 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 			if (GetMultiCursorPreviousCharacter(*GetDocument(), state.caret, &previous)) oldStart = previous;
 		}
 		SetMultiCursorSelection(view, state.caret, state.anchor, state.hasSelection);
+		const int previousOpeSlot = view.m_nMultiCursorOpeSlot;
+		view.m_nMultiCursorOpeSlot = state.primary ? 0 : static_cast<int>(state.extraIndex + 1);
 		command();
+		view.m_nMultiCursorOpeSlot = previousOpeSlot;
 		const CLogicPoint newEnd = GetCaret().GetCaretLogicPos();
 
 		// Edits are executed from the document end towards the start. Only already processed
@@ -1444,6 +1542,19 @@ void CViewCommander::ApplyToAllCursors(const std::function<void()>& command, EMu
 		if (view.GetSelectionInfo().IsTextSelected()) {
 			layoutMgr.LayoutToLogic(view.GetSelectionInfo().m_sSelectBgn.GetFrom(), &state.anchor);
 			state.hasSelection = true;
+		}
+	}
+
+	COpeBlk* multiCursorOpeBlk = view.m_cCommander.GetOpeBlk();
+	if (multiCursorOpeBlk
+		&& multiCursorOpeBlk->GetNum() > opeCountBeforeMultiCursor) {
+		// A tagged no-op caret record preserves slots that had no text operation (for example,
+		// an unselected cursor during a selected-only edit) and records each slot's final point.
+		for (const auto& state : states) {
+			auto* cursorOpe = new CMultiCursorStateOpe(state.initialCaret, state.caret,
+				state.initialAnchor, state.anchor, state.initialHasSelection, state.hasSelection);
+			cursorOpe->m_nMultiCursorSlot = state.primary ? 0 : static_cast<int>(state.extraIndex + 1);
+			multiCursorOpeBlk->AppendOpe(cursorOpe);
 		}
 	}
 

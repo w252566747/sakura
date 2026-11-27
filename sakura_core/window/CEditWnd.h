@@ -61,6 +61,7 @@
 #include <mutex>
 #include <optional>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 static const int MENUBAR_MESSAGE_MAX_LEN = 30;
@@ -79,6 +80,7 @@ struct DLLSHAREDATA;
 #define IDT_CSV_SELECTION_STATS 460
 #define IDT_REALTIME_FILTER_DEBOUNCE 461
 #define IDT_REALTIME_FILTER_SCAN 462
+#define IDT_CSV_TABLE_SNAPSHOT 463
 #define IDT_SYSMENU		1357
 #define ID_TOOLBAR		100
 
@@ -299,6 +301,7 @@ public:
 	void NotifyCurlSyntaxDocumentLoaded();
 	void OnCurlSyntaxDocumentTypeChanged();
 	void SetCurlSyntaxRealtime(bool enabled);
+	void RefreshCurlSyntaxRealtime();
 	void RunCurlSyntaxCheckNow();
 	void ToggleCSVTableMode();
 	void ToggleRealtimeFilter();
@@ -405,6 +408,8 @@ public:
 
 	void ClearViewCaretPosInfo();
 	void ScheduleCSVTableParse();
+	void ContinueCSVTableSnapshot();
+	void SubmitCSVTableParseSnapshot();
 	void AcceptCSVTableParseResult();
 	void ScheduleCSVTableQuery();
 	void AcceptCSVTableQueryResult();
@@ -512,6 +517,10 @@ private:
 	std::mutex m_csvTableMailboxMutex;
 	std::optional<csvtable::TableParseResult> m_csvTableMailbox;
 	std::unique_ptr<csvtable::CSVTableParseService> m_pCSVTableParseService;
+	const CDocLine* m_pCSVTableSnapshotScanLine = nullptr;
+	std::size_t m_nCSVTableSnapshotLineOffset = 0;
+	std::wstring m_strCSVTableSnapshotText;
+	std::uint64_t m_uCSVTableSnapshotVersion = 0;
 	std::mutex m_csvTableQueryMailboxMutex;
 	std::optional<csvtable::TableQueryResult> m_csvTableQueryMailbox;
 	std::unique_ptr<csvtable::CSVTableQueryService> m_pCSVTableQueryService;
@@ -543,6 +552,7 @@ private:
 	int m_nCSVPendingEditColumn = -1;
 	bool m_bCSVFinishingCellEdit = false;
 	bool m_bCSVTableMode = false;
+	bool m_bCurlSyntaxRuntimeEnabled = false;
 	bool m_bCSVHasHeader = false;
 	bool m_bCSVAutoDetectDelimiter = true;
 	wchar_t m_chCSVDelimiter = L',';

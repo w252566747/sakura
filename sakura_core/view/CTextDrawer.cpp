@@ -523,7 +523,7 @@ void CTextDrawer::DispLineNumber(
 		bDispLineNumTrans = true;
 	}
 
-	// 折りたたみ可能な論理行にだけ、行番号領域の左端へネイティブ風の +/- 印を描く。
+	// Draw a gutter chevron for foldable logical lines, matching modern editors.
 	if (!pView->m_bMiniMap && pView->m_pcEditDoc) {
 		auto& foldMgr = pView->m_pcEditDoc->m_cLayoutMgr;
 		const CLayout* foldLayout = foldMgr.SearchLineByLayoutY(nLineNum);
@@ -533,21 +533,24 @@ void CTextDrawer::DispLineNumber(
 			const int boxHeight = std::max(5, std::min(9, nLineHeight - 2));
 			const int left = pView->GetTextArea().GetLeftYohaku() + (nCharWidth - boxWidth) / 2;
 			const int top = y + (nLineHeight - boxHeight) / 2;
-			RECT box{ left, top, left + boxWidth, top + boxHeight };
+			POINT chevron[3];
+			const bool collapsed = foldMgr.IsCodeFoldCollapsedAtLine(foldLayout->GetLogicLineNo());
+			if (collapsed) {
+				chevron[0] = { left + 1, top + 1 };
+				chevron[1] = { left + boxWidth - 1, top + boxHeight / 2 };
+				chevron[2] = { left + 1, top + boxHeight - 1 };
+			} else {
+				chevron[0] = { left + 1, top + 1 };
+				chevron[1] = { left + boxWidth - 1, top + 1 };
+				chevron[2] = { left + boxWidth / 2, top + boxHeight - 1 };
+			}
 			const int saved = ::SaveDC(gr);
+			const COLORREF chevronColor = ::GetSysColor(COLOR_GRAYTEXT);
 			::SelectObject(gr, ::GetStockObject(DC_PEN));
 			::SelectObject(gr, ::GetStockObject(DC_BRUSH));
-			::SetDCPenColor(gr, ::GetSysColor(COLOR_GRAYTEXT));
-			::SetDCBrushColor(gr, bgcolor);
-			::Rectangle(gr, box.left, box.top, box.right, box.bottom);
-			const int midX = (box.left + box.right) / 2;
-			const int midY = (box.top + box.bottom) / 2;
-			::MoveToEx(gr, box.left + 2, midY, nullptr);
-			::LineTo(gr, box.right - 2, midY);
-			if (foldMgr.IsCodeFoldCollapsedAtLine(foldLayout->GetLogicLineNo())) {
-				::MoveToEx(gr, midX, box.top + 2, nullptr);
-				::LineTo(gr, midX, box.bottom - 2);
-			}
+			::SetDCPenColor(gr, chevronColor);
+			::SetDCBrushColor(gr, chevronColor);
+			::Polygon(gr, chevron, 3);
 			if (saved) ::RestoreDC(gr, saved);
 
 			if (foldMgr.IsCodeFoldCollapsedAtLine(foldLayout->GetLogicLineNo())) {

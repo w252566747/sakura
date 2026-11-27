@@ -4,10 +4,13 @@
 	SPDX-License-Identifier: Zlib
 */
 #include "StdAfx.h"
+#include "curl/CurlRawRegion.h"
 #include "parse/CodeFoldParser.h"
 
 #include <algorithm>
 #include <cwctype>
+#include <iterator>
+#include <limits>
 #include <utility>
 
 namespace codefold {
@@ -15,8 +18,22 @@ namespace {
 struct OpenBlock {
 	size_t line;
 	size_t depth;
+	wchar_t delimiter;
 	std::wstring kind;
 };
+
+struct CurlTextExpressionContext {
+	size_t baseDepth;
+	wchar_t quote;
+};
+
+bool IsCurlBraceEscaped(std::wstring_view line, size_t position)
+{
+	if (position >= line.size() || (line[position] != L'{' && line[position] != L'}')) return false;
+	size_t backslashes = 0;
+	while (position > backslashes && line[position - backslashes - 1] == L'\\') ++backslashes;
+	return (backslashes & 1u) != 0;
+}
 
 std::wstring TrimmedPrefix(std::wstring_view line, size_t maxLength = 48)
 {
@@ -33,25 +50,32 @@ void AddClosedRegion(std::vector<Region>& regions, const OpenBlock& open, size_t
 
 std::wstring BraceKind(std::wstring_view line, Language language)
 {
-	const std::wstring prefix = TrimmedPrefix(line);
+	std::wstring_view trimmed = line;
+	while (!trimmed.empty() && std::iswspace(trimmed.front())) trimmed.remove_prefix(1);
 	if (language == Language::Curl) {
 		static const wchar_t* const words[] = {
 			L"define-class", L"define-proc", L"class-proc", L"method", L"constructor",
 			L"if", L"for", L"while", L"VBox", L"HBox", L"Frame"
 		};
 		for (const wchar_t* word : words) {
-			if (prefix.find(word) != std::wstring::npos) return word;
+			const size_t length = std::wstring_view(word).size();
+			if (trimmed.substr(0, length) == word &&
+				(trimmed.size() == length || (!std::iswalnum(trimmed[length]) && trimmed[length] != L'_' && trimmed[length] != L'-'))) return word;
 		}
 	}
-	return prefix.empty() ? L"{}" : prefix;
+	return trimmed.empty() ? L"{}" : TrimmedPrefix(trimmed);
 }
 
 std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Language language)
 {
 	std::vector<Region> regions;
 	std::vector<OpenBlock> stack;
+	std::vector<CurlTextExpressionContext> curlTextExpressions;
 	bool blockComment = false;
 	std::wstring rawStringEnd;
+	std::size_t curlRawOpenerRemaining = 0;
+	bool curlRawLengthSpecified = false;
+	std::size_t curlRawRemaining = 0;
 	wchar_t continuedQuote = 0;
 	bool continuedLineComment = false;
 
@@ -68,9 +92,20 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 		for (size_t i = 0; i < line.size(); ++i) {
 			const wchar_t ch = line[i];
 			if (!rawStringEnd.empty()) {
+				if (language == Language::Curl && curlRawOpenerRemaining > 0) {
+					--curlRawOpenerRemaining;
+					continue;
+				}
+				if (language == Language::Curl && curlRawLengthSpecified && curlRawRemaining > 0) {
+					--curlRawRemaining;
+					continue;
+				}
 				if (line.substr(i).substr(0, rawStringEnd.size()) == rawStringEnd) {
 					i += rawStringEnd.size() - 1;
 					rawStringEnd.clear();
+					curlRawLengthSpecified = false;
+					curlRawRemaining = 0;
+					curlRawOpenerRemaining = 0;
 				}
 				continue;
 			}
@@ -82,12 +117,30 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 				continue;
 			}
 			if (quote) {
-				if (escaped) escaped = false;
-				else if (ch == L'\\') escaped = true;
-				else if (ch == quote) quote = 0;
-				continue;
+				if (escaped) { escaped = false; continue; }
+				if (ch == L'\\') { escaped = true; continue; }
+				if (ch == quote) { quote = 0; continue; }
+				if (language == Language::Curl && quote == L'"' && ch == L'{') {
+					curlTextExpressions.push_back({ stack.size(), quote });
+					quote = 0;
+				} else {
+					continue;
+				}
 			}
 			if (language == Language::Curl && ch == L'|' && i + 1 < line.size() && line[i + 1] == L'|') break;
+			if (language == Language::Curl && ch == L'|') {
+				std::size_t bodyLength = std::numeric_limits<std::size_t>::max();
+				std::size_t openerLength = 0;
+				std::wstring terminator;
+				if (curlsyntax::TryGetCommentTerminator(line, i, terminator, bodyLength, openerLength) ||
+					curlsyntax::TryGetVerbatimTerminator(line, i, terminator, bodyLength, openerLength)) {
+					rawStringEnd = std::move(terminator);
+					curlRawLengthSpecified = bodyLength != std::numeric_limits<std::size_t>::max();
+					curlRawRemaining = bodyLength;
+					curlRawOpenerRemaining = openerLength - 1;
+					continue;
+				}
+			}
 			if (language != Language::Curl && ch == L'/' && i + 1 < line.size()) {
 				if (line[i + 1] == L'/') {
 					lineCommentContinues = !line.empty() && line.back() == L'\\';
@@ -109,21 +162,36 @@ std::vector<Region> ParseBraces(const std::vector<std::wstring_view>& lines, Lan
 					continue;
 			}
 			}
-			if (ch == L'\'' || ch == L'"' || (language != Language::Curl && ch == L'`')) {
+			if (language == Language::Java && ch == L'"' && line.substr(i, 3) == L"\"\"\"") {
+				rawStringEnd = L"\"\"\"";
+				i += 2;
+				continue;
+			}
+			if (ch == L'\'' || ch == L'"' || (language == Language::JavaScript && ch == L'`')) {
 				quote = ch;
 				escaped = false;
 				continue;
 			}
-			if (ch == L'{') {
-				stack.push_back({ lineNo, stack.size(), BraceKind(line, language) });
-			} else if (ch == L'}' && !stack.empty()) {
+			const bool opening = ch == L'{' || (language == Language::Json && ch == L'[');
+			const bool closing = ch == L'}' || (language == Language::Json && ch == L']');
+			if (opening && !(language == Language::Curl && IsCurlBraceEscaped(line, i))) {
+				stack.push_back({ lineNo, stack.size(), ch, BraceKind(line, language) });
+			} else if (closing && !stack.empty() &&
+				((stack.back().delimiter == L'{' && ch == L'}') || (stack.back().delimiter == L'[' && ch == L']')) &&
+				!(language == Language::Curl && IsCurlBraceEscaped(line, i))) {
 				const OpenBlock open = std::move(stack.back());
 				stack.pop_back();
 				AddClosedRegion(regions, open, lineNo);
+				if (language == Language::Curl && !curlTextExpressions.empty() &&
+					stack.size() == curlTextExpressions.back().baseDepth) {
+					quote = curlTextExpressions.back().quote;
+					curlTextExpressions.pop_back();
+				}
 			}
 		}
 		continuedQuote = 0;
-		if (quote == L'`' || (language != Language::Curl && quote && escaped)) {
+		if (quote == L'`' || (language == Language::Curl && quote == L'"') ||
+			(language != Language::Curl && quote && escaped)) {
 			continuedQuote = quote;
 		}
 		continuedLineComment = lineCommentContinues;
@@ -186,7 +254,7 @@ std::vector<Region> ParseXml(const std::vector<std::wstring_view>& lines)
 			size_t end = body.size();
 			while (end > 0 && std::iswspace(body[end - 1])) --end;
 			if (end > 0 && body[end - 1] == L'/') continue;
-			stack.push_back({ name, { lineNo, stack.size(), name } });
+			stack.push_back({ name, { lineNo, stack.size(), 0, name } });
 		}
 	}
 	return regions;
@@ -205,11 +273,23 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 	std::vector<OpenBlock> stack;
 	bool blockComment = false;
 	wchar_t quote = 0;
+	wchar_t alternativeQuoteEnd = 0;
+	std::vector<std::wstring> tokens;
+	tokens.reserve(16);
 	for (size_t lineNo = 0; lineNo < lines.size(); ++lineNo) {
-		std::vector<std::wstring> tokens;
+		tokens.clear();
 		const auto line = lines[lineNo];
 		for (size_t i = 0; i < line.size();) {
 			const wchar_t ch = line[i];
+			if (alternativeQuoteEnd) {
+				if (ch == alternativeQuoteEnd && i + 1 < line.size() && line[i + 1] == L'\'') {
+					alternativeQuoteEnd = 0;
+					i += 2;
+				} else {
+					++i;
+				}
+				continue;
+			}
 			if (blockComment) {
 				if (ch == L'*' && i + 1 < line.size() && line[i + 1] == L'/') { blockComment = false; i += 2; }
 				else ++i;
@@ -226,6 +306,20 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 			}
 			if (ch == L'-' && i + 1 < line.size() && line[i + 1] == L'-') break;
 			if (ch == L'/' && i + 1 < line.size() && line[i + 1] == L'*') { blockComment = true; i += 2; continue; }
+			if ((ch == L'q' || ch == L'Q') && i + 2 < line.size() && line[i + 1] == L'\'') {
+				const wchar_t delimiter = line[i + 2];
+				if (!std::iswspace(delimiter) && delimiter != L'\'') {
+					switch (delimiter) {
+					case L'[': alternativeQuoteEnd = L']'; break;
+					case L'{': alternativeQuoteEnd = L'}'; break;
+					case L'(': alternativeQuoteEnd = L')'; break;
+					case L'<': alternativeQuoteEnd = L'>'; break;
+					default: alternativeQuoteEnd = delimiter; break;
+					}
+					i += 3;
+					continue;
+				}
+			}
 			if (ch == L'\'' || ch == L'"') {
 				quote = ch;
 				++i;
@@ -254,9 +348,60 @@ std::vector<Region> ParseSql(const std::vector<std::wstring_view>& lines)
 				}
 				continue;
 			}
-			if (token == L"BEGIN" || token == L"IF" || token == L"LOOP" || token == L"CASE") {
-				stack.push_back({ lineNo, stack.size(), token });
+			// PL/SQL block starters must be statement-leading keywords. Searching
+			// every token mistakes CASE expressions and identifiers in SQL clauses
+			// for foldable procedural blocks.
+			if (i == 0 && (token == L"BEGIN" || token == L"IF" || token == L"LOOP" || token == L"CASE")) {
+				stack.push_back({ lineNo, stack.size(), 0, token });
 			}
+		}
+		if (tokens.capacity() > 1024) std::vector<std::wstring>().swap(tokens);
+	}
+	return regions;
+}
+
+std::vector<Region> ParseMarkerRegions(const std::vector<std::wstring_view>& lines, Language language)
+{
+	std::vector<Region> regions;
+	std::vector<OpenBlock> stack;
+	for (size_t lineNo = 0; lineNo < lines.size(); ++lineNo) {
+		std::wstring_view text = lines[lineNo];
+		while (!text.empty() && std::iswspace(text.front())) text.remove_prefix(1);
+		while (!text.empty() && std::iswspace(text.back())) text.remove_suffix(1);
+		if (text.empty()) continue;
+		if (language == Language::CLike && text.substr(0, 7) == L"#pragma") {
+			text.remove_prefix(7);
+		} else if (language == Language::Xml) {
+			if (text.substr(0, 4) != L"<!--") continue;
+			text.remove_prefix(4);
+			const size_t commentEnd = text.find(L"-->");
+			if (commentEnd == std::wstring_view::npos) continue;
+			text = text.substr(0, commentEnd);
+		} else {
+			const std::wstring_view prefix = language == Language::Curl ? L"||"
+				: language == Language::Sql ? L"--" : L"//";
+			if (text.substr(0, prefix.size()) != prefix) continue;
+			text.remove_prefix(prefix.size());
+		}
+		while (!text.empty() && std::iswspace(text.front())) text.remove_prefix(1);
+		auto startsWith = [text](std::wstring_view prefix) {
+			if (text.size() < prefix.size()) return false;
+			for (size_t i = 0; i < prefix.size(); ++i) {
+				if (static_cast<wchar_t>(std::towupper(text[i])) != prefix[i]) return false;
+			}
+			return true;
+		};
+		const bool begin = startsWith(L"#REGION") || startsWith(L"REGION") || startsWith(L"PRAGMA REGION") ||
+			startsWith(L"<EDITOR-FOLD");
+		const bool end = startsWith(L"#ENDREGION") || startsWith(L"ENDREGION") || startsWith(L"PRAGMA ENDREGION") ||
+			startsWith(L"</EDITOR-FOLD");
+		if (begin) {
+			std::wstring label = TrimmedPrefix(text, 96);
+			stack.push_back({ lineNo, stack.size(), 0, label.empty() ? L"region" : std::move(label) });
+		} else if (end && !stack.empty()) {
+			const OpenBlock open = std::move(stack.back());
+			stack.pop_back();
+			AddClosedRegion(regions, open, lineNo);
 		}
 	}
 	return regions;
@@ -269,6 +414,9 @@ std::vector<Region> Parse(const std::vector<std::wstring_view>& lines, Language 
 	switch (language) {
 	case Language::Curl:
 	case Language::CLike:
+	case Language::Java:
+	case Language::JavaScript:
+	case Language::Json:
 		regions = ParseBraces(lines, language);
 		break;
 	case Language::Xml:
@@ -278,6 +426,8 @@ std::vector<Region> Parse(const std::vector<std::wstring_view>& lines, Language 
 		regions = ParseSql(lines);
 		break;
 	}
+	auto markerRegions = ParseMarkerRegions(lines, language);
+	regions.insert(regions.end(), std::make_move_iterator(markerRegions.begin()), std::make_move_iterator(markerRegions.end()));
 	std::stable_sort(regions.begin(), regions.end(), [](const Region& left, const Region& right) {
 		if (left.firstLine != right.firstLine) return left.firstLine < right.firstLine;
 		if (left.lastLine != right.lastLine) return left.lastLine > right.lastLine;

@@ -232,6 +232,7 @@ const std::set<int> topFuncCodes = {
 	F_OPTION_TOPMENU,
 	F_WINDOW_TOPMENU,
 	F_HELP_TOPMENU,
+	F_CSV_TOPMENU,
 };
 
 /*!
@@ -1451,6 +1452,13 @@ MATCHER(IsInitializedCommonSettingMainMenu, "Checks if CommonSetting_MainMenu is
 		SMenuItem{ 1, 31451, 'H' },
 		SMenuItem{ 1, 1 },
 		SMenuItem{ 1, 31455, 'A' },
+		SMenuItem{ 0, 34062, 'V' },
+		SMenuItem{ 1, 31996 },
+		SMenuItem{ 1, 31994 },
+		SMenuItem{ 1, 31995 },
+		SMenuItem{ 1, 31993 },
+		SMenuItem{ 1, 31992 },
+		SMenuItem{ 1, 31991 },
 	};
 
 	EXPECT_THAT(sMainMenu.m_nVersion, 0);
@@ -1479,6 +1487,7 @@ MATCHER(IsInitializedCommonSettingMainMenu, "Checks if CommonSetting_MainMenu is
 		265,
 		293,
 		333,
+		343,
 	};
 
 	for (size_t i = 0; i < std::size(mainMenuTopIdxs); ++i) {

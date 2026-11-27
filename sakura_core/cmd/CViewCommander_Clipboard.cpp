@@ -913,7 +913,7 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 		CLayoutInt copyLayoutLine = firstCopyLayoutLine;
 		for (; pcLayout != nullptr; pcLayout = pcLayout->GetNextLayout())
 		{
-			if (bBoxSelecting && layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo())) continue;
+			if (bBoxSelecting && layoutMgr.IsDisplayHiddenLine(pcLayout->GetLogicLineNo())) continue;
 			lastCopyLayoutLine = copyLayoutLine++;
 			/* 指定された桁に対応する行のデータ内の位置を調べる */
 			CLogicInt nIdxFrom;
@@ -1047,14 +1047,14 @@ void CViewCommander::Command_COPY_COLOR_HTML(bool bLineNumber)
 		}
 		const WCHAR* pLine = pcDocLine->GetPtr();
 		for (; pcLayout && pcLayout->GetLogicLineNo() == nLineNum;
-			nLayoutLineNum += CLayoutInt(!bBoxSelecting || !layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo())),
+			nLayoutLineNum += CLayoutInt(!bBoxSelecting || !layoutMgr.IsDisplayHiddenLine(pcLayout->GetLogicLineNo())),
 			pcLayout = pcLayout->GetNextLayout())
 		{
 			CLogicInt nIdxFrom;
 			CLogicInt nIdxTo;
 			const int nLineLen = pcLayout->GetLengthWithoutEOL() + pcLayout->GetLayoutEol().GetLen();
 			if( nLayoutLineNum < firstCopyLayoutLine
-			  || (bBoxSelecting && layoutMgr.IsCodeFoldHiddenLine(pcLayout->GetLogicLineNo()))
+			  || (bBoxSelecting && layoutMgr.IsDisplayHiddenLine(pcLayout->GetLogicLineNo()))
 			  || (pcLayoutBottom && nLineNum == nLineNumLast
 			      && pcLayout->GetLogicOffset() > pcLayoutBottom->GetLogicOffset()) ){
 				nIdxTo = nIdxFrom = CLogicInt(-1);

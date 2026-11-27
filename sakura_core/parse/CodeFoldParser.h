@@ -16,6 +16,9 @@ namespace codefold {
 	enum class Language {
 		Curl,
 		CLike,
+	Java,
+		JavaScript,
+		Json,
 		Xml,
 		Sql,
 	};

@@ -11,6 +11,7 @@
 #include "window/CEditWnd.h"
 #include "doc/CEditDoc.h"
 #include "types/CTypeSupport.h"
+#include "window/EnhancementToolbarSettings.h"
 #include <algorithm>
 
 // -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- //
@@ -30,12 +31,15 @@ void CEditView::SetBracketPairPos( bool flag )
 		return;
 	}
 
-	const bool rainbowEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const bool rainbowEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+		&& m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
 	const auto& rainbowOptions = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_sFontAttr;
 	const bool nativePairEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp;
 	const bool rainbowPairEnabled = rainbowEnabled && rainbowOptions.m_bBoldFont;
 	const bool rainbowGuideEnabled = rainbowEnabled && rainbowOptions.m_bUnderLine;
-	if( !nativePairEnabled && !rainbowPairEnabled && !rainbowGuideEnabled ){
+	const bool rainbowCurrentLevelEnabled = rainbowEnabled && IsRainbowCurrentLevelHighlightEnabled();
+	if (flag) SetCurrentRainbowBracketLevel(-1);
+	if( !nativePairEnabled && !rainbowPairEnabled && !rainbowGuideEnabled && !rainbowCurrentLevelEnabled ){
 		if( flag ){
 			m_ptBracketPairPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
 			m_ptBracketCaretPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
@@ -75,7 +79,7 @@ void CEditView::SetBracketPairPos( bool flag )
 				// カーソルの前方文字位置
 				m_ptBracketCaretPos_PHY.x = GetCaret().GetCaretLogicPos().x - 1;
 			}
-			if( !nativePairEnabled && (rainbowPairEnabled || rainbowGuideEnabled) ){
+			if( rainbowCurrentLevelEnabled || (!nativePairEnabled && (rainbowPairEnabled || rainbowGuideEnabled)) ){
 				auto getRainbowBracket = [&](const CLogicPoint& pt, SRainbowBracketMark* mark, wchar_t* bracket) {
 					CLayoutPoint layoutPos;
 					m_pcEditDoc->m_cLayoutMgr.LogicToLayout( pt, &layoutPos );
@@ -105,6 +109,7 @@ void CEditView::SetBracketPairPos( bool flag )
 					m_ptBracketCaretPos_PHY.Set(CLogicInt(-1), CLogicInt(-1));
 					return;
 				}
+				if (rainbowCurrentLevelEnabled) SetCurrentRainbowBracketLevel(static_cast<int>(caretMark.level));
 			}
 			return;
 		}
@@ -129,7 +134,8 @@ void CEditView::DrawBracketPair( bool bDraw )
 		return;
 	}
 
-	const bool rainbowEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const bool rainbowEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+		&& m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
 	const auto& rainbowOptions = m_pTypeData->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_sFontAttr;
 	const bool nativePairEnabled = m_pTypeData->m_ColorInfoArr[COLORIDX_BRACKET_PAIR].m_bDisp;
 	const bool rainbowPairEnabled = rainbowEnabled && rainbowOptions.m_bBoldFont;

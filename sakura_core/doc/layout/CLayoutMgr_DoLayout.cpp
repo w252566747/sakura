@@ -7,6 +7,8 @@
 #include "StdAfx.h"
 #include "doc/CEditDoc.h" /// 2003/07/20 genta
 #include "doc/layout/CLayoutMgr.h"
+#include "curl/CurlRawRegion.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "doc/layout/CLayout.h"/// 2002/2/10 aroka
 #include "doc/logic/CDocLine.h"/// 2002/2/10 aroka
 #include "doc/logic/CDocLineMgr.h"// 2002/2/10 aroka
@@ -16,7 +18,26 @@
 #include "util/window.h"
 #include "debug/CRunningTimer.h"
 #include <atomic>
+#include <cwctype>
+#include <limits>
+#include <string_view>
 #include <thread>
+
+namespace {
+bool ContainsCurlTypeName(std::wstring_view value)
+{
+	constexpr std::wstring_view curl = L"curl";
+	for (std::size_t offset = 0; offset + curl.size() <= value.size(); ++offset) {
+		bool matches = true;
+		for (std::size_t i = 0; i < curl.size(); ++i) {
+			if (std::towlower(value[offset + i]) != curl[i]) { matches = false; break; }
+		}
+		if (matches) return true;
+	}
+	return false;
+}
+
+}
 
 //2008.07.27 kobake
 static bool _GetKeywordLength(
@@ -251,7 +272,10 @@ void CLayoutMgr::_MakeOneLine(SLayoutWork* pWork, PF_OnLine pfOnLine)
 	CColorStrategyPool& color = *CColorStrategyPool::getInstance();
 
 	const bool bCheckColorEnabled = color.HasRangeBasedColorStrategies();
-	const bool bRainbowBracketEnabled = m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const bool bRainbowBracketEnabled = enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+		&& m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp;
+	const bool bCurlType = ContainsCurlTypeName(m_pTypeConfig->m_szTypeName)
+		|| ContainsCurlTypeName(m_pTypeConfig->m_szTypeExts);
 	const bool bKinsokuEnabled = m_pTypeConfig->m_bWordWrap
 		|| m_pTypeConfig->m_bKinsokuKuto
 		|| m_pTypeConfig->m_bKinsokuHead
@@ -311,7 +335,51 @@ void CLayoutMgr::_MakeOneLine(SLayoutWork* pWork, PF_OnLine pfOnLine)
 			const EColorIndexType colorType = CColorStrategy::GetStrategyColorSafe(pWork->pcColorStrategy);
 			const bool inCommentOrString = colorType == COLORIDX_COMMENT || colorType == COLORIDX_SSTRING ||
 				colorType == COLORIDX_WSTRING || colorType == COLORIDX_HEREDOC || (colorType & COLORIDX_BLOCK_BIT) != 0;
-			if (!inCommentOrString) {
+			const std::wstring_view lineText(pWork->cLineStr.GetPtr(), static_cast<std::size_t>(pWork->cLineStr.GetLength()));
+			const std::size_t position = static_cast<std::size_t>(pWork->nPos);
+			const bool inComment = colorType == COLORIDX_COMMENT || colorType == COLORIDX_HEREDOC ||
+				(colorType & COLORIDX_BLOCK_BIT) != 0;
+			const bool insideCurlExpression = bCurlType && pWork->bracketState.IsInsideCurlTextExpression();
+			std::wstring curlVerbatimTerminator;
+			std::size_t curlVerbatimBodyLength = std::numeric_limits<std::size_t>::max();
+			std::size_t curlVerbatimOpenerLength = 0;
+			const bool inString = colorType == COLORIDX_SSTRING || colorType == COLORIDX_WSTRING;
+			if (bCurlType && pWork->bracketState.IsInsideCurlVerbatim()) {
+				pWork->bracketState.ConsumeCurlVerbatim(ch);
+			} else if (bCurlType && !inString &&
+				curlsyntax::TryGetCommentTerminator(lineText, position, curlVerbatimTerminator, curlVerbatimBodyLength, curlVerbatimOpenerLength)) {
+				pWork->bracketState.BeginCurlVerbatim(std::move(curlVerbatimTerminator), curlVerbatimBodyLength, curlVerbatimOpenerLength - 1);
+			} else if (bCurlType && (!inCommentOrString || insideCurlExpression) &&
+				curlsyntax::TryGetVerbatimTerminator(lineText, position, curlVerbatimTerminator, curlVerbatimBodyLength, curlVerbatimOpenerLength)) {
+				pWork->bracketState.BeginCurlVerbatim(std::move(curlVerbatimTerminator), curlVerbatimBodyLength, curlVerbatimOpenerLength - 1);
+			} else if (bCurlType && !inComment && (colorType == COLORIDX_WSTRING || insideCurlExpression)) {
+				auto consumeBracket = [&]() {
+					unsigned level = 0;
+					bool unmatched = false;
+					if (pWork->bracketState.Consume(ch, &level, &unmatched)) {
+						pWork->bracketMarks.push_back({ static_cast<int>(pWork->nPos), static_cast<unsigned char>(level), unmatched });
+					}
+				};
+				if (pWork->bracketState.IsInsideCurlTextExpression()) {
+					if (pWork->bracketState.IsInsideCurlTextExpressionString()) {
+						const wchar_t quote = pWork->bracketState.GetCurlTextExpressionQuote();
+						if (ch == quote && !IsEscapedCurlCharacter(lineText, position)) {
+							pWork->bracketState.ToggleCurlTextExpressionString(quote);
+						} else if (quote == L'"' && ch == L'{' && !IsEscapedCurlBrace(lineText, position)) {
+							pWork->bracketState.BeginCurlTextExpression();
+							consumeBracket();
+						}
+					} else if ((ch == L'"' || ch == L'\'') && !IsEscapedCurlCharacter(lineText, position)) {
+						pWork->bracketState.ToggleCurlTextExpressionString(ch);
+					} else if (IsRainbowBracketCharacter(ch) && !IsEscapedCurlBrace(lineText, position)) {
+						consumeBracket();
+						if (ch == L'}') pWork->bracketState.EndCurlTextExpressionIfBalanced();
+					}
+				} else if (ch == L'{' && !IsEscapedCurlBrace(lineText, position)) {
+					pWork->bracketState.BeginCurlTextExpression();
+					consumeBracket();
+				}
+			} else if (!inCommentOrString && !IsEscapedCurlBrace(lineText, position)) {
 				unsigned level = 0;
 				bool unmatched = false;
 				if (pWork->bracketState.Consume(ch, &level, &unmatched)) {
@@ -363,7 +431,8 @@ void CLayoutMgr::_DoLayout(bool bBlockingHook)
 		// 行をまたぐ可能性のある色分けが有効の場合、途中で処理単位が分割されて
 		// しまうと色分けがおかしくなってしまうためやむなくマルチスレッド処理の対象外とする
 		nWorkerThreadCount = 0;
-	} else if (m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) {
+	} else if (enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+		&& m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) {
 		// 括弧の階層状態を先頭行から引き継ぐ必要があるため、機能使用時は順次処理する
 		nWorkerThreadCount = 0;
 	} else {
@@ -426,7 +495,8 @@ void CLayoutMgr::_DoLayout(bool bBlockingHook)
 
 void CLayoutMgr::RefreshUnmatchedRainbowBrackets()
 {
-	if (!m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) return;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+		|| !m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp) return;
 	CBracketMatchResolver resolver;
 	for (CLayout* layout = GetTopLayout(); layout; layout = layout->GetNextLayout()) {
 		const CDocLine* line = layout->GetDocLineRef();
@@ -673,7 +743,8 @@ CLayoutInt CLayoutMgr::DoLayout_Range(
 					pWork->bNeedChangeCOMMENTMODE = true;
 				}else if( nullptr == pWork->exInfoPrev.GetColorInfo() && pWork->pLayout->GetNextLayout()->GetColorInfo() ){
 					pWork->bNeedChangeCOMMENTMODE = true;
-				}else if( m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp &&
+				}else if( enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RainbowBracket)
+					&& m_pTypeConfig->m_ColorInfoArr[COLORIDX_RAINBOW_BRACKET_ENABLE].m_bDisp &&
 					(pWork->pLayout->GetBracketStateEnd() != pWork->pLayout->GetNextLayout()->GetBracketStateBegin() ||
 					 pWork->pLayout->GetBracketStateEnd() != pWork->bracketState) ){
 					pWork->bNeedChangeCOMMENTMODE = true;

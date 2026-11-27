@@ -32,6 +32,7 @@
 #include "docplus/CModifyManager.h"
 #include "view/colors/CWordMarker.h"
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "types/CTypeSupport.h"
 #include <limits.h>
 #include "config/app_constants.h"
@@ -100,12 +101,44 @@ int ScrollBarMarkerTrackTop()
 
 unsigned CEditView::GetScrollBarMarkerVisibility() noexcept
 {
+	return enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MarkerNavigation)
+		? g_uScrollBarMarkerVisibility : 0;
+}
+
+unsigned CEditView::GetScrollBarMarkerConfiguredVisibility() noexcept
+{
 	return g_uScrollBarMarkerVisibility;
+}
+
+void CEditView::RefreshScrollBarMarkerFeature()
+{
+	ResetScrollBarMarkerScan();
+	if (m_bMiniMap || !m_hwndVScrollBar) return;
+	if (GetScrollBarMarkerVisibility() == 0) {
+		::KillTimer(GetHwnd(), IDT_SCROLLBAR_MARKERS);
+	} else {
+		::SetTimer(GetHwnd(), IDT_SCROLLBAR_MARKERS, 100, EditViewTimerProc);
+	}
 }
 
 void CEditView::SetScrollBarMarkerVisibility(unsigned mask) noexcept
 {
-	g_uScrollBarMarkerVisibility = CScrollBarMarkerModel::NormalizeVisibilityMask(mask);
+	const unsigned normalized = CScrollBarMarkerModel::NormalizeVisibilityMask(mask);
+	if (normalized == g_uScrollBarMarkerVisibility) return;
+	g_uScrollBarMarkerVisibility = normalized;
+	CEditWnd* editWindow = CEditWnd::getInstance();
+	if (!editWindow) return;
+	for (int index = 0; index < editWindow->GetAllViewCount(); ++index) {
+		auto& view = editWindow->GetView(index);
+		view.ResetScrollBarMarkerScan();
+		if (!view.m_bMiniMap && view.m_hwndVScrollBar) {
+			if (g_uScrollBarMarkerVisibility == 0) {
+				::KillTimer(view.GetHwnd(), IDT_SCROLLBAR_MARKERS);
+			} else {
+				::SetTimer(view.GetHwnd(), IDT_SCROLLBAR_MARKERS, 100, EditViewTimerProc);
+			}
+		}
+	}
 }
 
 unsigned CEditView::GetScrollBarMarkerColor(unsigned kind) noexcept
@@ -165,7 +198,8 @@ BOOL CEditView::CreateScrollBar()
 			tool.lpszText = const_cast<wchar_t*>(L"");
 			::SendMessageW(m_hwndScrollBarMarkerTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
 		}
-		::SetTimer(GetHwnd(), IDT_SCROLLBAR_MARKERS, 100, EditViewTimerProc);
+		if (GetScrollBarMarkerVisibility() != 0)
+			::SetTimer(GetHwnd(), IDT_SCROLLBAR_MARKERS, 100, EditViewTimerProc);
 	}
 
 	/* スクロールバーの作成 */
@@ -253,7 +287,16 @@ void CEditView::ResetScrollBarMarkerScan()
 
 void CEditView::UpdateScrollBarMarkerScan()
 {
+	if (GetScrollBarMarkerVisibility() == 0) return;
 	if (m_bMiniMap || !m_hwndVScrollBar || !::IsWindowVisible(GetHwnd()) || !m_pcEditDoc) return;
+	const unsigned visibility = GetScrollBarMarkerVisibility();
+	if (visibility == 0) {
+		if (m_bScrollBarMarkerCacheKeyValid || m_bScrollBarMarkerScanActive ||
+			m_nScrollBarMarkerScanTrackHeight != 0 || !m_cScrollBarMarkerModel.OverviewTicks().empty()) {
+			ResetScrollBarMarkerScan();
+		}
+		return;
+	}
 
 	RECT client{};
 	if (!::GetClientRect(m_hwndVScrollBar, &client)) return;
@@ -265,22 +308,34 @@ void CEditView::UpdateScrollBarMarkerScan()
 	uint64_t key = 1469598103934665603ull;
 	auto mix = [&key](uint64_t value) { key ^= value; key *= 1099511628211ull; };
 	mix(m_pcEditDoc->m_uCurlSyntaxVersion);
-	mix(markerService.Generation());
-	mix(GetBookmarkGeneration());
 	mix(static_cast<uint64_t>(lineCount));
 	mix(static_cast<uint64_t>(trackHeight));
-	mix(static_cast<uint64_t>(m_bCurSrchKeyMark));
-	mix(static_cast<uint64_t>(m_bCurSearchUpdate));
-	mix(static_cast<uint64_t>(static_cast<uint32_t>(m_nCurSearchKeySequence)));
-	mix(static_cast<uint64_t>(m_sCurSearchOption.bLoHiCase));
-	mix(static_cast<uint64_t>(m_sCurSearchOption.bRegularExp));
-	mix(static_cast<uint64_t>(m_sCurSearchOption.bWordOnly));
-	for (const wchar_t ch : m_strCurSearchKey) mix(static_cast<uint64_t>(ch));
-	mix(static_cast<uint64_t>(m_pcEditDoc->m_bCurlSyntaxResultStale));
-	mix(static_cast<uint64_t>(m_pcEditDoc->m_vCurlSyntaxDiagnostics.size()));
-	mix(static_cast<uint64_t>(m_pcEditDoc->m_cDocEditor.m_cOpeBuf.GetNoModifiedSeq()));
+	mix(static_cast<uint64_t>(visibility));
+	const unsigned searchBit = 1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Search);
+	const unsigned wordMarkerBit = 1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::WordMarker);
+	const unsigned syntaxBits = (1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::SyntaxError)) |
+		(1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::SyntaxWarning));
+	const unsigned bookmarkBit = 1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Bookmark);
+	const unsigned modifiedBit = 1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Modified);
+	if (visibility & searchBit) {
+		mix(static_cast<uint64_t>(m_bCurSrchKeyMark));
+		mix(static_cast<uint64_t>(m_bCurSearchUpdate));
+		mix(static_cast<uint64_t>(static_cast<uint32_t>(m_nCurSearchKeySequence)));
+		mix(static_cast<uint64_t>(m_sCurSearchOption.bLoHiCase));
+		mix(static_cast<uint64_t>(m_sCurSearchOption.bRegularExp));
+		mix(static_cast<uint64_t>(m_sCurSearchOption.bWordOnly));
+		for (const wchar_t ch : m_strCurSearchKey) mix(static_cast<uint64_t>(ch));
+	}
+	if (visibility & wordMarkerBit) mix(markerService.Generation());
+	if (visibility & bookmarkBit) mix(GetBookmarkGeneration());
+	if (visibility & syntaxBits) {
+		mix(static_cast<uint64_t>(m_pcEditDoc->m_bCurlSyntaxResultStale));
+		mix(m_pcEditDoc->m_uCurlSyntaxDiagnosticsGeneration);
+	}
+	if (visibility & modifiedBit)
+		mix(static_cast<uint64_t>(m_pcEditDoc->m_cDocEditor.m_cOpeBuf.GetNoModifiedSeq()));
 	for (unsigned kind = 0; kind < SCROLLBAR_MARKER_KIND_COUNT; ++kind)
-		mix(static_cast<uint64_t>(GetScrollBarMarkerColor(kind)));
+		if (visibility & (1u << kind)) mix(static_cast<uint64_t>(GetScrollBarMarkerColor(kind)));
 	if (!m_bScrollBarMarkerCacheKeyValid || key != m_uScrollBarMarkerScanKey) {
 		m_cScrollBarMarkerModel.ResetOverview(trackHeight, lineCount);
 		m_uScrollBarMarkerScanKey = key;
@@ -295,7 +350,7 @@ void CEditView::UpdateScrollBarMarkerScan()
 		m_bScrollBarMarkerCacheKeyValid = true;
 		::InvalidateRect(m_hwndVScrollBar, nullptr, FALSE);
 	}
-	if (!m_bScrollBarMarkerScanActive || m_bCurSearchUpdate) return;
+	if (!m_bScrollBarMarkerScanActive || ((visibility & searchBit) && m_bCurSearchUpdate)) return;
 	// A line pointer may be freed by editing between timer callbacks. Version
 	// changes are checked before that pointer is dereferenced.
 	if (m_uScrollBarMarkerScanVersion != m_pcEditDoc->m_uCurlSyntaxVersion) {
@@ -309,10 +364,13 @@ void CEditView::UpdateScrollBarMarkerScan()
 	const auto* docLine = m_pScrollBarMarkerScanLine;
 	auto& layout = m_pcEditDoc->m_cLayoutMgr;
 	const auto& diagnostics = m_pcEditDoc->m_vCurlSyntaxDiagnostics;
-	const bool syntaxActive = !m_pcEditDoc->m_bCurlSyntaxResultStale && GetEditWnd().IsCurlSyntaxDocument();
-	const bool searchActive = m_bCurSrchKeyMark && m_sSearchPattern.GetLen() > 0;
-	const bool modifiedActive = m_pcEditDoc->m_cDocEditor.IsModified();
-	const int saveSequence = m_pcEditDoc->m_cDocEditor.m_cOpeBuf.GetNoModifiedSeq();
+	const bool syntaxActive = (visibility & ((1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::SyntaxError)) |
+		(1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::SyntaxWarning)))) != 0 &&
+		!m_pcEditDoc->m_bCurlSyntaxResultStale && GetEditWnd().IsCurlSyntaxDocument();
+	const bool searchActive = (visibility & (1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Search))) != 0 &&
+		m_bCurSrchKeyMark && m_sSearchPattern.GetLen() > 0;
+	const bool modifiedActive = (visibility & modifiedBit) && m_pcEditDoc->m_cDocEditor.IsModified();
+	const int saveSequence = modifiedActive ? m_pcEditDoc->m_cDocEditor.m_cOpeBuf.GetNoModifiedSeq() : 0;
 
 	while (docLine && processed < 256 && std::chrono::steady_clock::now() < deadline) {
 		const int physicalLine = m_nScrollBarMarkerScanLine;
@@ -361,6 +419,9 @@ void CEditView::UpdateScrollBarMarkerScan()
 					[](const curlsyntax::Diagnostic& item, int value) { return item.line < value; });
 				for (auto it = first; it != diagnostics.end() && it->line == oneBasedLine; ++it) {
 					const bool isError = it->severity == curlsyntax::Severity::Error;
+					const unsigned kindBit = 1u << static_cast<unsigned>(isError
+						? CScrollBarMarkerModel::Kind::SyntaxError : CScrollBarMarkerModel::Kind::SyntaxWarning);
+					if (!(visibility & kindBit)) continue;
 					std::wstring detail;
 					if (!it->code.empty()) detail.assign(it->code.begin(), it->code.end());
 					if (!it->message.empty()) {
@@ -374,17 +435,23 @@ void CEditView::UpdateScrollBarMarkerScan()
 						std::move(detail));
 				}
 			}
-			if (CBookmarkGetter(docLine).IsBookmarked()) {
+			if ((visibility & (1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Bookmark))) &&
+				CBookmarkGetter(docLine).IsBookmarked()) {
 				addMarker(CScrollBarMarkerModel::Kind::Bookmark, GetTypeColor(this, COLORIDX_MARK, RGB(80, 130, 220)), L"ブックマーク", lineDetail);
 			}
-			if (modifiedActive && CModifyVisitor().IsLineModified(docLine, saveSequence)) {
+			if ((visibility & (1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::Modified))) &&
+				modifiedActive && CModifyVisitor().IsLineModified(docLine, saveSequence)) {
 				addMarker(CScrollBarMarkerModel::Kind::Modified, GetTypeColor(this, COLORIDX_GYOU_MOD, RGB(45, 150, 90)), L"変更行", lineDetail);
 			}
 			m_bScrollBarMarkerLinePrepared = true;
 		}
 
-		const int chunkEnd = m_nScrollBarMarkerScanOffset + std::min(2048, length - m_nScrollBarMarkerScanOffset);
-		while (m_nScrollBarMarkerScanOffset < chunkEnd) {
+		const bool scanWordMarkers = (visibility & (1u << static_cast<unsigned>(CScrollBarMarkerModel::Kind::WordMarker))) != 0;
+		if (!scanWordMarkers) m_nScrollBarMarkerScanOffset = length;
+		const int chunkEnd = scanWordMarkers
+			? m_nScrollBarMarkerScanOffset + std::min(2048, length - m_nScrollBarMarkerScanOffset)
+			: length;
+		while (scanWordMarkers && m_nScrollBarMarkerScanOffset < chunkEnd) {
 			int end = m_nScrollBarMarkerScanOffset;
 			const int match = markerService.Match(m_pcEditDoc, text, length, m_nScrollBarMarkerScanOffset, &end);
 			if (match <= 0 || end <= m_nScrollBarMarkerScanOffset) {
@@ -568,6 +635,7 @@ LRESULT CALLBACK CEditView::ScrollBarMarkerSubclassProc(HWND hwnd, UINT message,
 		}
 		break;
 	case WM_RBUTTONUP: {
+		if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MarkerNavigation)) return 0;
 		HMENU menu = ::CreatePopupMenu();
 		HMENU colorsMenu = ::CreatePopupMenu();
 		if (menu) {

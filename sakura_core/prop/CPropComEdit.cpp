@@ -27,6 +27,7 @@
 #include "CSelectLang.h"
 #include "sakura_rc.h"
 #include "sakura.hh"
+#include "view/MultiCursorSettings.h"
 
 //@@@ 2001.02.04 Start by MIK: Popup Help
 static const DWORD p_helpids[] = {	//10210
@@ -86,6 +87,7 @@ INT_PTR CPropEdit::DispatchEvent(
 
 	case WM_INITDIALOG:
 		ApiWrap::EditCtl_LimitText( ::GetDlgItem( hwndDlg, IDC_EDIT_FILEOPENDIR ), _MAX_PATH - 1 );
+		ApiWrap::EditCtl_LimitText( ::GetDlgItem( hwndDlg, IDC_EDIT_MULTICURSOR_MAXCOUNT ), 4 );
 		/* ダイアログデータの設定 Edit */
 		SetData( hwndDlg );
 		// Modified by KEITA for WIN64 2003.9.6
@@ -146,7 +148,11 @@ INT_PTR CPropEdit::DispatchEvent(
 			DEBUG_TRACE( L"Edit PSN_KILLACTIVE\n" );
 
 			/* ダイアログデータの取得 Edit */
-			GetData( hwndDlg );
+			if (!GetData(hwndDlg)) {
+				::SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT, TRUE);
+				return TRUE;
+			}
+			::SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT, FALSE);
 			return TRUE;
 
 		case PSN_SETACTIVE: //@@@ 2002.01.03 YAZAKI 最後に表示していたシートを正しく覚えていないバグ修正
@@ -183,6 +189,7 @@ INT_PTR CPropEdit::DispatchEvent(
 /* ダイアログデータの設定 */
 void CPropEdit::SetData( HWND hwndDlg )
 {
+	::SetDlgItemInt(hwndDlg, IDC_EDIT_MULTICURSOR_MAXCOUNT, static_cast<UINT>(m_nMaxMultiCursors), FALSE);
 	/* ドラッグ & ドロップ編集 */
 	::CheckDlgButton( hwndDlg, IDC_CHECK_DRAGDROP, m_Common.m_sEdit.m_bUseOLE_DragDrop );
 	if( ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_DRAGDROP ) ){
@@ -247,6 +254,15 @@ void CPropEdit::SetData( HWND hwndDlg )
 /* ダイアログデータの取得 */
 int CPropEdit::GetData( HWND hwndDlg )
 {
+	BOOL translated = FALSE;
+	const UINT maxMultiCursors = ::GetDlgItemInt(hwndDlg, IDC_EDIT_MULTICURSOR_MAXCOUNT, &translated, FALSE);
+	if (!translated || !multicursor::IsValidCursorLimit(maxMultiCursors)) {
+		InfoMessage(hwndDlg, L"最大マルチカーソル数は1～1000の範囲で指定してください。");
+		::SetFocus(::GetDlgItem(hwndDlg, IDC_EDIT_MULTICURSOR_MAXCOUNT));
+		return FALSE;
+	}
+	m_nMaxMultiCursors = maxMultiCursors;
+
 	/* ドラッグ & ドロップ編集 */
 	m_Common.m_sEdit.m_bUseOLE_DragDrop = ::IsDlgButtonChecked( hwndDlg, IDC_CHECK_DRAGDROP );
 	/* DropSource */

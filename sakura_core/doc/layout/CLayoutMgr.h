@@ -26,6 +26,7 @@
 
 #include <Windows.h>// 2002/2/10 aroka
 #include <vector>
+#include <utility>
 #include <memory_resource>
 #include <atomic>
 #include <string>
@@ -206,13 +207,17 @@ public:
 	const codefold::Region* FindCollapsedCodeFoldContainingLine(CLogicInt logicLine) const;
 	bool IsCodeFoldCollapsedAtLine(CLogicInt logicLine) const;
 	bool IsCodeFoldHiddenLine(CLogicInt logicLine) const;
+	bool IsDisplayHiddenLine(CLogicInt logicLine) const;
+	void SetRealtimeFilterVisibleRanges(const std::vector<std::pair<size_t, size_t>>& ranges, bool active);
+	bool IsRealtimeFilterActive() const noexcept { return m_bRealtimeFilterActive; }
 	size_t GetCodeFoldHiddenLineCount(CLogicInt logicLine) const;
 	bool ToggleCodeFoldAtLine(CLogicInt logicLine);
+	bool ToggleCodeFoldRecursivelyAtLine(CLogicInt logicLine);
 	bool FoldAllCodeBlocks();
 	bool UnfoldAllCodeBlocks();
 	bool FoldCodeBlocksAtDepth(size_t depth);
 	bool FoldCodeBlocksToDepth(size_t oneBasedDepth);
-	bool IsCodeFoldActive() const { return !m_vCollapsedCodeFolds.empty(); }
+	bool IsCodeFoldActive() const;
 	CLayoutInt GetFirstCollapsedFoldDisplayLine() const;
 	void ResetCodeFolds();
 
@@ -447,6 +452,8 @@ protected:
 	mutable std::vector<codefold::Region> m_vCodeFoldRegions;
 	std::vector<codefold::Region> m_vCollapsedCodeFolds;
 	std::vector<FoldLineRange> m_vFoldHiddenLogicalLines;
+	std::vector<FoldLineRange> m_vRealtimeFilterVisibleLines;
+	bool m_bRealtimeFilterActive = false;
 
 	mutable CLayoutInt		m_nPrevReferLine;
 	mutable CLayout*		m_pLayoutPrevRefer;

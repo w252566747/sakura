@@ -91,7 +91,10 @@ void CEditView::OnLBUTTONDOWN( WPARAM fwKeys, int _xPos , int _yPos )
 			if (regionPtr) {
 				const auto region = *regionPtr;
 				const bool wasCollapsed = layoutMgr.IsCodeFoldCollapsedAtLine(foldLine);
-				if (layoutMgr.ToggleCodeFoldAtLine(foldLine)) {
+				const bool changed = (fwKeys & MK_SHIFT) != 0
+					? layoutMgr.ToggleCodeFoldRecursivelyAtLine(foldLine)
+					: layoutMgr.ToggleCodeFoldAtLine(foldLine);
+				if (changed) {
 					if (!wasCollapsed) {
 						const auto caretLine = GetCaret().GetCaretLogicPos().y;
 						if (static_cast<size_t>(caretLine) > region.firstLine && static_cast<size_t>(caretLine) <= region.lastLine) {
@@ -1654,6 +1657,7 @@ void CEditView::OnLBUTTONUP( [[maybe_unused]] WPARAM fwKeys, [[maybe_unused]] in
 		GetCaret().ShowCaret_( GetHwnd() ); // 2002/07/22 novice
 
 		GetSelectionInfo().SelectEnd();
+		GetSelectionInfo().PrintSelectionInfoMsg(true);
 		if (!altClick && GetSelectionInfo().IsTextSelected()) {
 			CNativeW selected;
 			if (GetSelectedDataSimple(selected) && selected.GetStringLength() > 0) {

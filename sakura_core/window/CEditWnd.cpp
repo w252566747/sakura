@@ -32,7 +32,9 @@
 #include <string_view>
 
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "parse/CSVTableSettings.h"
+#include "parse/CSVTableSnapshotChunk.h"
 #include "parse/CSVStatistics.h"
 #include "_main/CControlTray.h"
 #include "_main/CCommandLine.h"	/// 2003/1/26 aroka
@@ -255,6 +257,7 @@ LRESULT CALLBACK CEditWndProc(
 
 CEditWnd::CEditWnd()
 {
+	m_bCurlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
 	const auto& csvSettings = csvtable::GetUserSettings();
 	m_chCSVDelimiter = csvSettings.delimiter;
 	m_bCSVAutoDetectDelimiter = csvSettings.autoDetectDelimiter;
@@ -273,6 +276,10 @@ CEditWnd::CEditWnd()
 
 CEditWnd::~CEditWnd()
 {
+	::KillTimer(m_hWnd, IDT_CSV_TABLE_SNAPSHOT);
+	m_pCSVTableSnapshotScanLine = nullptr;
+	m_nCSVTableSnapshotLineOffset = 0;
+	m_strCSVTableSnapshotText.clear();
 	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_DEBOUNCE);
 	::KillTimer(m_hWnd, IDT_REALTIME_FILTER_SCAN);
 	if (m_pRealtimeFilterService) {
@@ -338,6 +345,7 @@ void CEditWnd::NotifyCurlSyntaxContentChanged(CEditDoc* document)
 {
 	if (!document) return;
 	++document->m_uCurlSyntaxVersion;
+	++document->m_uCurlSyntaxDiagnosticsGeneration;
 	document->m_bCurlSyntaxResultStale = true;
 	document->m_vCurlSyntaxDiagnostics.clear();
 	if (document == GetDocument() && (m_bCSVValidationListActive || m_bCSVValidationHasResult)) {
@@ -367,6 +375,7 @@ void CEditWnd::ToggleRealtimeFilter()
 		SendStatusMessage(L"CSV テーブル表示を終了してからフィルターを開いてください。");
 		return;
 	}
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RealtimeFilter)) return;
 	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
 	if (!m_hwndRealtimeFilterBar) {
 		auto destroyFilterControls = [this]() {
@@ -387,10 +396,10 @@ void CEditWnd::ToggleRealtimeFilter()
 		};
 		m_hwndRealtimeFilterBar = createControl(WS_EX_CLIENTEDGE, L"STATIC", L"",
 			SS_ETCHEDFRAME, 0x7CDF);
-		::CreateWindowExW(0, L"STATIC", L"含む（1行1条件）", WS_CHILD | SS_LEFT,
+		::CreateWindowExW(0, L"STATIC", L"含む語句", WS_CHILD | SS_LEFT,
 			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_INCLUDE_LABEL),
 			CEditApp::getInstance()->GetAppInstance(), nullptr);
-		::CreateWindowExW(0, L"STATIC", L"除外（1行1条件）", WS_CHILD | SS_LEFT,
+		::CreateWindowExW(0, L"STATIC", L"除外語句", WS_CHILD | SS_LEFT,
 			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_EXCLUDE_LABEL),
 			CEditApp::getInstance()->GetAppInstance(), nullptr);
 		m_hwndRealtimeFilterInclude = createControl(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -399,23 +408,23 @@ void CEditWnd::ToggleRealtimeFilter()
 			ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_EXCLUDE);
 		m_hwndRealtimeFilterLogic = createControl(0, L"COMBOBOX", L"",
 			CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_LOGIC);
-		m_hwndRealtimeFilterCase = createControl(0, L"BUTTON", L"大文字と小文字を区別",
+		m_hwndRealtimeFilterCase = createControl(0, L"BUTTON", L"大小文字を区別",
 			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_CASE);
 		m_hwndRealtimeFilterRegex = createControl(0, L"BUTTON", L"正規表現",
 			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_REGEX);
-		::CreateWindowExW(0, L"STATIC", L"前後の行", WS_CHILD | SS_LEFT,
+		::CreateWindowExW(0, L"STATIC", L"前後の行数", WS_CHILD | SS_LEFT,
 			0, 0, 0, 0, GetHwnd(), reinterpret_cast<HMENU>(IDC_REALTIME_FILTER_CONTEXT_LABEL),
 			CEditApp::getInstance()->GetAppInstance(), nullptr);
 		m_hwndRealtimeFilterContext = createControl(WS_EX_CLIENTEDGE, L"COMBOBOX", L"0",
 			CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, IDC_REALTIME_FILTER_CONTEXT);
-		m_hwndRealtimeFilterStats = createControl(0, L"STATIC", L"条件を入力してください",
+		m_hwndRealtimeFilterStats = createControl(0, L"STATIC", L"含む語句にキーワードを入力します（1行に1件）。一致しない行を隠し、空欄なら全文を表示します。",
 			SS_LEFT | SS_CENTERIMAGE, IDC_REALTIME_FILTER_STATS);
 		m_hwndRealtimeFilterAutoScroll = createControl(0, L"BUTTON", L"末尾へ自動スクロール",
 			BS_AUTOCHECKBOX | WS_TABSTOP, IDC_REALTIME_FILTER_AUTOSCROLL);
 		createControl(0, L"BUTTON", L"表示行をコピー", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_COPY);
 		createControl(0, L"BUTTON", L"新規文書へ出力", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_NEW);
-		createControl(0, L"BUTTON", L"別名保存", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_SAVEAS);
-		createControl(0, L"BUTTON", L"すべて解除", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLEAR);
+		createControl(0, L"BUTTON", L"ファイルへ出力…", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_SAVEAS);
+		createControl(0, L"BUTTON", L"条件をクリア", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLEAR);
 		createControl(0, L"BUTTON", L"処理を中止", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CANCEL);
 		createControl(0, L"BUTTON", L"閉じる", BS_PUSHBUTTON | WS_TABSTOP, IDC_REALTIME_FILTER_CLOSE);
 		if (!m_hwndRealtimeFilterBar || !m_hwndRealtimeFilterInclude ||
@@ -432,12 +441,17 @@ void CEditWnd::ToggleRealtimeFilter()
 			SendStatusMessage(L"リアルタイムフィルターの画面を作成できませんでした。");
 			return;
 		}
-		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AND 条件"));
-		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"OR 条件"));
+		::SendMessageW(m_hwndRealtimeFilterInclude, EM_SETCUEBANNER, TRUE,
+			reinterpret_cast<LPARAM>(L"キーワード（1行に1件）"));
+		::SendMessageW(m_hwndRealtimeFilterExclude, EM_SETCUEBANNER, TRUE,
+			reinterpret_cast<LPARAM>(L"除外する語句を入力"));
+		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"すべての語句に一致"));
+		::SendMessageW(m_hwndRealtimeFilterLogic, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"いずれかの語句に一致"));
 		::SendMessageW(m_hwndRealtimeFilterLogic, CB_SETCURSEL, 0, 0);
-		for (const wchar_t* value : { L"0", L"3", L"5", L"10" }) {
+		for (const wchar_t* value : { L"0 行（該当行のみ）", L"3 行（前後を表示）", L"5 行（前後を表示）", L"10 行（前後を表示）" }) {
 			::SendMessageW(m_hwndRealtimeFilterContext, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
 		}
+		::SendMessageW(m_hwndRealtimeFilterContext, CB_SETCURSEL, 0, 0);
 		for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CONTEXT_LABEL; ++id) {
 			if (HWND control = ::GetDlgItem(GetHwnd(), id)) {
 				::SendMessageW(control, WM_SETFONT,
@@ -474,11 +488,11 @@ void CEditWnd::ToggleRealtimeFilter()
 	}
 	m_bRealtimeFilterMode = true;
 	::ShowWindow(m_hwndRealtimeFilterBar, SW_SHOW);
-	::ShowWindow(m_hwndRealtimeFilterList, SW_SHOW);
+	if (m_hwndRealtimeFilterList) ::ShowWindow(m_hwndRealtimeFilterList, SW_HIDE);
 	for (int id = IDC_REALTIME_FILTER_INCLUDE_LABEL; id <= IDC_REALTIME_FILTER_CANCEL; ++id) {
 		if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::ShowWindow(control, SW_SHOW);
 	}
-	::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_HIDE);
+	::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_SHOW);
 	RECT client{};
 	::GetClientRect(GetHwnd(), &client);
 	OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
@@ -489,7 +503,34 @@ void CEditWnd::ToggleRealtimeFilter()
 
 void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
 {
-	if (!m_bRealtimeFilterMode || document != GetDocument()) return;
+	if (document != GetDocument()) return;
+	if (m_bCSVTableMode) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		FinishCSVCellEdit(false);
+		++m_uCSVQueryGeneration;
+		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
+		m_nCSVSortPendingSourceRow = -1;
+		m_uCSVValidationPendingOffset = static_cast<std::size_t>(-1);
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+		if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+		if (m_pCSVValidationService) m_pCSVValidationService->Cancel();
+		m_csvTableModel.reset();
+		m_csvTableSnapshot.reset();
+		m_vCSVTableViewRows.clear();
+		m_bCSVTableViewOrderIdentity = true;
+		m_bCSVValidationStale = true;
+		m_bCSVValidationHasResult = false;
+		m_vCSVValidationDiagnostics.clear();
+		if (m_hwndCSVTable) {
+			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
+		}
+		RefreshCurlSyntaxErrorList();
+	}
+	if (!m_bRealtimeFilterMode) return;
 	m_bRealtimeFilterDocumentLoading = true;
 	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
 	::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN);
@@ -515,16 +556,23 @@ void CEditWnd::NotifyRealtimeFilterDocumentLoading(CEditDoc* document)
 	m_vRealtimeFilterLineFingerprints.clear();
 	m_vRealtimeFilterMatches.clear();
 	m_vRealtimeFilterVisibleRanges.clear();
+	const bool wasFiltered = GetDocument() && GetDocument()->m_cLayoutMgr.IsRealtimeFilterActive();
+	if (GetDocument()) GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges({}, false);
+	if (wasFiltered) {
+		GetActiveView().Redraw();
+		GetActiveView().AdjustScrollBars();
+	}
 	if (m_hwndRealtimeFilterList) {
 		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 	}
-	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中です...");
+	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中…");
 }
 
 void CEditWnd::NotifyRealtimeFilterDocumentLoadFinished(CEditDoc* document)
 {
 	if (document != GetDocument()) return;
+	if (m_bCSVTableMode) ScheduleCSVTableParse();
 	m_bRealtimeFilterDocumentLoading = false;
 	ScheduleRealtimeFilter(m_bRealtimeFilterAppendCachePending);
 }
@@ -546,6 +594,7 @@ void CEditWnd::CloseRealtimeFilter(bool refreshLayout)
 	m_vRealtimeFilterLineFingerprints.clear();
 	m_vRealtimeFilterMatches.clear();
 	m_vRealtimeFilterVisibleRanges.clear();
+	if (GetDocument()) GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges({}, false);
 	m_vRealtimeFilterAppendCacheFingerprints.clear();
 	m_vRealtimeFilterAppendCacheMatches.clear();
 	m_bRealtimeFilterAppendCachePending = false;
@@ -564,6 +613,7 @@ void CEditWnd::CloseRealtimeFilter(bool refreshLayout)
 		::GetClientRect(GetHwnd(), &client);
 		OnSize(SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
 		GetActiveView().SetFocus();
+		GetActiveView().AdjustScrollBars();
 	}
 	m_cToolbar.UpdateToolbar();
 }
@@ -590,15 +640,21 @@ void CEditWnd::ScheduleRealtimeFilter(bool keepAppendCache)
 	m_vRealtimeFilterLineFingerprints.clear();
 	m_vRealtimeFilterMatches.clear();
 	m_vRealtimeFilterVisibleRanges.clear();
+	const bool wasFiltered = GetDocument() && GetDocument()->m_cLayoutMgr.IsRealtimeFilterActive();
+	if (GetDocument()) GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges({}, false);
+	if (wasFiltered) {
+		GetActiveView().Redraw();
+		GetActiveView().AdjustScrollBars();
+	}
 	if (m_hwndRealtimeFilterList) {
 		ListView_SetItemCountEx(m_hwndRealtimeFilterList, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
 		::InvalidateRect(m_hwndRealtimeFilterList, nullptr, TRUE);
 	}
-	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"条件を解析しています...");
+	if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"フィルターを準備中…");
 	// A reload can pump window messages while replacing document lines. Keep
 	// condition changes, but never scan a partially loaded document.
 	if (m_bRealtimeFilterDocumentLoading) {
-		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中です...");
+		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, L"文書を読み込み中…");
 		return;
 	}
 	::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE, 300, nullptr);
@@ -696,7 +752,7 @@ void CEditWnd::ContinueRealtimeFilterScan()
 		}
 		if (batch.empty() && m_pRealtimeFilterScanLine && m_bRealtimeFilterAppendCacheActive) {
 			const std::wstring progress = L"一致 " + std::to_wstring(m_vRealtimeFilterAppendCacheMatches.size()) +
-				L" 行 / 追記確認 " + std::to_wstring(m_nRealtimeFilterScannedLines) + L" / " +
+				L" 行 / 確認済み " + std::to_wstring(m_nRealtimeFilterScannedLines) + L" / 全 " +
 				std::to_wstring(m_nRealtimeFilterTotalLines) + L" 行";
 			if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, progress.c_str());
 			::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
@@ -735,6 +791,7 @@ void CEditWnd::AcceptRealtimeFilterResult()
 		SendStatusMessage(result->error.c_str());
 		return;
 	}
+	const std::size_t previouslyScannedLines = m_nRealtimeFilterScannedLines;
 	m_nRealtimeFilterScannedLines += result->scannedLines;
 	try {
 		m_vRealtimeFilterMatches.insert(m_vRealtimeFilterMatches.end(),
@@ -751,7 +808,7 @@ void CEditWnd::AcceptRealtimeFilterResult()
 	try {
 		const std::size_t contextRows = GetRealtimeFilterContextRows(m_hwndRealtimeFilterContext);
 		m_vRealtimeFilterVisibleRanges = textfilter::BuildVisibleRanges(m_vRealtimeFilterMatches,
-			m_vRealtimeFilterLineIndex.size(), contextRows);
+			m_nRealtimeFilterTotalLines, contextRows);
 	} catch (...) {
 		m_vRealtimeFilterVisibleRanges.clear();
 		m_bRealtimeFilterScanComplete = false;
@@ -764,6 +821,22 @@ void CEditWnd::AcceptRealtimeFilterResult()
 		return;
 	}
 	const std::size_t visible = textfilter::CountVisibleLines(m_vRealtimeFilterVisibleRanges);
+	const std::size_t publishQuantum = std::max<std::size_t>(1000, m_nRealtimeFilterTotalLines / 10);
+	const bool publishSourceView = result->finalBatch ||
+		m_nRealtimeFilterScannedLines / publishQuantum > previouslyScannedLines / publishQuantum;
+	if (publishSourceView) {
+		std::vector<std::pair<std::size_t, std::size_t>> displayRanges;
+		try {
+			displayRanges.reserve(m_vRealtimeFilterVisibleRanges.size());
+			for (const auto& range : m_vRealtimeFilterVisibleRanges) displayRanges.emplace_back(range.first, range.last);
+			GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges(displayRanges, true);
+		} catch (...) {
+			GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges({}, false);
+			SendStatusMessage(L"フィルター表示範囲を適用できるメモリがありません。");
+		}
+		GetActiveView().Redraw();
+		GetActiveView().AdjustScrollBars();
+	}
 	ListView_SetItemCountEx(m_hwndRealtimeFilterList,
 		static_cast<int>(std::min<std::size_t>(visible, static_cast<std::size_t>(std::numeric_limits<int>::max()))),
 		LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
@@ -788,8 +861,8 @@ void CEditWnd::AcceptRealtimeFilterResult()
 		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, stats.c_str());
 	} else {
 		const std::wstring progress = L"一致 " + std::to_wstring(m_vRealtimeFilterMatches.size()) +
-			L" 行 / 表示 " + std::to_wstring(visible) + L" 行 / 読込 " +
-			std::to_wstring(m_nRealtimeFilterScannedLines) + L" / " +
+			L" 行 / 表示 " + std::to_wstring(visible) + L" 行 / 確認済み " +
+			std::to_wstring(m_nRealtimeFilterScannedLines) + L" / 全 " +
 			std::to_wstring(m_nRealtimeFilterTotalLines) + L" 行";
 		if (m_hwndRealtimeFilterStats) ::SetWindowTextW(m_hwndRealtimeFilterStats, progress.c_str());
 		::SetTimer(GetHwnd(), IDT_REALTIME_FILTER_SCAN, 1, nullptr);
@@ -799,12 +872,7 @@ void CEditWnd::AcceptRealtimeFilterResult()
 void CEditWnd::UpdateRealtimeFilterLayout()
 {
 	if (!m_bRealtimeFilterMode || !m_hwndRealtimeFilterList || !m_cSplitterWnd.GetHwnd()) return;
-	RECT rect{};
-	if (!::GetWindowRect(m_cSplitterWnd.GetHwnd(), &rect)) return;
-	::MapWindowPoints(nullptr, GetHwnd(), reinterpret_cast<POINT*>(&rect), 2);
-	::SetWindowPos(m_hwndRealtimeFilterList, HWND_TOP, rect.left, rect.top,
-		std::max<LONG>(0, rect.right - rect.left), std::max<LONG>(0, rect.bottom - rect.top),
-		SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	::ShowWindow(m_hwndRealtimeFilterList, SW_HIDE);
 }
 
 void CEditWnd::ExportRealtimeFilter(bool toNewDocument, bool showSaveAs)
@@ -967,6 +1035,10 @@ void CEditWnd::StartRealtimeFilterScan()
 void CEditWnd::ToggleCSVTableMode()
 {
 	if (m_bCSVTableMode) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
 		FinishCSVCellEdit(true);
 		m_nCSVPendingEditRow = m_nCSVPendingEditColumn = -1;
 		m_nCSVSortPendingSourceRow = -1;
@@ -992,6 +1064,7 @@ void CEditWnd::ToggleCSVTableMode()
 		m_cToolbar.UpdateToolbar();
 		return;
 	}
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable)) return;
 	if (!GetDocument() || !m_cSplitterWnd.GetHwnd()) return;
 	if (!m_hwndCSVTable) {
 		INITCOMMONCONTROLSEX controls{ sizeof(controls), ICC_LISTVIEW_CLASSES };
@@ -1019,6 +1092,7 @@ void CEditWnd::ToggleCSVTableMode()
 
 void CEditWnd::RunCSVCheck()
 {
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable)) return;
 	if (!m_bCSVTableMode) {
 		SendStatusMessage(L"CSVテーブル表示に切り替えてから CSV チェックを実行してください。");
 		return;
@@ -1162,69 +1236,133 @@ void CEditWnd::ToggleCSVHeader()
 void CEditWnd::ScheduleCSVTableParse()
 {
 	if (!m_bCSVTableMode || !GetDocument()) return;
+	::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
 	++m_uCSVQueryGeneration;
 	if (m_pCSVTableQueryService) m_pCSVTableQueryService->Cancel();
+	if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
 	m_csvTableModel.reset();
 	m_csvTableSnapshot.reset();
 	m_vCSVTableViewRows.clear();
 	m_bCSVTableViewOrderIdentity = true;
 	if (m_hwndCSVTable) ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-	const auto clearTableProjection = [this]() {
-		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
-		m_csvTableModel.reset();
-		m_csvTableSnapshot.reset();
-		if (m_hwndCSVTable) {
-			ListView_SetItemCountEx(m_hwndCSVTable, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-			::InvalidateRect(m_hwndCSVTable, nullptr, TRUE);
-		}
-	};
 	const CEditDoc* document = GetDocument();
-	std::size_t length = 0;
-	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
-		const int lineLength = static_cast<int>(line->GetLengthWithEOL());
-		if (lineLength < 0 || static_cast<std::size_t>(lineLength) > static_cast<std::size_t>(std::numeric_limits<int>::max()) - length) {
-			clearTableProjection();
-			SendStatusMessage(L"文書が大きすぎるため CSV テーブル表示にできません。");
-			return;
-		}
-		length += static_cast<std::size_t>(lineLength);
+	m_uCSVTableSnapshotVersion = document->m_uCurlSyntaxVersion;
+	m_pCSVTableSnapshotScanLine = document->m_cDocLineMgr.GetDocLineTop();
+	m_nCSVTableSnapshotLineOffset = 0;
+	m_strCSVTableSnapshotText.clear();
+	if (!m_pCSVTableSnapshotScanLine) {
+		SubmitCSVTableParseSnapshot();
+		return;
 	}
-	std::wstring text;
+	if (!::SetTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT, 1, nullptr)) {
+		m_pCSVTableSnapshotScanLine = nullptr;
+		SendStatusMessage(L"CSV データの読み込みを開始できませんでした。");
+	}
+}
+
+void CEditWnd::ContinueCSVTableSnapshot()
+{
+	if (!m_bCSVTableMode || !GetDocument()) {
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		return;
+	}
+	if (GetDocument()->m_uCurlSyntaxVersion != m_uCSVTableSnapshotVersion) {
+		ScheduleCSVTableParse();
+		return;
+	}
+	const auto started = std::chrono::steady_clock::now();
+	std::size_t processedLines = 0;
 	try {
-		text.reserve(length);
-		for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
+		while (m_pCSVTableSnapshotScanLine && processedLines < 2048 &&
+			std::chrono::steady_clock::now() - started < std::chrono::milliseconds(4)) {
+			const CDocLine* line = m_pCSVTableSnapshotScanLine;
 			const int lineLength = static_cast<int>(line->GetLengthWithEOL());
-			if (lineLength > 0) text.append(line->GetPtr(), static_cast<std::size_t>(lineLength));
+			if (lineLength < 0 || !csvtable::snapshot::AppendNextChunk(
+				m_strCSVTableSnapshotText,
+				line->GetPtr(),
+				static_cast<std::size_t>(lineLength),
+				m_nCSVTableSnapshotLineOffset,
+				32768,
+				static_cast<std::size_t>(std::numeric_limits<int>::max()))) {
+				::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+				m_pCSVTableSnapshotScanLine = nullptr;
+				m_nCSVTableSnapshotLineOffset = 0;
+				m_strCSVTableSnapshotText.clear();
+				if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+				SendStatusMessage(L"文書が大きすぎるため CSV テーブル表示にできません。");
+				return;
+			}
+			const std::size_t totalLineLength = static_cast<std::size_t>(lineLength);
+			if (m_nCSVTableSnapshotLineOffset >= totalLineLength) {
+				m_pCSVTableSnapshotScanLine = line->GetNextLine();
+				m_nCSVTableSnapshotLineOffset = 0;
+				++processedLines;
+			}
 		}
 	} catch (...) {
-		clearTableProjection();
+		::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+		m_pCSVTableSnapshotScanLine = nullptr;
+		m_nCSVTableSnapshotLineOffset = 0;
+		m_strCSVTableSnapshotText.clear();
+		if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
 		SendStatusMessage(L"CSV テーブル用のメモリを確保できませんでした。");
+		return;
+	}
+	if (m_pCSVTableSnapshotScanLine) {
+		if (!::SetTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT, 1, nullptr)) {
+			m_pCSVTableSnapshotScanLine = nullptr;
+			m_nCSVTableSnapshotLineOffset = 0;
+			m_strCSVTableSnapshotText.clear();
+			if (m_pCSVTableParseService) m_pCSVTableParseService->Cancel();
+			SendStatusMessage(L"CSV データの読み込みを継続できませんでした。");
+		}
+		return;
+	}
+	::KillTimer(GetHwnd(), IDT_CSV_TABLE_SNAPSHOT);
+	m_nCSVTableSnapshotLineOffset = 0;
+	SubmitCSVTableParseSnapshot();
+}
+
+void CEditWnd::SubmitCSVTableParseSnapshot()
+{
+	if (!m_bCSVTableMode || !GetDocument()) return;
+	if (GetDocument()->m_uCurlSyntaxVersion != m_uCSVTableSnapshotVersion) {
+		ScheduleCSVTableParse();
 		return;
 	}
 	try {
 		if (!m_pCSVTableParseService) m_pCSVTableParseService = std::make_unique<csvtable::CSVTableParseService>();
 	} catch (...) {
-		clearTableProjection();
+		m_strCSVTableSnapshotText.clear();
 		SendStatusMessage(L"CSV テーブル解析を開始できませんでした。");
 		return;
 	}
+	std::wstring text;
+	text.swap(m_strCSVTableSnapshotText);
 	csvtable::ParseOptions options;
 	options.delimiter = m_chCSVDelimiter;
 	options.autoDetectDelimiter = m_bCSVAutoDetectDelimiter;
-	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(document));
-	const std::uint64_t version = document->m_uCurlSyntaxVersion;
+	const std::uint64_t documentId = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(GetDocument()));
+	const std::uint64_t version = m_uCSVTableSnapshotVersion;
 	const HWND resultWindow = GetHwnd();
-	m_pCSVTableParseService->Schedule(documentId, version, std::move(text), options,
-		[this, resultWindow](csvtable::TableParseResult result) {
-			{
-				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
-				m_csvTableMailbox = std::move(result);
-			}
-			if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_PARSE_RESULT, 0, 0)) {
-				std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
-				m_csvTableMailbox.reset();
-			}
-		}, true);
+	try {
+		m_pCSVTableParseService->Schedule(documentId, version, std::move(text), options,
+			[this, resultWindow](csvtable::TableParseResult result) {
+				{
+					std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+					m_csvTableMailbox = std::move(result);
+				}
+				if (!::PostMessage(resultWindow, MYWM_CSV_TABLE_PARSE_RESULT, 0, 0)) {
+					std::lock_guard<std::mutex> lock(m_csvTableMailboxMutex);
+					m_csvTableMailbox.reset();
+				}
+			}, true);
+	} catch (...) {
+		SendStatusMessage(L"CSV テーブル解析要求を作成できませんでした。");
+	}
 }
 
 void CEditWnd::AcceptCSVTableParseResult()
@@ -2118,11 +2256,18 @@ void CEditWnd::OnCurlSyntaxDocumentTypeChanged()
 void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 {
 	curlsyntax::SetRealtimeEnabled(enabled);
-	if (!enabled) {
+	m_bCurlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
+	RefreshCurlSyntaxRealtime();
+}
+
+void CEditWnd::RefreshCurlSyntaxRealtime()
+{
+	if (!curlsyntax::IsRealtimeEnabled()) {
 		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
 		if (m_pCurlSyntaxCheckService) m_pCurlSyntaxCheckService->Cancel();
 		if (auto* document = GetDocument()) {
 			++document->m_uCurlSyntaxVersion;
+			++document->m_uCurlSyntaxDiagnosticsGeneration;
 			document->m_bCurlSyntaxResultStale = true;
 			document->m_vCurlSyntaxDiagnostics.clear();
 		}
@@ -2138,10 +2283,15 @@ void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 		m_cToolbar.UpdateToolbar();
 		return;
 	}
-	NotifyCurlSyntaxDocumentLoaded();
 	if (IsCurlSyntaxDocument()) {
-		::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
-		RunCurlSyntaxCheck(false);
+		CEditDoc* document = GetDocument();
+		if (document && !document->m_bCurlSyntaxResultStale) {
+			if (GetHwnd()) ::SetTimer(GetHwnd(), IDT_CURL_SYNTAX, 500, nullptr);
+		} else {
+			NotifyCurlSyntaxDocumentLoaded();
+			::KillTimer(GetHwnd(), IDT_CURL_SYNTAX);
+			RunCurlSyntaxCheck(false);
+		}
 	}
 	m_cToolbar.UpdateToolbar();
 }
@@ -2149,7 +2299,8 @@ void CEditWnd::SetCurlSyntaxRealtime(bool enabled)
 void CEditWnd::RunCurlSyntaxCheck(bool manual)
 {
 	CEditDoc* document = GetDocument();
-	if (!document || (!manual && !curlsyntax::IsRealtimeEnabled()) || !IsCurlSyntaxDocument()) return;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CurlSyntax)
+		|| !document || (!manual && !curlsyntax::IsRealtimeEnabled()) || !IsCurlSyntaxDocument()) return;
 	std::wstring snapshot;
 	for (const CDocLine* line = document->m_cDocLineMgr.GetDocLineTop(); line; line = line->GetNextLine()) {
 		const CLogicInt length = line->GetLengthWithEOL();
@@ -2188,6 +2339,7 @@ void CEditWnd::AcceptCurlSyntaxResult()
 	if (result->documentId != document->m_uCurlSyntaxDocumentId
 		|| result->version != document->m_uCurlSyntaxVersion) return;
 	document->m_vCurlSyntaxDiagnostics = std::move(result->diagnostics);
+	++document->m_uCurlSyntaxDiagnosticsGeneration;
 	document->m_bCurlSyntaxResultStale = false;
 	RefreshCurlSyntaxErrorList();
 	if (!document->m_vCurlSyntaxDiagnostics.empty()) {
@@ -3455,6 +3607,38 @@ void CEditWnd::MessageLoop( void )
 		ret = GetMessage(&msg,nullptr,0,0);
 		if(ret== 0)break; //WM_QUIT
 		if(ret==-1)break; //GetMessage失敗
+		// A filter edit is not a dialog. Resolve its configured save accelerator
+		// before IsDialogMessage or toolbar preprocessing can consume the key.
+		const HWND focusedWindow = ::GetFocus();
+		const bool realtimeFilterEditFocused = m_bRealtimeFilterMode &&
+			(focusedWindow == m_hwndRealtimeFilterInclude || focusedWindow == m_hwndRealtimeFilterExclude);
+		bool filterSaveHandled = false;
+		if (realtimeFilterEditFocused && msg.message == WM_KEYDOWN && m_hAccel &&
+			(::GetKeyState(VK_CONTROL) & 0x8000)) {
+			const int acceleratorCount = ::CopyAcceleratorTable(m_hAccel, nullptr, 0);
+			if (acceleratorCount > 0) {
+				std::vector<ACCEL> accelerators(static_cast<size_t>(acceleratorCount));
+				if (::CopyAcceleratorTable(m_hAccel, accelerators.data(), acceleratorCount) == acceleratorCount) {
+					BYTE modifiers = 0;
+					if (::GetKeyState(VK_SHIFT) & 0x8000) modifiers |= FSHIFT;
+					if (::GetKeyState(VK_CONTROL) & 0x8000) modifiers |= FCONTROL;
+					if (::GetKeyState(VK_MENU) & 0x8000) modifiers |= FALT;
+					for (const ACCEL& accelerator : accelerators) {
+						if (!(accelerator.fVirt & FVIRTKEY) || accelerator.key != msg.wParam ||
+							(accelerator.fVirt & (FSHIFT | FCONTROL | FALT)) != modifiers) continue;
+						const EFunctionCode function = CKeyBind::GetFuncCode(accelerator.cmd,
+							m_pShareData->m_Common.m_sKeyBind.m_nKeyNameArrNum,
+							(KEYDATA*)m_pShareData->m_Common.m_sKeyBind.m_pKeyNameArr);
+						if (function == F_FILESAVE) {
+							GetDocument()->HandleCommand(static_cast<EFunctionCode>(function | FA_FROMKEYBOARD));
+							filterSaveHandled = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+		if (filterSaveHandled) continue;
 
 		//ダイアログメッセージ
 		     if( MyIsDialogMessage( CPrintPreview::GetPrintPreviewBarHANDLE_Safe(m_pPrintPreview.get()),	&msg ) ){}	//!< 印刷プレビュー 操作バー
@@ -3472,38 +3656,6 @@ void CEditWnd::MessageLoop( void )
 				-1 == m_cHokanMgr.KeyProc(msg.wParam, msg.lParam)) {
 						continue;	// 補完ウィンドウが処理を実行した
 			}
-
-			const HWND focusedWindow = ::GetFocus();
-			const bool realtimeFilterEditFocused = m_bRealtimeFilterMode &&
-				(focusedWindow == m_hwndRealtimeFilterInclude || focusedWindow == m_hwndRealtimeFilterExclude);
-			bool filterSaveHandled = false;
-			if (realtimeFilterEditFocused && msg.message == WM_KEYDOWN && m_hAccel &&
-				(::GetKeyState(VK_CONTROL) & 0x8000)) {
-				const int acceleratorCount = ::CopyAcceleratorTable(m_hAccel, nullptr, 0);
-				if (acceleratorCount > 0) {
-					std::vector<ACCEL> accelerators(static_cast<size_t>(acceleratorCount));
-					if (::CopyAcceleratorTable(m_hAccel, accelerators.data(), acceleratorCount) == acceleratorCount) {
-						BYTE modifiers = 0;
-						if (::GetKeyState(VK_SHIFT) & 0x8000) modifiers |= FSHIFT;
-						if (::GetKeyState(VK_CONTROL) & 0x8000) modifiers |= FCONTROL;
-						if (::GetKeyState(VK_MENU) & 0x8000) modifiers |= FALT;
-						for (const ACCEL& accelerator : accelerators) {
-							if (!(accelerator.fVirt & FVIRTKEY) || accelerator.key != msg.wParam ||
-								(accelerator.fVirt & (FSHIFT | FCONTROL | FALT)) != modifiers) continue;
-							const EFunctionCode function = CKeyBind::GetFuncCode(accelerator.cmd,
-								m_pShareData->m_Common.m_sKeyBind.m_nKeyNameArrNum,
-								(KEYDATA*)m_pShareData->m_Common.m_sKeyBind.m_pKeyNameArr);
-							if (function == F_FILESAVE && GetDocument()) {
-								GetDocument()->HandleCommand(static_cast<EFunctionCode>(function | FA_FROMKEYBOARD));
-								filterSaveHandled = true;
-								break;
-							}
-						}
-					}
-				}
-			}
-			if (filterSaveHandled) continue;
-
 			HWND acceleratorTarget = msg.hwnd;
 			if (m_bRealtimeFilterMode &&
 				(msg.hwnd == m_hwndRealtimeFilterInclude || msg.hwnd == m_hwndRealtimeFilterExclude ||
@@ -3831,6 +3983,32 @@ LRESULT CEditWnd::DispatchEvent(
 							display->item.pszText = m_strRealtimeFilterDisplayText.data();
 						}
 					}
+				}
+			}
+			return 0;
+		}
+		if (m_bRealtimeFilterMode && m_hwndRealtimeFilterList &&
+			pnmh->hwndFrom == m_hwndRealtimeFilterList &&
+			(pnmh->code == NM_DBLCLK || pnmh->code == LVN_KEYDOWN)) {
+			if (pnmh->code == LVN_KEYDOWN &&
+				reinterpret_cast<const NMLVKEYDOWN*>(lParam)->wVKey != VK_RETURN) return 0;
+			const int selected = pnmh->code == NM_DBLCLK
+				? reinterpret_cast<const NMITEMACTIVATE*>(lParam)->iItem
+				: ListView_GetNextItem(m_hwndRealtimeFilterList, -1, LVNI_SELECTED | LVNI_FOCUSED);
+			if (selected >= 0 && GetDocument() &&
+				GetDocument()->m_uCurlSyntaxVersion == m_uRealtimeFilterDocumentVersion) {
+				const auto sourceLine = textfilter::SourceLineForVisibleIndex(
+					m_vRealtimeFilterVisibleRanges, static_cast<std::size_t>(selected));
+				if (sourceLine && *sourceLine < m_vRealtimeFilterLineIndex.size()) {
+					CloseRealtimeFilter();
+					CLayoutPoint position;
+					GetDocument()->m_cLayoutMgr.LogicToLayout(
+						CLogicPoint(CLogicInt(0), CLogicInt(*sourceLine)), &position);
+					CEditView& view = GetActiveView();
+					view.GetCaret().MoveCursor(position, true);
+					view.GetCaret().m_nCaretPosX_Prev = position.x;
+					::SetFocus(view.GetHwnd());
+					view.Redraw();
 				}
 			}
 			return 0;
@@ -4205,7 +4383,7 @@ LRESULT CEditWnd::DispatchEvent(
 	case MYWM_CHANGESETTING:
 		/* 設定変更の通知 */
 		switch( (e_PM_CHANGESETTING_SELECT)lParam ){
-		case PM_CHANGESETTING_ALL:
+		case PM_CHANGESETTING_ALL: {
 			/* ダークモード設定を反映する */
 			{
 				if( (m_pShareData->m_Common.m_sWindow.m_bDarkMode != FALSE) != IsDarkModeActive() ){
@@ -4337,11 +4515,30 @@ LRESULT CEditWnd::DispatchEvent(
 
 			//	Aug, 21, 2000 genta
 			GetDocument()->m_cAutoSaveAgent.ReloadAutoSaveParam();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::RealtimeFilter) && m_bRealtimeFilterMode)
+				ToggleRealtimeFilter();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) && m_bCSVTableMode)
+				ToggleCSVTableMode();
+			if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CodeFolding))
+				GetDocument()->m_cLayoutMgr.ResetCodeFolds();
+			const bool curlSyntaxRuntimeEnabled = curlsyntax::IsRealtimeEnabled();
+			if (curlSyntaxRuntimeEnabled != m_bCurlSyntaxRuntimeEnabled) {
+				m_bCurlSyntaxRuntimeEnabled = curlSyntaxRuntimeEnabled;
+				RefreshCurlSyntaxRealtime();
+			}
+			for (int viewIndex = 0; viewIndex < GetAllViewCount(); ++viewIndex) {
+				auto& view = GetView(viewIndex);
+				view.RefreshScrollBarMarkerFeature();
+				if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor))
+					view.ClearExtraCursors();
+			}
+			m_cToolbar.UpdateToolbar();
 
 			GetDocument()->OnChangeSetting();	// ビューに設定変更を反映させる
 			GetDocument()->m_cDocType.SetDocumentIcon();	// Sep. 10, 2002 genta 文書アイコンの再設定
 
 			break;
+		}
 		case PM_CHANGESETTING_FONT:
 			GetDocument()->OnChangeSetting( true );	// フォントで文字幅が変わるので、レイアウト再構築
 			delete [] m_posSaveAry;
@@ -4796,8 +4993,12 @@ void CEditWnd::OnCommand( WORD wNotifyCode, WORD wID , HWND hwndCtl )
 			m_vRealtimeFilterAppendCacheMatches.clear();
 			m_bRealtimeFilterAppendCachePending = false;
 			m_bRealtimeFilterAppendCacheActive = false;
+			if (GetDocument()) GetDocument()->m_cLayoutMgr.SetRealtimeFilterVisibleRanges({}, false);
+			GetActiveView().Redraw();
+			GetActiveView().AdjustScrollBars();
 			if (m_hwndRealtimeFilterStats) {
-				const std::wstring status = L"中止しました（部分結果 " + std::to_wstring(m_vRealtimeFilterMatches.size()) + L" 行）";
+				const std::wstring status = L"処理を中止しました。原文全行を表示しています（途中一致 " +
+					std::to_wstring(m_vRealtimeFilterMatches.size()) + L" 行）";
 				::SetWindowTextW(m_hwndRealtimeFilterStats, status.c_str());
 			}
 			return;
@@ -5226,6 +5427,24 @@ void CEditWnd::InitMenu_Function(HMENU hMenu, EFunctionCode eFunc, const wchar_t
 				}
 			}
 			break;
+		case F_CSV_TABLE_VIEW:
+			m_cMenuDrawer.MyAppendMenu(hMenu,
+				MF_BYPOSITION | MF_STRING |
+				(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) ? 0 : MF_GRAYED) |
+				(IsCSVTableMode() ? MF_CHECKED : 0),
+				eFunc, pszName, pszKey);
+			break;
+		case F_CSV_OPTIONS:
+		case F_CSV_CHECK:
+		case F_CSV_FILTER:
+		case F_CSV_SORT:
+		case F_CSV_EDIT:
+			m_cMenuDrawer.MyAppendMenu(hMenu,
+				MF_BYPOSITION | MF_STRING |
+				(enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::CSVTable) && IsCSVTableMode()
+					? 0 : MF_GRAYED),
+				eFunc, pszName, pszKey);
+			break;
 		default:
 			m_cMenuDrawer.MyAppendMenu( hMenu, MF_BYPOSITION | MF_STRING, eFunc,
 				pszName, pszKey );
@@ -5536,6 +5755,9 @@ LRESULT CEditWnd::OnTimer( WPARAM wParam, [[maybe_unused]] LPARAM lParam )
 		::KillTimer(GetHwnd(), IDT_CSV_SELECTION_STATS);
 		UpdateCSVSelectionStatistics();
 		break;
+	case IDT_CSV_TABLE_SNAPSHOT:
+		ContinueCSVTableSnapshot();
+		break;
 	case IDT_REALTIME_FILTER_DEBOUNCE:
 		::KillTimer(GetHwnd(), IDT_REALTIME_FILTER_DEBOUNCE);
 		StartRealtimeFilterScan();
@@ -5779,47 +6001,56 @@ LRESULT CEditWnd::OnSize2( WPARAM wParam, LPARAM lParam, bool bUpdateStatus )
 		nToolBarHeight = rc.bottom - rc.top;
 	}
 	if (m_bRealtimeFilterMode && m_hwndRealtimeFilterBar) {
-		const int filterHeight = DpiScaleY(150);
+		const int filterHeight = DpiScaleY(164);
 		const int panelTop = nToolBarHeight;
 		::MoveWindow(m_hwndRealtimeFilterBar, 0, panelTop, cx, filterHeight, TRUE);
 		const int margin = DpiScaleX(8);
-		const int labelWidth = DpiScaleX(112);
-		const int editLeft = margin + labelWidth;
-		const int editWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 34 / 100), DpiScaleX(180), DpiScaleX(520)));
+		const int labelWidth = DpiScaleX(92);
 		const int smallGap = DpiScaleX(8);
-		const int rowHeight = DpiScaleY(32);
-		const int lineEditHeight = DpiScaleY(46);
-		const int row1 = panelTop + DpiScaleY(4);
-		const int row2 = panelTop + DpiScaleY(54);
-		const int row3 = panelTop + DpiScaleY(111);
+		const int rowHeight = DpiScaleY(30);
+		const int row1 = panelTop + DpiScaleY(5);
+		const int row2 = panelTop + DpiScaleY(46);
+		const int row3 = panelTop + DpiScaleY(91);
+		const int row4 = panelTop + DpiScaleY(126);
 		auto moveControl = [this](int id, int x, int y, int width, int height) {
 			if (HWND control = ::GetDlgItem(GetHwnd(), id)) ::MoveWindow(control, x, y, width, height, TRUE);
 		};
+		const int logicWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 22 / 100), DpiScaleX(128), DpiScaleX(184)));
+		const int caseWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 14 / 100), DpiScaleX(88), DpiScaleX(112)));
+		const int regexWidth = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 12 / 100), DpiScaleX(76), DpiScaleX(100)));
+		const int includeMaximum = std::max(DpiScaleX(140), cx - margin * 2 - labelWidth - logicWidth - caseWidth - regexWidth - smallGap * 5);
+		const int includeWidth = includeMaximum;
+		const int includeX = margin + labelWidth;
 		moveControl(IDC_REALTIME_FILTER_INCLUDE_LABEL, margin, row1 + DpiScaleY(5), labelWidth - smallGap, DpiScaleY(20));
-		moveControl(IDC_REALTIME_FILTER_INCLUDE, editLeft, row1, editWidth, lineEditHeight);
-		int x = editLeft + editWidth + smallGap;
-		moveControl(IDC_REALTIME_FILTER_LOGIC, x, row1, DpiScaleX(82), rowHeight);
-		x += DpiScaleX(88);
-		moveControl(IDC_REALTIME_FILTER_CASE, x, row1, DpiScaleX(145), rowHeight);
-		x += DpiScaleX(150);
-		moveControl(IDC_REALTIME_FILTER_REGEX, x, row1, DpiScaleX(96), rowHeight);
+		moveControl(IDC_REALTIME_FILTER_INCLUDE, includeX, row1, includeWidth, rowHeight);
+		int x = includeX + includeWidth + smallGap;
+		moveControl(IDC_REALTIME_FILTER_LOGIC, x, row1, logicWidth, rowHeight);
+		x += logicWidth + smallGap;
+		moveControl(IDC_REALTIME_FILTER_CASE, x, row1, caseWidth, rowHeight);
+		x += caseWidth + DpiScaleX(4);
+		moveControl(IDC_REALTIME_FILTER_REGEX, x, row1, regexWidth, rowHeight);
+		const int excludeMaximum = std::max(DpiScaleX(140), cx - margin * 2 - labelWidth - DpiScaleX(106 + 134 + 142) - smallGap * 4 - DpiScaleX(120));
+		const int excludeWidth = std::min(excludeMaximum,
+			static_cast<int>(std::clamp<LONG>(static_cast<LONG>(cx * 32 / 100), DpiScaleX(140), DpiScaleX(420))));
+		const int excludeX = margin + labelWidth;
 		moveControl(IDC_REALTIME_FILTER_EXCLUDE_LABEL, margin, row2 + DpiScaleY(5), labelWidth - smallGap, DpiScaleY(20));
-		moveControl(IDC_REALTIME_FILTER_EXCLUDE, editLeft, row2, editWidth, lineEditHeight);
-		x = editLeft + editWidth + smallGap;
-		moveControl(IDC_REALTIME_FILTER_CONTEXT_LABEL, x, row2 + DpiScaleY(5), DpiScaleX(70), DpiScaleY(20));
-		x += DpiScaleX(72);
-		moveControl(IDC_REALTIME_FILTER_CONTEXT, x, row2, DpiScaleX(92), rowHeight);
-		x += DpiScaleX(100);
-		moveControl(IDC_REALTIME_FILTER_STATS, x, row2 + DpiScaleY(1), static_cast<int>(std::max<LONG>(DpiScaleX(80), static_cast<LONG>(cx - x - margin))), rowHeight - DpiScaleY(2));
-		moveControl(IDC_REALTIME_FILTER_AUTOSCROLL, margin, row3 + DpiScaleY(1), DpiScaleX(190), DpiScaleY(24));
+		moveControl(IDC_REALTIME_FILTER_EXCLUDE, excludeX, row2, excludeWidth, rowHeight);
+		x = excludeX + excludeWidth + smallGap;
+		moveControl(IDC_REALTIME_FILTER_CONTEXT_LABEL, x, row2 + DpiScaleY(5), DpiScaleX(106), DpiScaleY(20));
+		x += DpiScaleX(108);
+		moveControl(IDC_REALTIME_FILTER_CONTEXT, x, row2, DpiScaleX(134), rowHeight);
+		x += DpiScaleX(142);
+		moveControl(IDC_REALTIME_FILTER_AUTOSCROLL, x, row2 + DpiScaleY(2), static_cast<int>(std::max<LONG>(DpiScaleX(100), static_cast<LONG>(cx - x - margin))), DpiScaleY(26));
 		const int buttonHeight = DpiScaleY(24);
-		const int buttonWidths[] = { DpiScaleX(105), DpiScaleX(116), DpiScaleX(88), DpiScaleX(92), DpiScaleX(86), DpiScaleX(72) };
+		const int buttonWidths[] = { DpiScaleX(92), DpiScaleX(112), DpiScaleX(112), DpiScaleX(84), DpiScaleX(84), DpiScaleX(68) };
 		const int buttonIds[] = { IDC_REALTIME_FILTER_COPY, IDC_REALTIME_FILTER_NEW,
 			IDC_REALTIME_FILTER_SAVEAS, IDC_REALTIME_FILTER_CLEAR, IDC_REALTIME_FILTER_CANCEL, IDC_REALTIME_FILTER_CLOSE };
+		moveControl(IDC_REALTIME_FILTER_STATS, margin, row3 + DpiScaleY(2),
+			std::max(DpiScaleX(80), cx - margin * 2), DpiScaleY(24));
 		int buttonX = cx - margin;
 		for (int index = static_cast<int>(std::size(buttonIds)) - 1; index >= 0; --index) {
 			buttonX -= buttonWidths[index];
-			moveControl(buttonIds[index], buttonX, row3, buttonWidths[index], buttonHeight);
+			moveControl(buttonIds[index], buttonX, row4, buttonWidths[index], buttonHeight);
 			buttonX -= smallGap;
 		}
 		nToolBarHeight += filterHeight;

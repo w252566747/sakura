@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Static integration checks for the Win32 realtime-filter UI wiring."""
 from pathlib import Path
 
@@ -12,9 +12,22 @@ def require(fragment: str, description: str) -> None:
         raise SystemExit(f"missing realtime-filter integration: {description}")
 
 
-# Filtering remains a separate owner-data view and does not rewrite document lines.
-require("LVS_OWNERDATA", "virtual results list")
-require("line->GetPtr(), lineLength", "render directly from source document lines")
+# Filtering hides unmatched logical lines in the original editor layout.
+layout = (ROOT / "sakura_core/doc/layout/CLayoutMgr.cpp").read_text(encoding="utf-8-sig")
+layout_header = (ROOT / "sakura_core/doc/layout/CLayoutMgr.h").read_text(encoding="utf-8-sig")
+require("SetRealtimeFilterVisibleRanges(displayRanges, true)", "apply matching ranges to the source editor")
+require("SetRealtimeFilterVisibleRanges({}, false)", "restore all source lines when clearing or closing")
+require("::ShowWindow(m_cSplitterWnd.GetHwnd(), SW_SHOW)", "keep the original editor visible during filtering")
+require("if (m_hwndRealtimeFilterList) ::ShowWindow(m_hwndRealtimeFilterList, SW_HIDE)", "do not replace the editor with a separate results list")
+require("含む語句", "Japanese include label")
+require("除外語句", "Japanese exclude label")
+require("すべての語句に一致", "explain AND behavior in the control itself")
+require("いずれかの語句に一致", "explain OR behavior in the control itself")
+require('const std::wstring stats = L"一致 "', "Japanese match count status")
+if "bool CLayoutMgr::IsDisplayHiddenLine(CLogicInt logicLine) const" not in layout:
+    raise SystemExit("missing realtime-filter visibility mapping")
+if "bool IsDisplayHiddenLine(CLogicInt logicLine) const" not in layout_header:
+    raise SystemExit("missing source-view visibility API")
 require("case F_FILESAVE:", "allow original document Save while filtered")
 require("result->documentVersion != GetDocument()->m_uCurlSyntaxVersion", "reject stale document results")
 require("result->requestToken != m_uRealtimeFilterToken", "reject stale request results")
@@ -25,7 +38,7 @@ require("case IDC_REALTIME_FILTER_CANCEL:", "cancel action")
 require("id <= IDC_REALTIME_FILTER_CANCEL", "cancel control lifecycle")
 require("++m_uRealtimeFilterToken;", "cancel generation invalidation")
 require("if (m_pRealtimeFilterService) m_pRealtimeFilterService->Cancel();", "worker cancellation")
-require("中止しました（部分結果 ", "cancelled partial-results status")
+require("処理を中止しました。原文全行を表示しています", "cancel restores the original full view")
 
 # The incremental append cache validates old line content and line-ending state.
 require("m_bRealtimeFilterAppendCachePending = m_bRealtimeFilterScanComplete", "append cache gate")
@@ -38,4 +51,4 @@ require("for (const auto& range : m_vRealtimeFilterVisibleRanges)", "visible-ran
 require("::SendMessageCmd(newWindow, WM_COMMAND, MAKEWPARAM(F_PASTE, 0), 0)", "export into identified new window")
 require("if (!newWindow || newWindow == GetHwnd())", "avoid pasting into source window")
 
-print("realtime-filter Win32 UI wiring static checks passed (not a GUI test)")
+print("realtime-filter source-view integration static checks passed (not a GUI test)")

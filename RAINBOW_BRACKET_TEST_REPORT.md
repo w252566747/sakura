@@ -4,6 +4,13 @@
 基线：当前增强版工作区（基础提交 `fe1a4a281c6e6bec2a1a1bc39059fe7424bb5075`）
 范围：括号分层颜色、类型设置颜色项、工具栏开关、布局缓存及增量状态传播；本轮补充光标处配对强调和括号范围引导线。
 
+## 2026-11-27 补充
+
+- 彩虹括号布局扫描增加 Curl 文本表达式、普通/Tagged/长度式 verbatim 字符串和块注释的跨逻辑行状态；字符串/注释内部原始括号不会进入配对栈。
+- Tagged verbatim 按 Curl 官方格式使用 `"|tag|` 作为结束序列；共享识别器同时用于代码折叠与 Curl 语法检查，减少各扫描器间的语法差异。
+- `tools/tests/run-rainbow-bracket-standalone.py` 用 Clang/UBSan 编译生产括号状态头，检查 tagged/length opener、长度溢出、跨行状态和正文伪结束符。`tools/tests/run-codefold-parser-standalone.py` 覆盖 raw 注释/字符串中的花括号。独立 CurlSyntaxChecker 临时 harness 通过 tagged 与 length 字符串样例。
+- 以上均为 macOS 独立编译/静态验证；Win32 工程编译、颜色策略集成、GUI 和大文件渲染仍未验证。宏 `verbatim` pattern 的调用语义需要完整宏定义环境，当前不做猜测性折叠。
+
 ## 已完成的验证
 
 | 项目 | 结果 | 说明 |
@@ -31,7 +38,7 @@
 - 当前环境是 macOS，没有 MSBuild、Windows SDK 或 MinGW Win32 工具链，因此尚未完成 Win32 Debug/Release 编译，也未运行 Sakura 的 Windows 单元测试项目。
 - GitHub CLI 已确认登录，个人 fork 及既有 Marker 分支可访问；本阶段的 Win32 GitHub Actions 尚未触发。
 - 新增的配对强调及点状引导线尚未在 Windows Sakura 界面验证；当前仅运行括号状态机及配对条件的独立断言程序。
-- 尚未实现“当前嵌套层级整体强调”的可选显示，也未提供独立的“未匹配括号强调”设置；错配括号目前继续使用既有特殊颜色。
+- 当前层级整体强调与独立未匹配括号强调现已实现并可通过工具栏菜单控制；本补充尚未在 Windows GUI 验收。
 - 尚未运行真实大文件渲染/滚动性能测试。
-- 字符串和注释排除依赖 Sakura 当前文档类型启用的原生语法颜色策略；如果对应的字符串/注释颜色解析被关闭，原生布局状态无法可靠区分其内部括号。
+- Curl raw 字符串和块注释由增强扫描器独立识别；其他语言的字符串/注释排除仍依赖 Sakura 原生语法颜色策略。
 - 本报告不代表完整括号功能或整个增强项目的最终验收。

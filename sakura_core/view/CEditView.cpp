@@ -30,6 +30,7 @@
 #include "view/CRuler.h"
 #include "uiparts/CWaitCursor.h"
 #include "window/CEditWnd.h"
+#include "window/EnhancementToolbarSettings.h"
 #include "window/CSplitBoxWnd.h"///
 #include "cmd/COpeBlk.h"///
 #include "cmd/CViewCommander_inline.h"
@@ -136,7 +137,7 @@ bool CEditView::ResolveExtraCursor(const SExtraCursor& extra, CLayoutPoint* out)
 	CLogicPoint logical = extra.caret;
 	const CDocLine* line = m_pcEditDoc->m_cDocLineMgr.GetLine(logical.y);
 	if (!line) return false;
-	if (m_pcEditDoc->m_cLayoutMgr.IsCodeFoldHiddenLine(logical.y)) return false;
+	if (m_pcEditDoc->m_cLayoutMgr.IsDisplayHiddenLine(logical.y)) return false;
 	const CLogicInt length = line->GetLengthWithoutEOL();
 	int column = std::clamp(static_cast<int>(logical.x), 0, static_cast<int>(length));
 	for (CLogicInt index(0); index < CLogicInt(column);) {
@@ -155,7 +156,10 @@ bool CEditView::ResolveExtraCursor(const SExtraCursor& extra, CLayoutPoint* out)
 
 namespace {
 std::size_t g_nMaxMultiCursors = CEditView::MAX_MULTI_CURSORS;
-bool g_bRainbowUnmatchedHighlightEnabled = true;
+// Keep unmatched delimiters on their nesting-depth color by default. Users can
+// opt into the stronger warning style from the rainbow-bracket toolbar menu.
+bool g_bRainbowUnmatchedHighlightEnabled = false;
+bool g_bRainbowCurrentLevelHighlightEnabled = false;
 }
 
 std::size_t CEditView::GetMaxMultiCursors() noexcept
@@ -183,6 +187,16 @@ void CEditView::SetRainbowUnmatchedHighlightEnabled(bool enabled) noexcept
 	g_bRainbowUnmatchedHighlightEnabled = enabled;
 }
 
+bool CEditView::IsRainbowCurrentLevelHighlightEnabled() noexcept
+{
+	return g_bRainbowCurrentLevelHighlightEnabled;
+}
+
+void CEditView::SetRainbowCurrentLevelHighlightEnabled(bool enabled) noexcept
+{
+	g_bRainbowCurrentLevelHighlightEnabled = enabled;
+}
+
 bool CEditView::ResolveExtraCursorAnchor(const SExtraCursor& extra, CLayoutPoint* out) const
 {
 	if (!extra.bHasSelection || !out || !m_pcEditDoc) return false;
@@ -206,7 +220,7 @@ CLayoutRange CEditView::ResolveExtraCursorSelectAreaLine(const SExtraCursor& ext
 
 bool CEditView::ToggleExtraCursorAt(const CLayoutPoint& point)
 {
-	if (!m_pcEditDoc) return false;
+	if (!enhancementtoolbar::IsEnabled(enhancementtoolbar::Group::MultiCursor) || !m_pcEditDoc) return false;
 	const CLayoutPoint primary = GetCaret().GetCaretLayoutPos();
 	CLogicPoint targetLogic;
 	m_pcEditDoc->m_cLayoutMgr.LayoutToLogic(point, &targetLogic);

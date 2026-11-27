@@ -20,7 +20,9 @@
 namespace curlsyntax {
 
 bool IsRealtimeEnabled() noexcept;
+bool IsRealtimePreferenceEnabled() noexcept;
 void SetRealtimeEnabled(bool enabled) noexcept;
+void SetFeatureEnabled(bool enabled) noexcept;
 int GetErrorListHeight() noexcept;
 void SetErrorListHeight(int height) noexcept;
 
