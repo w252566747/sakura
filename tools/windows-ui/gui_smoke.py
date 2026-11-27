@@ -200,8 +200,20 @@ def main() -> int:
         # Leave an unsaved edit in the original document before opening the filter.
         window.set_focus()
         window.click_input(coords=(100, 447))
+        window.type_keys("^{END}")
         window.type_keys("GUI_SMOKE_FILTER_SAVE", with_spaces=True)
-        filter_saved = original + b"GUI_SMOKE_FILTER_SAVE"
+        window.type_keys("^a")
+        window.type_keys("^c")
+        edited_document = clipboard_text()
+        expected_edited_document = original_text + "GUI_SMOKE_FILTER_SAVE"
+        if edited_document != expected_edited_document:
+            raise AssertionError(
+                "could not establish the unsaved full-document edit before filtering: "
+                f"expected suffix='GUI_SMOKE_FILTER_SAVE', length={len(expected_edited_document)}, "
+                f"copied length={len(edited_document)}, copied suffix={edited_document[-80:]!r}"
+            )
+        window.type_keys("^{END}")
+        filter_saved = edited_document.encode("ascii")
         if sample.read_bytes() != original:
             raise AssertionError("the filter Ctrl+S scenario was saved before the filter was opened")
 
