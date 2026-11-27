@@ -483,11 +483,20 @@ def main() -> int:
             raise AssertionError("multi-cursor toolbar menu button was not found")
         multicursor_toolbar, multicursor_index = multicursor_control
         click_toolbar_button(multicursor_toolbar, multicursor_index)
-        time.sleep(0.2)
-        win32api.keybd_event(win32con.VK_HOME, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_HOME, 0, win32con.KEYEVENTF_KEYUP, 0)
-        win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+        popup = 0
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            popup = win32gui.FindWindow("#32768", None)
+            if popup and win32gui.IsWindowVisible(popup):
+                break
+            time.sleep(0.05)
+        if not popup or not win32gui.IsWindowVisible(popup):
+            raise AssertionError("multi-cursor toolbar did not open its native popup menu")
+        popup_menu = win32gui.GetMenu(popup)
+        if not popup_menu or win32gui.GetMenuItemID(popup_menu, 0) != 31590:
+            raise AssertionError("first multi-cursor menu item is not Select Next Occurrence (31590)")
+        left, top, right, bottom = win32gui.GetMenuItemRect(popup, popup_menu, 0)
+        mouse.click(button="left", coords=((left + right) // 2, (top + bottom) // 2))
         time.sleep(0.2)
         window.type_keys("OMEGA", with_spaces=True)
         window.type_keys("^s")
