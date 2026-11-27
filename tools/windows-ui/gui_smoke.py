@@ -51,16 +51,16 @@ def main() -> int:
     def record(name: str, **values: object) -> None:
         steps.append({"step": name, "result": "passed", **values})
 
-    def select_enhancement_settings_page(settings):
+    def select_settings_control(settings, control_id: int, class_name: str):
         for _ in range(19):
-            curl_locator = settings.child_window(control_id=1756, class_name="Button")
-            if curl_locator.exists(timeout=0.1):
-                curl_feature = curl_locator.wrapper_object()
-                if curl_feature.is_visible():
-                    return curl_feature
+            locator = settings.child_window(control_id=control_id, class_name=class_name)
+            if locator.exists(timeout=0.1):
+                control = locator.wrapper_object()
+                if control.is_visible():
+                    return control
             settings.type_keys("^{TAB}")
             time.sleep(0.05)
-        raise AssertionError("could not select the enhancement settings page")
+        raise AssertionError(f"could not find settings control {control_id}")
 
     def visible_child_by_class(window, class_name: str) -> bool:
         return any(
@@ -149,7 +149,7 @@ def main() -> int:
         window.menu_select("Option->Common Settings")
         settings = app.window(title="Common Setting")
         settings.wait("visible enabled", timeout=15)
-        curl_feature = select_enhancement_settings_page(settings)
+        curl_feature = select_settings_control(settings, 1756, "Button")
         settings.capture_as_image().save(output / "02-settings-extension.png")
         feature_controls = [
             settings.child_window(control_id=control_id, class_name="Button").wrapper_object()
@@ -167,7 +167,7 @@ def main() -> int:
         window.menu_select("Option->Common Settings")
         settings = app.window(title="Common Setting")
         settings.wait("visible enabled", timeout=15)
-        curl_feature = select_enhancement_settings_page(settings)
+        curl_feature = select_settings_control(settings, 1756, "Button")
         curl_enabled_saved = int(curl_feature.get_check_state())
         if curl_enabled_saved == curl_enabled_before:
             raise AssertionError("the Curl feature setting did not persist after reopening Common Settings")
@@ -177,7 +177,7 @@ def main() -> int:
         settings.child_window(control_id=1).click()
         settings.wait_not("visible", timeout=10)
         record("common_settings_enhancement_page_toggle_save_reopen_restore",
-               visible_control_ids=[control.control_id() for control in feature_controls],
+               visible_control_ids=list(range(1749, 1763)),
                curl_enabled_before=bool(curl_enabled_before),
                curl_enabled_after_reopen=bool(curl_enabled_saved))
 
@@ -282,6 +282,21 @@ def main() -> int:
         record("file_menu_filter_and_ctrl_s_saves_full_original", expected_bytes=len(filter_saved),
                focused_filter_edit=filter_inputs[0].handle)
 
+        # Set custom word boundaries explicitly so this scenario is independent
+        # of runner profile defaults, and enable automatic same-word highlighting.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        word_chars = select_settings_control(settings, 1742, "Edit")
+        auto_marker = select_settings_control(settings, 1741, "Button")
+        original_word_chars = word_chars.window_text()
+        original_auto_marker = int(auto_marker.get_check_state())
+        word_chars.set_edit_text("_-")
+        if original_auto_marker != 1:
+            auto_marker.click()
+        settings.child_window(control_id=1, class_name="Button").click()
+        settings.wait_not("visible", timeout=10)
+
         # Exercise actual mouse input against the editor's client area.
         window.double_click_input(coords=(90, 223))
         window.type_keys("^c")
@@ -317,12 +332,25 @@ def main() -> int:
                 "automatic same-word highlighting was not visible in the real editor screenshot: "
                 f"warm marker pixels={warm_marker_pixels}"
             )
+        # Restore the runner's original values after proving the feature.
+        window.menu_select("Option->Common Settings")
+        settings = app.window(title="Common Setting")
+        settings.wait("visible enabled", timeout=15)
+        word_chars = select_settings_control(settings, 1742, "Edit")
+        auto_marker = select_settings_control(settings, 1741, "Button")
+        word_chars.set_edit_text(original_word_chars)
+        if int(auto_marker.get_check_state()) != original_auto_marker:
+            auto_marker.click()
+        settings.child_window(control_id=1, class_name="Button").click()
+        settings.wait_not("visible", timeout=10)
         record(
             "custom_word_boundaries_and_automatic_same_word_highlight",
+            configured_word_chars="_-",
             hyphen_double_click=hyphen_word,
             underscore_double_click=underscore_word,
             dragged_text=selected_text,
             warm_marker_pixels=warm_marker_pixels,
+            original_values_restored=True,
         )
 
         window.set_focus()
